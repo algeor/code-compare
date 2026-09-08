@@ -1,0 +1,6994 @@
+# f97b1ebc7edea2de
+
+PR: https://github.tools.sap/Lenny/pipeline-fl-control-plane/pull/37
+Suggested label: 100%
+File overlap: 1.0
+Changed-line overlap: 1.0
+
+## Suggested diff
+```diff
+--- a/.pipeline/config.yml
++++ b/.pipeline/config.yml
+@@
++productiveBranch: 'main'
+```
+
+## Landed PR diff
+```diff
+diff --git a/.github/workflows/piper.yaml b/.github/workflows/piper.yaml
+index f1db20de..960a483a 100644
+--- a/.github/workflows/piper.yaml
++++ b/.github/workflows/piper.yaml
+@@ -13,4 +13,4 @@ jobs:
+     permissions:
+       contents: write
+       id-token: write
+-      actions: read
++      actions: read
+\ No newline at end of file
+diff --git a/.pipeline/config.yml b/.pipeline/config.yml
+index a788f556..06fa427e 100644
+--- a/.pipeline/config.yml
++++ b/.pipeline/config.yml
+@@ -1,6 +1,6 @@
+ general:
+   buildTool: 'docker'
+-  productiveBranch: "main"
++  productiveBranch: 'main'
+   vaultPath: 'piper/sap-project-pipeline-fl'
+   vaultBasePath: 'piper/sap-project-pipeline-fl'
+   vaultPipelineName: 'pipeline-fl-control-plane'
+@@ -50,11 +50,12 @@ steps:
+     chartPath: 'chart'
+     deploymentName: 'pipeline-fl-control-plane'
+     namespace: 'test-depl-name'
++    containerRegistryUrl: 'https://keppel.eu-de-1.cloud.sap/hana-qa-lenny'
+     containerImageName: 'pipeline-fl-control-plane'
+     containerRegistrySecret: 'regsecret-control-plane'
+     apiServer: 'https://api.fl-dev.pipelinefl.shoot.canary.k8s-hana.ondemand.com'
+-    # Helm waits up to 600s for the rollout to complete before marking
++    # Helm waits up to 1200s for the rollout to complete before marking
+     # the deploy failed. Default 300s was tight enough that a cold
+     # HANA connection on the first /readyz call could trigger atomic
+     # rollback. Covers image pull + container start + readiness.
+-    helmDeployWaitSeconds: 600
++    helmDeployWaitSeconds: 1200
+diff --git a/Dockerfile b/Dockerfile
+index b2ce9c20..a706935a 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,36 +1,35 @@
+-FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp6-app-pyenv-minimal-3.14 AS builder
+-
+-USER root
+-RUN mkdir -p /home/app/build/wheels && chown -R app:app /home/app/build
++FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp3-app-pyenv-3.12 AS builder
+ USER app
+ 
+ WORKDIR /home/app/build
+ 
++COPY pip.conf /etc/pip.conf
+ COPY --chown=app:app pyproject.toml ./
+ COPY --chown=app:app fl_shared/ ./fl_shared/
+ COPY --chown=app:app fl_control_plane/ ./fl_control_plane/
+ COPY --chown=app:app handler_controller/ ./handler_controller/
+ COPY --chown=app:app hdlf_server/ ./hdlf_server/
++COPY --chown=app:app finalizer_agent/ ./finalizer_agent/
+ 
+ RUN pip install --no-cache-dir hatchling \
+     && hatchling build -t wheel -d /home/app/build/wheels
+ 
+-FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp6-app-pyenv-minimal-3.14
++FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp3-app-pyenv-3.12
+ 
+ USER root
+ WORKDIR /home/app/app
+ 
++COPY pip.conf /etc/pip.conf
+ COPY --from=builder /home/app/build/wheels/*.whl /tmp/
+ 
+-ENV PATH="/home/app/.pyenv/versions/3.14.5/bin:${PATH}"
+-
+ RUN WHEEL=$(ls /tmp/*.whl) \
+-    && pip install --no-cache-dir --timeout 120 "${WHEEL}" \
++    && pip install --no-cache-dir --timeout 120 "${WHEEL}[hps-sdk]" \
+     && rm -rf /tmp/*.whl \
+     && chown -R 1001:1001 /home/app/app
+ 
+ COPY alembic.ini ./
+ COPY db/ ./db/
++COPY finalizer_agent/ ./finalizer_agent/
+ 
+ ENV PYTHONDONTWRITEBYTECODE=1
+ 
+diff --git a/chart/crds/faulthandler.yaml b/chart/crds/faulthandler.yaml
+index 93802ee5..855b8ba4 100644
+--- a/chart/crds/faulthandler.yaml
++++ b/chart/crds/faulthandler.yaml
+@@ -176,10 +176,11 @@ spec:
+                       name:
+                         type: string
+                         minLength: 2
+-                        pattern: "^[A-Z][A-Z0-9_]*$"
+                         description: >-
+-                          Environment variable name for the secret.
+-                          Must be uppercase with underscores.
++                          Vault key path in the form <path>/<SECRET_KEY>
++                          (e.g. common/pipeline3_fl_sap_ai_core/AICORE_AUTH_URL).
++                          The last path segment becomes the env var name injected
++                          into the job container.
+                       description:
+                         type: string
+                         description: Human-readable description of what this secret is for.
+diff --git a/chart/templates/_helpers.tpl b/chart/templates/_helpers.tpl
+index d507a161..ea62305e 100644
+--- a/chart/templates/_helpers.tpl
++++ b/chart/templates/_helpers.tpl
+@@ -65,5 +65,5 @@ app.kubernetes.io/component: postgresql
+ {{- end }}
+ 
+ {{- define "fl-control-plane.image" -}}
+-{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
++{{- printf "%s:%s" .Values.image.pipeline_fl_control_plane.repository (.Values.image.pipeline_fl_control_plane.tag | default .Chart.AppVersion) }}
+ {{- end }}
+diff --git a/chart/templates/agent-task-externalsecret.yaml b/chart/templates/agent-task-externalsecret.yaml
+new file mode 100644
+index 00000000..c0b9f771
+--- /dev/null
++++ b/chart/templates/agent-task-externalsecret.yaml
+@@ -0,0 +1,133 @@
++{{- if .Values.agentTaskEnvs.enabled }}
++apiVersion: external-secrets.io/v1
++kind: ExternalSecret
++metadata:
++  name: {{ include "fl-control-plane.fullname" . }}-agent-task-envs
++  labels:
++    {{- include "fl-control-plane.labels" . | nindent 4 }}
++  annotations:
++    "helm.sh/hook": pre-install,pre-upgrade
++    "helm.sh/hook-weight": "-2"
++    "helm.sh/hook-delete-policy": before-hook-creation
++spec:
++  refreshInterval: 1h
++  secretStoreRef:
++    kind: ClusterSecretStore
++    name: vault-clusters
++  target:
++    name: {{ include "fl-control-plane.fullname" . }}-agent-task-envs
++    creationPolicy: Owner
++  data:
++    - secretKey: DOIT_AUTH_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: DOIT_AUTH_TOKEN
++    - secretKey: DOIT_CLUSTER_DOMAIN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: DOIT_CLUSTER_DOMAIN
++    - secretKey: GERRIT_API_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: GERRIT_API_TOKEN
++    - secretKey: GERRIT_API_URL
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: GERRIT_API_URL
++    - secretKey: GERRIT_USERNAME
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: GERRIT_USERNAME
++    - secretKey: GITHUB_TOOL_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: GITHUB_TOOL_TOKEN
++    - secretKey: GITHUB_WDF_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: GITHUB_WDF_TOKEN
++    - secretKey: HPS_GITHUB_API_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_GITHUB_API_TOKEN
++    - secretKey: HPS_GITHUB_USER_NAME
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_GITHUB_USER_NAME
++    - secretKey: HPS_GITHUB_WDF_API_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_GITHUB_WDF_API_TOKEN
++    - secretKey: HPS_GITHUB_WDF_USER_NAME
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_GITHUB_WDF_USER_NAME
++    - secretKey: HPS_GIT_USER_EMAIL
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_GIT_USER_EMAIL
++    - secretKey: HPS_GIT_USER_NAME
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_GIT_USER_NAME
++    - secretKey: HPS_MLFLOW_EXPERIMENT_ID
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_MLFLOW_EXPERIMENT_ID
++    - secretKey: HPS_TESTSTRATEGY_API_KEY
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_TESTSTRATEGY_API_KEY
++    - secretKey: HPS_TESTSTRATEGY_API_URL
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: HPS_TESTSTRATEGY_API_URL
++    - secretKey: MCP_GERRIT_API_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_GERRIT_API_TOKEN
++    - secretKey: MCP_GERRIT_URL
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_GERRIT_URL
++    - secretKey: MCP_GERRIT_USERNAME
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_GERRIT_USERNAME
++    - secretKey: MCP_GITHUB_API_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_GITHUB_API_TOKEN
++    - secretKey: MCP_GITHUB_WDF_TOKEN
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_GITHUB_WDF_TOKEN
++    - secretKey: MCP_HDLF_CLIENT_CERTIFICATE
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_HDLF_CLIENT_CERTIFICATE
++    - secretKey: MCP_HDLF_CLIENT_KEY
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_HDLF_CLIENT_KEY
++    - secretKey: MCP_HDLF_CONTAINER_ID
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_HDLF_CONTAINER_ID
++    - secretKey: MCP_HDLF_REST_API_HOST
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MCP_HDLF_REST_API_HOST
++    - secretKey: MLFLOW_TRACKING_PASSWORD
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MLFLOW_TRACKING_PASSWORD
++    - secretKey: MLFLOW_TRACKING_URI
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MLFLOW_TRACKING_URI
++    - secretKey: MLFLOW_TRACKING_USERNAME
++      remoteRef:
++        key: common/pipeline3_fl_agent_task_envs
++        property: MLFLOW_TRACKING_USERNAME
++{{- end }}
+diff --git a/chart/templates/aicore-externalsecret.yaml b/chart/templates/aicore-externalsecret.yaml
+new file mode 100644
+index 00000000..dee7b173
+--- /dev/null
++++ b/chart/templates/aicore-externalsecret.yaml
+@@ -0,0 +1,41 @@
++{{- if .Values.aiCore.enabled }}
++apiVersion: external-secrets.io/v1
++kind: ExternalSecret
++metadata:
++  name: {{ include "fl-control-plane.fullname" . }}-ai-core
++  labels:
++    {{- include "fl-control-plane.labels" . | nindent 4 }}
++  annotations:
++    "helm.sh/hook": pre-install,pre-upgrade
++    "helm.sh/hook-weight": "-2"
++    "helm.sh/hook-delete-policy": before-hook-creation
++spec:
++  refreshInterval: 1h
++  secretStoreRef:
++    kind: ClusterSecretStore
++    name: vault-clusters
++  target:
++    name: {{ include "fl-control-plane.fullname" . }}-ai-core
++    creationPolicy: Owner
++  data:
++    - secretKey: AICORE_AUTH_URL
++      remoteRef:
++        key: common/pipeline3_fl_sap_ai_core
++        property: AICORE_AUTH_URL
++    - secretKey: AICORE_BASE_URL
++      remoteRef:
++        key: common/pipeline3_fl_sap_ai_core
++        property: AICORE_BASE_URL
++    - secretKey: AICORE_CLIENT_ID
++      remoteRef:
++        key: common/pipeline3_fl_sap_ai_core
++        property: AICORE_CLIENT_ID
++    - secretKey: AICORE_CLIENT_SECRET
++      remoteRef:
++        key: common/pipeline3_fl_sap_ai_core
++        property: AICORE_CLIENT_SECRET
++    - secretKey: AICORE_RESOURCE_GROUP
++      remoteRef:
++        key: common/pipeline3_fl_sap_ai_core
++        property: AICORE_RESOURCE_GROUP
++{{- end }}
+diff --git a/chart/templates/db-migrate-job.yaml b/chart/templates/db-migrate-job.yaml
+index 6046e926..0c975cd3 100644
+--- a/chart/templates/db-migrate-job.yaml
++++ b/chart/templates/db-migrate-job.yaml
+@@ -7,10 +7,11 @@ metadata:
+   annotations:
+     "helm.sh/hook": pre-install,pre-upgrade
+     "helm.sh/hook-weight": "2"
+-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
++    "helm.sh/hook-delete-policy": before-hook-creation
+ spec:
+   backoffLimit: 3
+-  activeDeadlineSeconds: 300
++  activeDeadlineSeconds: 1800
++  ttlSecondsAfterFinished: 86400
+   template:
+     metadata:
+       annotations:
+@@ -30,7 +31,7 @@ spec:
+       initContainers:
+         {{- if .Values.database.serviceBinding.enabled }}
+         - name: wait-for-secret
+-          image: "{{ required "image.repository must be set" .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
++          image: {{ include "fl-control-plane.image" . | quote }}
+           command:
+             - python3
+             - -c
+@@ -61,16 +62,11 @@ spec:
+             runAsUser: 1001
+             readOnlyRootFilesystem: true
+           resources:
+-            requests:
+-              cpu: 50m
+-              memory: 128Mi
+-            limits:
+-              cpu: 100m
+-              memory: 256Mi
++            {{- toYaml .Values.dbMigrateJob.resources | nindent 12 }}
+         {{- end }}
+       containers:
+         - name: db-migrate
+-          image: "{{ required "image.repository must be set" .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
++          image: {{ include "fl-control-plane.image" . | quote }}
+           imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+           workingDir: /home/app/app
+           command: ["alembic", "upgrade", "head"]
+@@ -113,12 +109,7 @@ spec:
+               mountPath: /etc/hana-certs
+               readOnly: true
+           resources:
+-            requests:
+-              cpu: 50m
+-              memory: 128Mi
+-            limits:
+-              cpu: 200m
+-              memory: 256Mi
++            {{- toYaml .Values.dbMigrateJob.resources | nindent 12 }}
+       volumes:
+         - name: tmp
+           emptyDir: {}
+diff --git a/chart/templates/deployment-hdlf-server.yaml b/chart/templates/deployment-hdlf-server.yaml
+index 73cf653d..f8251dd7 100644
+--- a/chart/templates/deployment-hdlf-server.yaml
++++ b/chart/templates/deployment-hdlf-server.yaml
+@@ -2,20 +2,21 @@
+ apiVersion: apps/v1
+ kind: Deployment
+ metadata:
+-  name: {{ .Chart.Name }}-hdlf-server
++  name: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+   labels:
+-    app: {{ .Chart.Name }}-hdlf-server
++    app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+     pipeline-fl/component: hdlf-server
+ spec:
+   replicas: {{ .Values.hdlfServer.replicaCount }}
+   revisionHistoryLimit: 3
++  progressDeadlineSeconds: 300
+   selector:
+     matchLabels:
+-      app: {{ .Chart.Name }}-hdlf-server
++      app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+   template:
+     metadata:
+       labels:
+-        app: {{ .Chart.Name }}-hdlf-server
++        app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+         pipeline-fl/component: hdlf-server
+     spec:
+       {{- if .Values.imagePullSecret.name }}
+@@ -24,7 +25,7 @@ spec:
+       {{- end }}
+       containers:
+         - name: hdlf-server
+-          image: "{{ required "image.repository must be set" .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
++          image: {{ include "fl-control-plane.image" . | quote }}
+           # Reuse the existing image; override the entrypoint to start the
+           # hdlf_server FastAPI app instead of the Ingestion API.
+           command:
+diff --git a/chart/templates/deployment.yaml b/chart/templates/deployment.yaml
+index 727e8d15..8dbad05c 100644
+--- a/chart/templates/deployment.yaml
++++ b/chart/templates/deployment.yaml
+@@ -7,6 +7,10 @@ metadata:
+ spec:
+   replicas: {{ .Values.replicaCount }}
+   revisionHistoryLimit: 3
++  # Kubernetes marks the rollout as failed after this window if the desired
++  # replica count is not reached. 300s gives Helm's --atomic rollback enough
++  # time to complete before the 600s helm timeout is hit.
++  progressDeadlineSeconds: 300
+   selector:
+     matchLabels:
+       {{- include "fl-control-plane.selectorLabels" . | nindent 6 }}
+@@ -22,6 +26,8 @@ spec:
+       labels:
+         {{- include "fl-control-plane.selectorLabels" . | nindent 8 }}
+     spec:
++      serviceAccountName: {{ include "fl-control-plane.fullname" . }}
++      automountServiceAccountToken: true
+       {{- if .Values.imagePullSecret.name }}
+       imagePullSecrets:
+         - name: {{ .Values.imagePullSecret.name }}
+@@ -47,7 +53,7 @@ spec:
+               echo "Temporal namespace 'default' is ready."
+       containers:
+         - name: {{ .Chart.Name }}
+-          image: "{{ required "image.repository must be set" .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
++          image: {{ include "fl-control-plane.image" . | quote }}
+           imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+           ports:
+             - name: http
+@@ -56,6 +62,14 @@ spec:
+           envFrom:
+             - configMapRef:
+                 name: {{ include "fl-control-plane.fullname" . }}-config
++            {{- if .Values.aiCore.enabled }}
++            - secretRef:
++                name: {{ include "fl-control-plane.fullname" . }}-ai-core
++            {{- end }}
++            {{- if .Values.agentTaskEnvs.enabled }}
++            - secretRef:
++                name: {{ include "fl-control-plane.fullname" . }}-agent-task-envs
++            {{- end }}
+           env:
+             - name: DB_HOST
+               valueFrom:
+@@ -134,12 +148,38 @@ spec:
+               value: {{ required "hdlf.restApiHost must be set" .Values.hdlf.restApiHost | quote }}
+             - name: HDLF_CONTAINER_ID
+               value: {{ required "hdlf.containerId must be set" .Values.hdlf.containerId | quote }}
+-            - name: FL_AGENT_IMAGE
+-              value: "{{ required "image.repository must be set" .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
+             {{- if .Values.hdlf.certSecretName }}
+             - name: HDLF_CERT_DIR
+               value: /etc/hdlf-certs
++            - name: HDLF_CERT_SECRET_NAME
++              value: {{ .Values.hdlf.certSecretName | quote }}
+             {{- end }}
++            - name: EE_CONFIG_REPO_URL
++              value: {{ required "executionEngine.configRepoUrl must be set" .Values.executionEngine.configRepoUrl | quote }}
++            - name: EE_CONFIG_REPO_COMMITISH
++              value: {{ .Values.executionEngine.configRepoCommitish | default "main" | quote }}
++            - name: FL_FINALIZER_CONFIG_REPO_URL
++              value: {{ required "finalizer.configRepoUrl must be set" .Values.finalizer.configRepoUrl | quote }}
++            - name: FL_FINALIZER_CONFIG_REPO_COMMITISH
++              value: {{ .Values.finalizer.configRepoCommitish | default "main" | quote }}
++            - name: EE_NAMESPACE
++              value: {{ .Release.Namespace | quote }}
++            - name: EE_AGENT_IMAGE
++              value: {{ printf "%s:%s" (required "image.pipeline_fl_control_plane_engineering_agent.repository must be set" .Values.image.pipeline_fl_control_plane_engineering_agent.repository) (required "image.pipeline_fl_control_plane_engineering_agent.tag must be set" .Values.image.pipeline_fl_control_plane_engineering_agent.tag) | quote }}
++            - name: EE_AGENT_IMAGE_PULL_POLICY
++              value: {{ .Values.executionEngine.agentImagePullPolicy | default "IfNotPresent" | quote }}
++            - name: EE_JOB_ACTIVE_DEADLINE_SECONDS
++              value: {{ .Values.executionEngine.jobActiveDeadlineSeconds | default 3600 | quote }}
++            - name: EE_JOB_POLL_TIMEOUT_SECONDS
++              value: {{ .Values.executionEngine.jobPollTimeoutSeconds | default 3660 | quote }}
++            - name: EE_JOB_TTL_SECONDS_AFTER_FINISHED
++              value: {{ .Values.executionEngine.jobTtlSecondsAfterFinished | default 3600 | quote }}
++            - name: EE_JOB_BACKOFF_LIMIT
++              value: {{ .Values.executionEngine.jobBackoffLimit | default 3 | quote }}
++            - name: EE_JOB_POLL_INTERVAL_SECONDS
++              value: {{ .Values.executionEngine.jobPollIntervalSeconds | default 10 | quote }}
++            - name: EE_SECRET_STORE_NAME
++              value: {{ .Values.executionEngine.secretStoreName | default "vault-clusters" | quote }}
+           {{- with .Values.probes.liveness }}
+           livenessProbe:
+             httpGet:
+diff --git a/chart/templates/dispatcher-rbac.yaml b/chart/templates/dispatcher-rbac.yaml
+new file mode 100644
+index 00000000..5e75e31c
+--- /dev/null
++++ b/chart/templates/dispatcher-rbac.yaml
+@@ -0,0 +1,42 @@
++apiVersion: v1
++kind: ServiceAccount
++metadata:
++  name: {{ include "fl-control-plane.fullname" . }}
++  labels:
++    {{- include "fl-control-plane.labels" . | nindent 4 }}
++automountServiceAccountToken: false
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: Role
++metadata:
++  name: {{ include "fl-control-plane.fullname" . }}-dispatcher
++  labels:
++    {{- include "fl-control-plane.labels" . | nindent 4 }}
++rules:
++  - apiGroups: ["batch"]
++    resources: ["jobs"]
++    verbs: ["create", "get", "delete"]
++  - apiGroups: ["external-secrets.io"]
++    resources: ["externalsecrets"]
++    verbs: ["create", "patch"]
++  - apiGroups: [""]
++    resources: ["pods"]
++    verbs: ["list"]
++  - apiGroups: [""]
++    resources: ["pods/log"]
++    verbs: ["get"]
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: RoleBinding
++metadata:
++  name: {{ include "fl-control-plane.fullname" . }}-dispatcher
++  labels:
++    {{- include "fl-control-plane.labels" . | nindent 4 }}
++roleRef:
++  apiGroup: rbac.authorization.k8s.io
++  kind: Role
++  name: {{ include "fl-control-plane.fullname" . }}-dispatcher
++subjects:
++  - kind: ServiceAccount
++    name: {{ include "fl-control-plane.fullname" . }}
++    namespace: {{ .Release.Namespace }}
+diff --git a/chart/templates/hana-binding.yaml b/chart/templates/hana-binding.yaml
+index 348ab03e..a652997d 100644
+--- a/chart/templates/hana-binding.yaml
++++ b/chart/templates/hana-binding.yaml
+@@ -26,7 +26,7 @@ metadata:
+   labels:
+     {{- include "fl-control-plane.labels" . | nindent 4 }}
+   annotations:
+-    "helm.sh/hook": pre-install
++    "helm.sh/hook": pre-install,pre-upgrade
+     "helm.sh/hook-weight": "1"
+     "helm.sh/hook-delete-policy": never
+ spec:
+diff --git a/chart/templates/networkpolicy-hdlf-server.yaml b/chart/templates/networkpolicy-hdlf-server.yaml
+index 63beb779..0b0199a4 100644
+--- a/chart/templates/networkpolicy-hdlf-server.yaml
++++ b/chart/templates/networkpolicy-hdlf-server.yaml
+@@ -2,14 +2,14 @@
+ apiVersion: networking.k8s.io/v1
+ kind: NetworkPolicy
+ metadata:
+-  name: {{ .Chart.Name }}-hdlf-server
++  name: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+   labels:
+-    app: {{ .Chart.Name }}-hdlf-server
++    app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+     pipeline-fl/component: hdlf-server
+ spec:
+   podSelector:
+     matchLabels:
+-      app: {{ .Chart.Name }}-hdlf-server
++      app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+   policyTypes:
+     - Ingress
+ 
+@@ -19,6 +19,9 @@ spec:
+             matchExpressions:
+               - key: {{ required "hdlfServer.networkPolicy.faultHandlerLabelKey must be set" .Values.hdlfServer.networkPolicy.faultHandlerLabelKey | quote }}
+                 operator: Exists
++        - podSelector:
++            matchLabels:
++              app.kubernetes.io/name: {{ .Chart.Name }}
+       ports:
+         - protocol: TCP
+           port: 8000
+diff --git a/chart/templates/pdb-hdlf-server.yaml b/chart/templates/pdb-hdlf-server.yaml
+index 5c3af2aa..25636508 100644
+--- a/chart/templates/pdb-hdlf-server.yaml
++++ b/chart/templates/pdb-hdlf-server.yaml
+@@ -6,20 +6,20 @@
+   Fault Handler / Custom Runtime fleet unable to read inspection data.
+ 
+   Separate manifest from pdb.yaml because the selector targets the
+-  hdlf-server label (`{{ .Chart.Name }}-hdlf-server`), not the
+-  Ingestion API's (`{{ .Chart.Name }}`).
++  hdlf-server label (`{{ include "fl-control-plane.fullname" . }}-hdlf-server`), not the
++  Ingestion API's (`{{ include "fl-control-plane.fullname" . }}`).
+ */}}
+ {{- if and .Values.hdlfServer.enabled (gt (int .Values.hdlfServer.replicaCount) 1) }}
+ apiVersion: policy/v1
+ kind: PodDisruptionBudget
+ metadata:
+-  name: {{ .Chart.Name }}-hdlf-server
++  name: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+   labels:
+-    app: {{ .Chart.Name }}-hdlf-server
++    app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+     pipeline-fl/component: hdlf-server
+ spec:
+   minAvailable: 1
+   selector:
+     matchLabels:
+-      app: {{ .Chart.Name }}-hdlf-server
++      app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+ {{- end }}
+diff --git a/chart/templates/peerauthentication-hdlf-server.yaml b/chart/templates/peerauthentication-hdlf-server.yaml
+new file mode 100644
+index 00000000..365cbef2
+--- /dev/null
++++ b/chart/templates/peerauthentication-hdlf-server.yaml
+@@ -0,0 +1,16 @@
++apiVersion: security.istio.io/v1
++kind: PeerAuthentication
++metadata:
++  name: {{ include "fl-control-plane.fullname" . }}-hdlf-server
++  labels:
++    {{- include "fl-control-plane.labels" . | nindent 4 }}
++spec:
++  selector:
++    matchLabels:
++      app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
++  mtls:
++    # Job pods run outside the Istio sidecar mesh (Kyma uses init-container
++    # ambient mode which doesn't inject a running proxy into batch jobs).
++    # PERMISSIVE allows job pods to reach the HDLF server over plain HTTP
++    # while mesh workloads continue to use mTLS.
++    mode: PERMISSIVE
+diff --git a/chart/templates/service-hdlf-server.yaml b/chart/templates/service-hdlf-server.yaml
+index abd59a35..ce75909f 100644
+--- a/chart/templates/service-hdlf-server.yaml
++++ b/chart/templates/service-hdlf-server.yaml
+@@ -2,9 +2,9 @@
+ apiVersion: v1
+ kind: Service
+ metadata:
+-  name: {{ .Chart.Name }}-hdlf-server
++  name: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+   labels:
+-    app: {{ .Chart.Name }}-hdlf-server
++    app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+     pipeline-fl/component: hdlf-server
+ spec:
+   type: ClusterIP
+@@ -13,5 +13,5 @@ spec:
+       targetPort: 8000
+       protocol: TCP
+   selector:
+-    app: {{ .Chart.Name }}-hdlf-server
++    app: {{ include "fl-control-plane.fullname" . }}-hdlf-server
+ {{- end }}
+diff --git a/chart/values.yaml b/chart/values.yaml
+index 3e6e7773..a67b302d 100644
+--- a/chart/values.yaml
++++ b/chart/values.yaml
+@@ -1,8 +1,13 @@
+-replicaCount: 2
++replicaCount: 1
+ 
+ image:
+-  repository: ""
+-  tag: ""
++  pipeline_fl_control_plane:
++    repository: ""
++    tag: ""
++  pipeline_fl_control_plane_engineering_agent:
++    repository: ""
++    tag: ""
++  pullPolicy: IfNotPresent
+ 
+ service:
+   type: ClusterIP
+@@ -24,11 +29,20 @@ secret:
+ 
+ resources:
+   limits:
+-    memory: "256Mi"
+-    cpu: "250m"
++    memory: "4Gi"
++    cpu: "4"
+   requests:
+-    memory: "128Mi"
+-    cpu: "250m"
++    memory: "2Gi"
++    cpu: "2"
++
++dbMigrateJob:
++  resources:
++    requests:
++      cpu: 250m
++      memory: 250Mi
++    limits:
++      cpu: 500m
++      memory: 500Mi
+ 
+ hdlf:
+   restApiHost: "c072e62e-3bdd-445d-9e90-98fc5375bee8.files.hdl.cc.hc-eu01can.hanacloud.ondemand.com"
+@@ -36,6 +50,29 @@ hdlf:
+   # Name of the Secret containing client.crt and client.key for mTLS to HDLF.
+   certSecretName: fl-hdlf-tls
+ 
++executionEngine:
++  # URL of the Failure Checks Repo that holds handler skill and MCP config files.
++  configRepoUrl: "unset"
++  # Branch or commit to check out in the config repo.
++  configRepoCommitish: "main"
++  # Default container image for agent_task jobs (overridden per-handler by the CR).
++  agentImagePullPolicy: "IfNotPresent"
++  jobActiveDeadlineSeconds: 3600
++  # Client-side polling timeout — slightly above jobActiveDeadlineSeconds so
++  # Kubernetes always marks the job terminal before the client gives up.
++  jobPollTimeoutSeconds: 3660
++  jobTtlSecondsAfterFinished: 3600
++  jobBackoffLimit: 3
++  jobPollIntervalSeconds: 10
++  # ClusterSecretStore name used to sync handler-declared secrets from Vault.
++  secretStoreName: "vault-clusters"
++
++finalizer:
++  # URL of the config repo containing finalizer skills and MCP config files.
++  configRepoUrl: "https://github.tools.sap/Lenny/pipeline-fl-control-plane.git"
++  # Branch or commit to check out in the config repo.
++  configRepoCommitish: "PIPELINE3-1434"
++
+ temporalWorker:
+   # Overrides Settings.temporal_namespace (default: "default").
+   namespace: "default"
+@@ -50,6 +87,18 @@ faultLocalizationEnv: "development"
+ jaasVault:
+   enabled: true
+ 
++# SAP AI Core credentials synced from vault via ESO.
++# Set enabled=true on clusters that have ESO installed (e.g. fl-dev).
++# The ExternalSecret pulls all five fields from common/pipeline3_fl_sap_ai_core.
++aiCore:
++  enabled: true
++
++# Agent task environment secrets synced from vault via ESO.
++# Set enabled=true on clusters that have ESO installed (e.g. fl-dev).
++# The ExternalSecret pulls all fields from common/pipeline3_fl_agent_task_envs.
++agentTaskEnvs:
++  enabled: true
++
+ auth:
+   authDisabled: false
+   iasIssuerUrl: https://hanaqainfrastructure.accounts400.ondemand.com
+@@ -98,11 +147,11 @@ controller:
+       failureThreshold: 120
+   resources:
+     requests:
+-      cpu: 50m
+-      memory: 128Mi
++      cpu: 500m
++      memory: 500Mi
+     limits:
+-      cpu: 200m
+-      memory: 256Mi
++      cpu: "1"
++      memory: 1Gi
+ 
+ # /healthz — basic health. /readyz — full readiness (DB, dependencies). /startupz — startup gate.
+ probes:
+@@ -206,17 +255,17 @@ temporal:
+ # label key (default: `pipeline-fl/faulthandler`).
+ hdlfServer:
+   enabled: true
+-  replicaCount: 2
++  replicaCount: 1
+   # Passed to FAULT_LOCALIZATION_ENV in the container — required by the
+   # shared Settings validator even though this service does not consume it.
+   faultLocalizationEnv: prod
+   resources:
+     requests:
+-      cpu: 50m
+-      memory: 128Mi
++      cpu: 500m
++      memory: 500Mi
+     limits:
+-      cpu: 250m
+-      memory: 256Mi
++      cpu: "1"
++      memory: 1Gi
+   hdlf:
+     # HDLF coordinates for the test landscape. Once Piper-from-Vault wiring
+     # for these is in place, blank these out and let Piper inject them.
+diff --git a/db/migrations/versions/0005_seed_default_finalizer.py b/db/migrations/versions/0005_seed_default_finalizer.py
+index efa8dcf0..5d4b97cd 100644
+--- a/db/migrations/versions/0005_seed_default_finalizer.py
++++ b/db/migrations/versions/0005_seed_default_finalizer.py
+@@ -21,8 +21,7 @@
+ _DEFAULT_FINALIZER_VERSION = '1.0.0'
+ 
+ _PROMPT = (
+-    'Execute the finalizer skill for the given inspection_id — '
+-    'post FL findings as a PR comment.'
++    '/.agents/skills/SKILL.md'
+ )
+ 
+ _SKILLS_JSON = '["skills/SKILL.md"]'
+diff --git a/db/schema.sql b/db/schema.sql
+index 9d2df37e..e8ef86a3 100644
+--- a/db/schema.sql
++++ b/db/schema.sql
+@@ -66,7 +66,7 @@ CREATE TABLE fault_handlers (
+     cr_namespace         VARCHAR(253) NOT NULL,
+     fault_id             VARCHAR(253) NOT NULL,
+     execution_type       VARCHAR(20)  NOT NULL,
+-    scope                VARCHAR(20)  NOT NULL,
++    strategy              VARCHAR(20)  NOT NULL,
+     ci_systems           VARCHAR(255) NULL,
+     repo_patterns        VARCHAR(255) NULL,
+     trigger_scope        VARCHAR(20)  NOT NULL DEFAULT 'all',
+@@ -81,8 +81,8 @@ CREATE TABLE fault_handlers (
+     CONSTRAINT ck_fault_handlers_exec_type CHECK (
+         execution_type IN ('agent_task', 'custom_runtime')
+     ),
+-    CONSTRAINT ck_fault_handlers_scope CHECK (
+-        scope IN ('stage_scoped', 'pipeline_scoped')
++    CONSTRAINT ck_fault_handlers_strategy CHECK (
++        strategy IN ('stage_scoped', 'pipeline_scoped')
+     ),
+     CONSTRAINT ck_fault_handlers_trigger_scope CHECK (
+         trigger_scope IN ('all', 'pr_only', 'non_pr_only')
+diff --git a/engineering_agent/app/agent_task_runner.py b/engineering_agent/app/agent_task_runner.py
+index be39d82e..10894dd5 100644
+--- a/engineering_agent/app/agent_task_runner.py
++++ b/engineering_agent/app/agent_task_runner.py
+@@ -72,8 +72,8 @@ def run(request: AgentTaskRequest) -> AgentTaskResult:
+         repo_commitish=request.repo_commitish,
+         config_repo_url=request.config_repo_url,
+         config_repo_commitish=request.config_repo_commitish,
+-        config_mcp_paths=request.config_mcp_paths,
+-        config_skill_paths=request.config_skill_paths,
++        config_mcp_paths=request.mcps,
++        config_skill_paths=request.skills,
+     )
+ 
+     tasks_map = pipeline3.trigger_cline_central({request.task_id: swe_task})
+diff --git a/engineering_agent/app/config.py b/engineering_agent/app/config.py
+index 110f2f36..2b30e19d 100644
+--- a/engineering_agent/app/config.py
++++ b/engineering_agent/app/config.py
+@@ -23,8 +23,8 @@ class JobSettings(BaseSettings):
+         repo_commitish: Branch or commit SHA to check out.
+         config_repo_url: URL of the Failure Checks Repo containing skills and MCP configs.
+         config_repo_commitish: Branch or commit of the config repo to use.
+-        config_mcp_paths: JSON-encoded list of MCP config file paths within the config repo.
+-        config_skill_paths: JSON-encoded list of skill file paths within the config repo.
++        mcps: JSON-encoded list of MCP config file paths within the config repo.
++        skills: JSON-encoded list of skill file paths within the config repo.
+     """
+     task_id: str
+     task_text: str
+@@ -32,10 +32,10 @@ class JobSettings(BaseSettings):
+     repo_commitish: str
+     config_repo_url: str
+     config_repo_commitish: str
+-    config_mcp_paths: list[str] = Field(default_factory=list)
+-    config_skill_paths: list[str] = Field(default_factory=list)
++    mcps: list[str] = Field(default_factory=list)
++    skills: list[str] = Field(default_factory=list)
+ 
+-    @field_validator("config_mcp_paths", "config_skill_paths", mode="before")
++    @field_validator("mcps", "skills", mode="before")
+     @classmethod
+     def _parse_json_list(cls, v: str | list[str]) -> list[str]:
+         if isinstance(v, str):
+diff --git a/engineering_agent/app/models.py b/engineering_agent/app/models.py
+index 884e71ad..cde90e9a 100644
+--- a/engineering_agent/app/models.py
++++ b/engineering_agent/app/models.py
+@@ -64,8 +64,8 @@ class AgentTaskRequest(BaseModel):
+     repo_commitish: str
+     config_repo_url: str
+     config_repo_commitish: str
+-    config_mcp_paths: list[str]
+-    config_skill_paths: list[str]
++    mcps: list[str]
++    skills: list[str]
+ 
+ 
+ class AgentTaskResult(BaseModel):
+diff --git a/engineering_agent/pyproject.toml b/engineering_agent/pyproject.toml
+index b5d15f9e..37c138ef 100644
+--- a/engineering_agent/pyproject.toml
++++ b/engineering_agent/pyproject.toml
+@@ -9,7 +9,7 @@ requires-python = ">=3.11,<3.13"
+ dependencies = [
+     "hana-program-synthesis[sdk]==0.0.9",
+     "daas>=0.117.0,<0.119.0",
+-"pydantic-settings>=2.0.0",
++    "pydantic-settings>=2.0.0",
+ ]
+ 
+ [project.optional-dependencies]
+diff --git a/engineering_agent/scripts/run_agent_task.py b/engineering_agent/scripts/run_agent_task.py
+index b6fd82b1..a10d5d0e 100644
+--- a/engineering_agent/scripts/run_agent_task.py
++++ b/engineering_agent/scripts/run_agent_task.py
+@@ -42,8 +42,8 @@ def main() -> None:
+             repo_commitish=settings.repo_commitish,
+             config_repo_url=settings.config_repo_url,
+             config_repo_commitish=settings.config_repo_commitish,
+-            config_mcp_paths=settings.config_mcp_paths,
+-            config_skill_paths=settings.config_skill_paths,
++            mcps=settings.mcps,
++            skills=settings.skills,
+         )
+     except ValidationError as exc:
+         log.error("Error building agent task request: %s", exc)
+diff --git a/engineering_agent/tests/test_agent_task_runner.py b/engineering_agent/tests/test_agent_task_runner.py
+index 552ccf56..d3f03c76 100644
+--- a/engineering_agent/tests/test_agent_task_runner.py
++++ b/engineering_agent/tests/test_agent_task_runner.py
+@@ -17,8 +17,8 @@ def make_request(**overrides) -> AgentTaskRequest:
+         repo_commitish="main",
+         config_repo_url="http://example.com/config",
+         config_repo_commitish="main",
+-        config_mcp_paths=[],
+-        config_skill_paths=[],
++        mcps=[],
++        skills=[],
+     )
+     return AgentTaskRequest(**{**defaults, **overrides})
+ 
+diff --git a/finalizer/Dockerfile b/finalizer/Dockerfile
+deleted file mode 100644
+index 387e6e6d..00000000
+--- a/finalizer/Dockerfile
++++ /dev/null
+@@ -1,39 +0,0 @@
+-FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp3-app-pyenv-3.12 AS builder
+-
+-# Build context is the repo root (Piper kanikoExecute with
+-# containerMultiImageBuild=true) — paths are written accordingly.
+-USER root
+-WORKDIR /build
+-
+-COPY finalizer/pyproject.toml ./
+-COPY finalizer/requirements.txt ./
+-COPY finalizer/app/ ./app/
+-COPY finalizer/scripts/ ./scripts/
+-
+-# Hand /build to the non-root build user so setuptools can write egg_info.
+-RUN chown -R app:app /build
+-USER app
+-
+-RUN pip install --no-cache-dir build \
+-    && python -m build --wheel --outdir /build/wheels
+-
+-FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp3-app-pyenv-3.12
+-
+-WORKDIR /home/app/app
+-
+-COPY --from=builder /build/wheels/*.whl /tmp/
+-COPY --from=builder /build/requirements.txt /tmp/
+-
+-RUN pip install --no-cache-dir \
+-        --index-url https://int.repositories.cloud.sap/artifactory/api/pypi/lenny/simple \
+-        --extra-index-url https://pypi.me.sap.corp \
+-        --extra-index-url https://pypi.org/simple \
+-        -r /tmp/requirements.txt \
+-        /tmp/fl_finalizer-*.whl \
+-    && rm -rf /tmp/*.whl /tmp/requirements.txt
+-
+-COPY finalizer/scripts/ ./scripts/
+-
+-ENV PYTHONUNBUFFERED=1
+-
+-CMD ["python", "scripts/run_agent_task.py"]
+diff --git a/finalizer/local_testing/README.md b/finalizer/local_testing/README.md
+index 42c0e2c5..3dd13f6f 100644
+--- a/finalizer/local_testing/README.md
++++ b/finalizer/local_testing/README.md
+@@ -40,11 +40,11 @@ in the repo-root `.env` — these match the names used in the Helm deployment:
+ HDLF_REST_API_HOST=<hdlf host>
+ HDLF_CONTAINER_ID=<container id>
+ HDLF_CERT_DIR=local_testing/certs   # optional, defaults to local_testing/certs
+-FL_AGENT_IMAGE=<fl control plane image>:<tag>
++EE_AGENT_IMAGE=<fl control plane image>:<tag>
+ GITHUB_WDF_TOKEN=<github.wdf.sap.corp PAT>
+ ```
+ 
+-These are already present in `.env` for HDLF — only `FL_AGENT_IMAGE` and
++These are already present in `.env` for HDLF — only `EE_AGENT_IMAGE` and
+ `GITHUB_WDF_TOKEN` need to be added.
+ 
+ ## Teardown
+diff --git a/finalizer/local_testing/run.py b/finalizer/local_testing/run.py
+index 64d91102..1c6ca698 100644
+--- a/finalizer/local_testing/run.py
++++ b/finalizer/local_testing/run.py
+@@ -29,7 +29,7 @@
+     format="%(asctime)s %(levelname)s %(name)s %(message)s",
+ )
+ 
+-sys.path.insert(0, str(Path(__file__).parent.parent))
++sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+ 
+ # Load credentials from the repo-root .env.
+ _env_file = Path(__file__).parent.parent.parent / ".env"
+@@ -43,8 +43,8 @@
+             value = value.strip().strip("'\"")
+             os.environ.setdefault(key.strip(), value)
+ 
+-from app import agent_task_runner
+-from app.models import FinalizerTaskRequest
++from finalizer_agent import agent_task_runner
++from finalizer_agent.models import FinalizerTaskRequest
+ 
+ # ── Configure your test run here ────────────────────────────────────────────
+ 
+@@ -85,7 +85,6 @@
+     config_repo_commitish=CONFIG_REPO_COMMITISH,
+     config_mcp_paths=CONFIG_MCP_PATHS,
+     config_skill_paths=CONFIG_SKILL_PATHS,
+-    environment_variables={},
+ )
+ 
+ result = agent_task_runner.run(request)
+diff --git a/finalizer/pyproject.toml b/finalizer/pyproject.toml
+deleted file mode 100644
+index b1cd50ca..00000000
+--- a/finalizer/pyproject.toml
++++ /dev/null
+@@ -1,55 +0,0 @@
+-[build-system]
+-requires = ["setuptools>=65"]
+-build-backend = "setuptools.build_meta"
+-
+-[project]
+-name = "fl-finalizer"
+-version = "0.1.0"
+-requires-python = ">=3.11,<3.13"
+-dependencies = [
+-    "hana-program-synthesis[sdk]==0.0.9",
+-    "daas>=0.117.0,<0.119.0",
+-    "pydantic-settings>=2.0.0",
+-]
+-
+-[project.optional-dependencies]
+-dev = [
+-    "pytest==9.0.3",
+-    "pytest-asyncio==1.3.0",
+-    "ruff==0.15.12",
+-]
+-
+-[tool.setuptools.packages.find]
+-where = ["."]
+-include = ["app*"]
+-
+-[tool.pytest.ini_options]
+-asyncio_mode = "auto"
+-asyncio_default_fixture_loop_scope = "function"
+-asyncio_default_test_loop_scope = "function"
+-testpaths = ["tests"]
+-addopts = "-p no:pytest-thinktank"
+-
+-[tool.ruff]
+-line-length = 100
+-target-version = "py311"
+-
+-[tool.uv]
+-system-certs = true
+-index-strategy = "unsafe-best-match"
+-
+-[tool.uv.sources]
+-hana-program-synthesis = { index = "sap-lenny" }
+-daas = { index = "sap-build-releases" }
+-
+-[[tool.uv.index]]
+-name = "sap-lenny"
+-url = "https://int.repositories.cloud.sap/artifactory/api/pypi/lenny/simple"
+-
+-[[tool.uv.index]]
+-name = "sap-build-releases"
+-url = "https://int.repositories.cloud.sap/artifactory/api/pypi/build-releases-pypi/simple"
+-
+-[[tool.uv.index]]
+-name = "sap-doit"
+-url = "https://pypi.me.sap.corp"
+diff --git a/finalizer/requirements.txt b/finalizer/requirements.txt
+deleted file mode 100644
+index e00d3dc5..00000000
+--- a/finalizer/requirements.txt
++++ /dev/null
+@@ -1,9 +0,0 @@
+---index-url https://pypi.me.sap.corp
+---extra-index-url https://int.repositories.cloud.sap/artifactory/api/pypi/lenny/simple
+---extra-index-url https://pypi.org/simple
+-
+-hana_program_synthesis==0.0.9
+-pydantic-settings==2.13.1
+-pydantic==2.13.4
+-pydantic_core==2.46.4
+-python-dotenv==1.2.2
+diff --git a/finalizer/app/config.py b/finalizer/scripts/config.py
+similarity index 96%
+rename from finalizer/app/config.py
+rename to finalizer/scripts/config.py
+index 7716635d..74dada63 100644
+--- a/finalizer/app/config.py
++++ b/finalizer/scripts/config.py
+@@ -33,7 +33,7 @@ class JobSettings(BaseSettings):
+         mcp_hdlf_rest_api_host: HDLF WebHDFS host forwarded to FL MCP subprocesses.
+         mcp_hdlf_container_id: HDLF container ID forwarded to FL MCP subprocesses.
+         mcp_hdlf_cert_dir: Path to mTLS cert directory, forwarded to FL MCP subprocesses.
+-        fl_agent_image: Container image tag used in the MCP Docker command templates.
++        ee_agent_image: Container image tag used in the MCP Docker command templates.
+         github_wdf_token: GitHub PAT for github.wdf.sap.corp, forwarded to the
+             GitHub MCP via the Authorization header in the MCP config.
+     """
+@@ -50,7 +50,7 @@ class JobSettings(BaseSettings):
+     mcp_hdlf_rest_api_host: str
+     mcp_hdlf_container_id: str
+     mcp_hdlf_cert_dir: str = "/etc/hdlf-certs"
+-    fl_agent_image: str
++    ee_agent_image: str
+     github_wdf_token: str
+ 
+     @field_validator("config_mcp_paths", "config_skill_paths", mode="before")
+@@ -76,6 +76,6 @@ def to_environment_variables(self) -> dict[str, str]:
+             "MCP_HDLF_REST_API_HOST": self.mcp_hdlf_rest_api_host,
+             "MCP_HDLF_CONTAINER_ID": self.mcp_hdlf_container_id,
+             "MCP_HDLF_CERT_DIR": self.mcp_hdlf_cert_dir,
+-            "FL_AGENT_IMAGE": self.fl_agent_image,
++            "EE_AGENT_IMAGE": self.ee_agent_image,
+             "MCP_GITHUB_WDF_TOKEN": self.github_wdf_token,
+         }
+diff --git a/finalizer/scripts/run_agent_task.py b/finalizer/scripts/run_agent_task.py
+index b1615de5..0619cd85 100644
+--- a/finalizer/scripts/run_agent_task.py
++++ b/finalizer/scripts/run_agent_task.py
+@@ -14,8 +14,8 @@
+ 
+ from pydantic import ValidationError
+ 
+-from app.config import JobSettings
+-from app.models import FinalizerTaskRequest
++from scripts.config import JobSettings
++from finalizer_agent.models import FinalizerTaskRequest
+ 
+ 
+ def main() -> None:
+@@ -34,7 +34,7 @@ def main() -> None:
+ 
+     # Deferred import — logging must be configured before agent_task_runner loads,
+     # as it initialises loggers at import time.
+-    from app import agent_task_runner
++    from finalizer_agent import agent_task_runner
+ 
+     try:
+         request = FinalizerTaskRequest(
+@@ -45,8 +45,7 @@ def main() -> None:
+             config_repo_url=settings.config_repo_url,
+             config_repo_commitish=settings.config_repo_commitish,
+             config_mcp_paths=settings.config_mcp_paths,
+-            config_skill_paths=settings.config_skill_paths,
+-            environment_variables=settings.to_environment_variables(),
++            config_skill_paths=settings.config_skill_paths
+         )
+     except ValidationError as exc:
+         log.error("Error building finalizer task request: %s", exc)
+diff --git a/finalizer/app/__init__.py b/finalizer_agent/__init__.py
+similarity index 100%
+rename from finalizer/app/__init__.py
+rename to finalizer_agent/__init__.py
+diff --git a/finalizer/app/agent_task_runner.py b/finalizer_agent/agent_task_runner.py
+similarity index 90%
+rename from finalizer/app/agent_task_runner.py
+rename to finalizer_agent/agent_task_runner.py
+index 03241149..490e4e90 100644
+--- a/finalizer/app/agent_task_runner.py
++++ b/finalizer_agent/agent_task_runner.py
+@@ -8,12 +8,21 @@
+ 
+ import logging
+ 
+-from app.models import FinalizerTaskRequest, FinalizerTaskResult, RawTrajectory
++from finalizer_agent.models import FinalizerTaskRequest, FinalizerTaskResult, RawTrajectory
+ 
+ log = logging.getLogger(__name__)
+ 
+ from hana_program_synthesis.cline_central_api import pipeline3, scheduling_doit
+ 
++_doit_configured = False
++
++
++def _ensure_doit_configured() -> None:
++    global _doit_configured
++    if not _doit_configured:
++        scheduling_doit.configure_doit()
++        _doit_configured = True
++
+ 
+ def _adjust_resource_requirements(task: dict) -> None:
+     # Override default HANA-sized resource requirements — the defaults (4 CPUs,
+@@ -63,7 +72,7 @@ def run(request: FinalizerTaskRequest) -> FinalizerTaskResult:
+     for task in tasks_map.values():
+         _adjust_resource_requirements(task)
+ 
+-    scheduling_doit.configure_doit()
++    _ensure_doit_configured()
+ 
+     scheduled_tasks = scheduling_doit.schedule_tasks(tasks_map, atom_graph_priority=100)
+ 
+@@ -91,6 +100,7 @@ def run(request: FinalizerTaskRequest) -> FinalizerTaskResult:
+         task_id=request.task_id,
+         completion_text=completion_text,
+         mlflow_run_id=traj.mlflow_run_id,
++        atom_inspector_url=atom.get("atom_inspector_url"),
+     )
+ 
+     try:
+diff --git a/finalizer/app/models.py b/finalizer_agent/models.py
+similarity index 90%
+rename from finalizer/app/models.py
+rename to finalizer_agent/models.py
+index 838d5cae..c265e3dc 100644
+--- a/finalizer/app/models.py
++++ b/finalizer_agent/models.py
+@@ -22,9 +22,7 @@ class FinalizerTaskRequest(BaseModel):
+         config_repo_commitish: Branch or commit of the config repo.
+         config_mcp_paths: Paths within config_repo to MCP config JSON files.
+         config_skill_paths: Paths within config_repo to skill markdown files.
+-        environment_variables: Env vars forwarded into the Doit atom container
+-            and inherited by MCP Docker subprocesses. Contains MCP_FL_INSPECTION_ID,
+-            MCP_HDLF_* credentials, FL_AGENT_IMAGE, and GITHUB_WDF_TOKEN.
++
+     """
+ 
+     task_id: str
+@@ -35,7 +33,6 @@ class FinalizerTaskRequest(BaseModel):
+     config_repo_commitish: str
+     config_mcp_paths: list[str]
+     config_skill_paths: list[str]
+-    environment_variables: dict[str, str] = Field(default_factory=dict)
+ 
+ 
+ class FinalizerTaskResult(BaseModel):
+@@ -48,6 +45,7 @@ class FinalizerTaskResult(BaseModel):
+         tokens_in: Prompt tokens consumed. None when unavailable from trajectory.
+         tokens_out: Completion tokens produced. None when unavailable from trajectory.
+         mlflow_run_id: MLflow run identifier for the atom. None when absent.
++        atom_inspector_url: URL to the Atom Inspector page for this run. None when absent.
+     """
+ 
+     task_id: str
+@@ -55,6 +53,7 @@ class FinalizerTaskResult(BaseModel):
+     tokens_in: int | None = None
+     tokens_out: int | None = None
+     mlflow_run_id: str | None = None
++    atom_inspector_url: str | None = None
+ 
+ 
+ class RawClineTaskItem(BaseModel):
+diff --git a/fl_control_plane/data_extractor/activity.py b/fl_control_plane/data_extractor/activity.py
+index e86e3341..ea2528c6 100644
+--- a/fl_control_plane/data_extractor/activity.py
++++ b/fl_control_plane/data_extractor/activity.py
+@@ -9,6 +9,7 @@
+ 
+ from fl_control_plane.data_extractor.extractor import extract_data
+ from fl_control_plane.data_extractor.jenkins_client import JenkinsAPIClient
++from fl_control_plane.database import async_session
+ from fl_control_plane.temporal.models import (
+     DataExtractionResult,
+     IngestionRequest,
+@@ -95,11 +96,13 @@ async def extract_data_activity(request: IngestionRequest) -> DataExtractionResu
+ 
+         try:
+             async with JenkinsAPIClient.from_vault(request.pipeline_url) as jenkins_client:
+-                result = await extract_data(
+-                    inspection_uuid=request.inspection_id,
+-                    hdlf_client=hdlf,
+-                    jenkins_client=jenkins_client,
+-                )
++                async with async_session() as db:
++                    result = await extract_data(
++                        inspection_uuid=request.inspection_id,
++                        hdlf_client=hdlf,
++                        jenkins_client=jenkins_client,
++                        db=db,
++                    )
+         except ValueError as exc:
+             raise ApplicationError(
+                 str(exc),
+diff --git a/fl_control_plane/data_extractor/capture_plan.py b/fl_control_plane/data_extractor/capture_plan.py
+index d27c14ba..edf4a078 100644
+--- a/fl_control_plane/data_extractor/capture_plan.py
++++ b/fl_control_plane/data_extractor/capture_plan.py
+@@ -37,8 +37,11 @@
+ 
+ import aiohttp
+ 
+-from fl_control_plane.data_extractor.jenkins_client import JenkinsAPIClient
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from fl_control_plane.data_extractor.jenkins_client import BlueOceanNode, JenkinsAPIClient
+ from fl_control_plane.data_extractor.models import CaptureItem
++from fl_control_plane.metadata_extractor.db_writer import persist_failed_stages
+ from fl_shared.inspection_layout import safe_name
+ 
+ log = logging.getLogger(__name__)
+@@ -49,11 +52,11 @@
+ async def _fetch_nodes(
+     run_url: str | None,
+     client: JenkinsAPIClient,
+-) -> list[dict] | None:
++) -> list[BlueOceanNode] | None:
+     if run_url is None:
+         return None
+     try:
+-        return await client.request_json(f"{run_url}/nodes/?start=0&limit=9999")
++        return await client.list_nodes(run_url)
+     except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+         log.warning("capture_plan: Blue Ocean nodes unavailable: %s", exc)
+         return None
+@@ -121,9 +124,9 @@ async def _get_wfapi_stages(
+ def _blue_ocean_stage_items(
+     build_url: str,
+     run_url: str,
+-    raw_nodes: list[dict],
+-) -> tuple[list[CaptureItem], list[CaptureItem]]:
+-    """Build per-stage items via Blue Ocean. Returns (priority_items, non_priority_items).
++    nodes: list[BlueOceanNode],
++) -> tuple[list[CaptureItem], list[CaptureItem], list[tuple[str, str | None]]]:
++    """Build per-stage items via Blue Ocean. Returns (priority_items, non_priority_items, failed_stages).
+ 
+     Every stage gets steps.json (skipped if empty) + wfapi_describe.json.
+     NOT_EXECUTED: no console.log — stage was bypassed entirely.
+@@ -131,35 +134,36 @@ def _blue_ocean_stage_items(
+         emit one console.log item with only_failed_steps=True so the downloader fetches
+         only the logs of steps whose result is not SUCCESS.
+         Failed stages (not SUCCESS) are marked is_priority=True; SUCCESS stages are not.
++
++    failed_stages contains (display_name, None) for every STAGE node whose result is
++    not SUCCESS or NOT_EXECUTED. Blue Ocean does not surface error messages at the node
++    level, so error_message is always None on this path.
+     """
+     priority: list[CaptureItem] = []
+     non_priority: list[CaptureItem] = []
++    failed_stages: list[tuple[str, str | None]] = []
+     seen_names: dict[str, int] = {}
+-    for node in raw_nodes:
+-        node_id = node.get("id", "")
+-        if not node_id:
++    for node in nodes:
++        if not node.id:
+             continue
+ 
+-        raw_name = node.get("displayName", "unknown")
+-        safe = safe_name(raw_name)
++        safe = safe_name(node.display_name)
+         count = seen_names.get(safe, 0)
+         seen_names[safe] = count + 1
+-        stage_dir = f"{safe}_{node_id}" if count > 0 else safe
+-
+-        result = node.get("result")
++        stage_dir = f"{safe}_{node.id}" if count > 0 else safe
+ 
+         # Every stage gets steps.json + wfapi_describe.json.
+         non_priority.append(CaptureItem(
+             key=f"stages/{stage_dir}/steps.json",
+-            source_url=f"{run_url}/nodes/{node_id}/steps/?start=0&limit=9999",
++            source_url=f"{run_url}/nodes/{node.id}/steps/?start=0&limit=9999",
+             skip_if_empty_json_array=True,
+         ))
+         non_priority.append(CaptureItem(
+             key=f"stages/{stage_dir}/wfapi_describe.json",
+-            source_url=f"{build_url}/execution/node/{node_id}/wfapi/describe",
++            source_url=f"{build_url}/execution/node/{node.id}/wfapi/describe",
+         ))
+ 
+-        if result == "NOT_EXECUTED":
++        if node.result == "NOT_EXECUTED":
+             # No log and no step fetching — stage was bypassed entirely.
+             continue
+ 
+@@ -168,28 +172,29 @@ def _blue_ocean_stage_items(
+         # fetches only non-SUCCESS step logs and writes nothing if all steps passed.
+         # Failed stages are priority so they are captured before inspection-cap pressure
+         # forces later items to be skipped; SUCCESS stages are non-priority.
+-        is_stage_priority = result != "SUCCESS"
++        is_stage_priority = node.result != "SUCCESS"
+         console_log_item = CaptureItem(
+             key=f"stages/{stage_dir}/console.log",
+-            source_url=f"{run_url}/nodes/{node_id}/log/",
++            source_url=f"{run_url}/nodes/{node.id}/log/",
+             is_console_log=True,
+             is_priority=is_stage_priority,
+-            node_steps_url=f"{run_url}/nodes/{node_id}/steps/",
++            node_steps_url=f"{run_url}/nodes/{node.id}/steps/",
+             only_failed_steps=True,
+         )
+         if is_stage_priority:
+             priority.append(console_log_item)
++            failed_stages.append((node.display_name, None))
+         else:
+             non_priority.append(console_log_item)
+ 
+-    return priority, non_priority
++    return priority, non_priority, failed_stages
+ 
+ 
+ async def _wfapi_stage_items(
+     build_url: str,
+     client: JenkinsAPIClient,
+-) -> tuple[list[CaptureItem], list[CaptureItem]]:
+-    """Fallback: build per-stage items via WFAPI. Returns (priority_items, non_priority_items).
++) -> tuple[list[CaptureItem], list[CaptureItem], list[tuple[str, str | None]]]:
++    """Fallback: build per-stage items via WFAPI. Returns (priority_items, non_priority_items, failed_stages).
+ 
+     WFAPI does not expose step-level results, so the only_failed_steps mode used
+     for successful Blue Ocean stages cannot be applied here.  Instead:
+@@ -197,33 +202,41 @@ async def _wfapi_stage_items(
+     - SUCCESS stages are skipped (no step-result data available to filter on).
+     - All other stages (FAILED, UNSTABLE, ABORTED, IN_PROGRESS, etc.) get
+       a priority stage log + wfapi_describe.json.
++
++    failed_stages contains (stage_name, error_message) for every non-SUCCESS,
++    non-NOT_EXECUTED stage. error_message comes from the WFAPI error.message field
++    when the Pipeline Stage View plugin surfaces one.
+     """
+     priority: list[CaptureItem] = []
+     non_priority: list[CaptureItem] = []
++    failed_stages: list[tuple[str, str | None]] = []
+     try:
+         stages = await _get_wfapi_stages(build_url, client)
+         for stage in stages:
+             status = stage.get("status", "")
+             if status in ("SUCCESS", "NOT_EXECUTED"):
+                 continue
+-            stage_name = safe_name(stage.get("name", "unknown"))
++            stage_name = stage.get("name", "unknown")
++            safe = safe_name(stage_name)
+             node_id = stage.get("id", "")
++            error_message: str | None = stage.get("error", {}).get("message") if stage.get("error") else None
+             priority.append(CaptureItem(
+-                key=f"stages/{stage_name}/console.log",
++                key=f"stages/{safe}/console.log",
+                 source_url=f"{build_url}/execution/node/{node_id}/wfapi/log",
+                 is_console_log=True,
+                 is_priority=True,
+             ))
+             non_priority.append(CaptureItem(
+-                key=f"stages/{stage_name}/wfapi_describe.json",
++                key=f"stages/{safe}/wfapi_describe.json",
+                 source_url=f"{build_url}/execution/node/{node_id}/wfapi/describe",
+             ))
++            failed_stages.append((stage_name, error_message))
+     except (aiohttp.ClientError, asyncio.TimeoutError, OSError, KeyError) as exc:
+         log.warning("capture_plan: WFAPI stage fetch also failed for %s: %s", build_url, exc)
+     except Exception as exc:
+         log.exception("capture_plan: unexpected error in WFAPI stage fetch for %s: %s", build_url, exc)
+         raise
+-    return priority, non_priority
++    return priority, non_priority, failed_stages
+ 
+ 
+ # ── Public entry point ───────────────────────────────────────────────────────
+@@ -232,9 +245,13 @@ async def build_capture_plan(
+     inspection_uuid: str,
+     jenkins_url: str,
+     jenkins_client: JenkinsAPIClient,
++    db: AsyncSession,
+ ) -> list[CaptureItem]:
+     """Query Jenkins to build the ordered capture plan for an inspection.
+ 
++    Also persists failed stage information to the database as a by-product of
++    the stage discovery already performed here — no extra HTTP calls needed.
++
+     Returns items in two groups:
+       1. Priority items (console log, Blue Ocean run/tree, WFAPI, stage logs,
+          test reports) — in natural order
+@@ -285,20 +302,23 @@ async def build_capture_plan(
+         non_priority.append(CaptureItem(key=key, source_url=f"{build_url}{path}"))
+ 
+     # --- Parallel HTTP: nodes (for stage items), test reports, artifacts ---
+-    raw_nodes, test_report_urls, artifact_urls = await asyncio.gather(
++    nodes, test_report_urls, artifact_urls = await asyncio.gather(
+         _fetch_nodes(run_url, jenkins_client),
+         _list_test_report_urls(build_url, jenkins_client),
+         _list_artifact_urls(build_url, jenkins_client),
+     )
+ 
+     # --- Per-stage items ---
+-    if raw_nodes is not None and run_url is not None:
+-        stage_priority, stage_non_priority = _blue_ocean_stage_items(build_url, run_url, raw_nodes)
++    if nodes is not None and run_url is not None:
++        stage_priority, stage_non_priority, failed_stages = _blue_ocean_stage_items(build_url, run_url, nodes)
+     else:
+-        stage_priority, stage_non_priority = await _wfapi_stage_items(build_url, jenkins_client)
++        stage_priority, stage_non_priority, failed_stages = await _wfapi_stage_items(build_url, jenkins_client)
+     priority.extend(stage_priority)
+     non_priority.extend(stage_non_priority)
+ 
++    await persist_failed_stages(inspection_uuid, failed_stages, db)
++    await db.commit()
++
+     # --- Test reports (priority) ---
+     for report_key, report_url in test_report_urls:
+         priority.append(CaptureItem(
+diff --git a/fl_control_plane/data_extractor/extractor.py b/fl_control_plane/data_extractor/extractor.py
+index e5f2691d..a212d830 100644
+--- a/fl_control_plane/data_extractor/extractor.py
++++ b/fl_control_plane/data_extractor/extractor.py
+@@ -30,6 +30,7 @@
+     ItemStatus,
+ )
+ from fl_shared.hdlf_client import HdlfClient
++from sqlalchemy.ext.asyncio import AsyncSession
+ 
+ log = logging.getLogger(__name__)
+ 
+@@ -38,6 +39,7 @@ async def extract_data(
+     inspection_uuid: str,
+     hdlf_client: HdlfClient,
+     jenkins_client: JenkinsAPIClient,
++    db: AsyncSession,
+     *,
+     config: DownloaderConfig | None = None,
+ ) -> ExtractionResult:
+@@ -47,6 +49,9 @@ async def extract_data(
+         inspection_uuid: UUID of the inspection; the HDLF folder is named after it.
+         hdlf_client:     An HdlfClient connected to the fl-active container.
+         jenkins_client:  A JenkinsAPIClient for fetching Jenkins API responses.
++        db:              SQLAlchemy AsyncSession; passed to build_capture_plan so
++                         that failed stage discovery can persist FailedStage rows
++                         as a by-product of building the capture plan.
+         config:          Cap / retry settings; defaults to DownloaderConfig().
+ 
+     Returns:
+@@ -85,7 +90,7 @@ async def extract_data(
+         log.info("data_extractor: inspection %s — found %d already-captured items", uuid, len(already_captured))
+ 
+     # --- Build capture plan ---
+-    plan = await build_capture_plan(uuid, jenkins_url, jenkins_client)
++    plan = await build_capture_plan(uuid, jenkins_url, jenkins_client, db)
+ 
+     # --- Filter out already-captured items ---
+     pending = [item for item in plan if item.key not in already_captured]
+diff --git a/fl_control_plane/database.py b/fl_control_plane/database.py
+index c387c0e6..01ccb0ab 100644
+--- a/fl_control_plane/database.py
++++ b/fl_control_plane/database.py
+@@ -11,10 +11,9 @@
+ """
+ 
+ import uuid
+-from collections.abc import AsyncGenerator
+ from contextlib import asynccontextmanager
+ from datetime import datetime, timezone
+-from typing import Any, Optional
++from typing import Any, AsyncGenerator, Optional
+ 
+ from sqlalchemy import (
+     Boolean,
+@@ -36,7 +35,7 @@
+ 
+ from fl_control_plane.config import settings
+ 
+-engine = create_async_engine(settings.database_url, echo=settings.debug, pool_pre_ping=True)
++engine = create_async_engine(settings.database_url, echo=settings.debug)
+ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+ 
+ 
+@@ -86,7 +85,7 @@ def _utc_now() -> datetime:
+ 
+ 
+ class Base(DeclarativeBase):
+-    """SQLAlchemy declarative base for all ORM models in this project."""
++    pass
+ 
+ 
+ class Inspection(Base):
+@@ -105,7 +104,9 @@ class Inspection(Base):
+         ),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     """UUID4 identifier stored as a 36-character string.
+ 
+     Stored as VARCHAR(36) to stay portable to HANA, which has no native UUID
+@@ -113,16 +114,22 @@ class Inspection(Base):
+     Response`) annotate this as `UUID4` and Pydantic v2 coerces the string
+     to/from `uuid.UUID` at the API edge.
+     """
+-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACCEPTED", server_default="ACCEPTED")
++    status: Mapped[str] = mapped_column(
++        String(32), nullable=False, default="ACCEPTED", server_default="ACCEPTED"
++    )
+     pipeline_url: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
+-    github_repo_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True, index=True)
++    github_repo_url: Mapped[Optional[str]] = mapped_column(
++        String(2048), nullable=True, index=True
++    )
+     repo_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+     commit_id: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+     triggered_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+     path_to_hdlf: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+     status_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now, index=True)
++    created_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now, index=True
++    )
+     updated_at: Mapped[Optional[datetime]] = mapped_column(
+         DateTime(timezone=True), nullable=True, index=True, onupdate=_utc_now
+     )
+@@ -150,7 +157,9 @@ class FaultHandler(Base):
+         Index("ix_fault_handlers_fault_id", "fault_id"),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     cr_id: Mapped[str] = mapped_column(String(253), nullable=False)
+     cr_name: Mapped[str] = mapped_column(String(253), nullable=False)
+     cr_namespace: Mapped[str] = mapped_column(String(253), nullable=False)
+@@ -159,15 +168,23 @@ class FaultHandler(Base):
+     strategy: Mapped[str] = mapped_column(String(20), nullable=False)
+     ci_systems: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+     repo_patterns: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+-    trigger_scope: Mapped[str] = mapped_column(String(20), nullable=False, default="all", server_default="all")
++    trigger_scope: Mapped[str] = mapped_column(
++        String(20), nullable=False, default="all", server_default="all"
++    )
+     merge_target_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+     spec_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+     default_output_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+     resource_version: Mapped[str] = mapped_column(String(253), nullable=False)
+     has_error: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
+-    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=_utc_now)
++    is_active: Mapped[bool] = mapped_column(
++        Boolean, nullable=False, default=True, server_default=true()
++    )
++    registered_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now
++    )
++    updated_at: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True, onupdate=_utc_now
++    )
+ 
+ 
+ class ControllerStatus(Base):
+@@ -178,15 +195,27 @@ class ControllerStatus(Base):
+     """
+ 
+     __tablename__ = "controller_status"
+-    __table_args__ = (CheckConstraint("id = 1", name="ck_controller_status_single_row"),)
++    __table_args__ = (
++        CheckConstraint("id = 1", name="ck_controller_status_single_row"),
++    )
+ 
+     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+-    last_sync_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
++    last_sync_time: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True
++    )
+     sync_duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+-    handlers_active: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+-    handlers_inactive: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+-    circuit_breaker_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+-    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=_utc_now)
++    handlers_active: Mapped[int] = mapped_column(
++        Integer, nullable=False, default=0, server_default="0"
++    )
++    handlers_inactive: Mapped[int] = mapped_column(
++        Integer, nullable=False, default=0, server_default="0"
++    )
++    circuit_breaker_active: Mapped[bool] = mapped_column(
++        Boolean, nullable=False, default=False, server_default=false()
++    )
++    updated_at: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True, onupdate=_utc_now
++    )
+ 
+ 
+ class HandlerExecution(Base):
+@@ -202,7 +231,9 @@ class HandlerExecution(Base):
+         Index("ix_handler_executions_status", "status"),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     inspection_id: Mapped[str] = mapped_column(
+         String(36),
+         ForeignKey(
+@@ -227,9 +258,15 @@ class HandlerExecution(Base):
+     status: Mapped[str] = mapped_column(String(20), nullable=False)
+     status_message: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+     path_to_hdlf: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
+-    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=_utc_now)
+-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
++    created_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now
++    )
++    updated_at: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True, onupdate=_utc_now
++    )
++    finished_at: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True
++    )
+ 
+ 
+ class AuditSecretsUsed(Base):
+@@ -243,7 +280,9 @@ class AuditSecretsUsed(Base):
+         ),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     execution_id: Mapped[str] = mapped_column(
+         String(36),
+         ForeignKey(
+@@ -268,7 +307,9 @@ class FailedStage(Base):
+         Index("ix_failed_stages_stage_created", "stage_name", "created_at"),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     inspection_id: Mapped[str] = mapped_column(
+         String(36),
+         ForeignKey(
+@@ -281,7 +322,9 @@ class FailedStage(Base):
+     )
+     stage_name: Mapped[str] = mapped_column(String(255), nullable=False)
+     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
++    created_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now
++    )
+ 
+ 
+ class HandlerExecutionFailedStage(Base):
+@@ -292,7 +335,9 @@ class HandlerExecutionFailedStage(Base):
+     """
+ 
+     __tablename__ = "handler_execution_failed_stages"
+-    __table_args__ = (Index("ix_hefs_failed_stage", "failed_stage_id"),)
++    __table_args__ = (
++        Index("ix_hefs_failed_stage", "failed_stage_id"),
++    )
+ 
+     handler_execution_id: Mapped[str] = mapped_column(
+         String(36),
+@@ -327,7 +372,9 @@ class HandlerAgentTelemetry(Base):
+         Index("ix_handler_agent_telemetry_model_created", "model_name", "created_at"),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     execution_id: Mapped[str] = mapped_column(
+         String(36),
+         ForeignKey(
+@@ -338,11 +385,19 @@ class HandlerAgentTelemetry(Base):
+         ),
+         nullable=False,
+     )
+-    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+-    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+-    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
++    input_tokens: Mapped[int] = mapped_column(
++        Integer, nullable=False, default=0, server_default="0"
++    )
++    output_tokens: Mapped[int] = mapped_column(
++        Integer, nullable=False, default=0, server_default="0"
++    )
++    total_tokens: Mapped[int] = mapped_column(
++        Integer, nullable=False, default=0, server_default="0"
++    )
+     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
+-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
++    created_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now
++    )
+ 
+ 
+ class FinalizerRegistry(Base):
+@@ -355,7 +410,9 @@ class FinalizerRegistry(Base):
+ 
+     __tablename__ = "finalizer_registry"
+     __table_args__ = (
+-        UniqueConstraint("finalizer_id", "finalizer_version", name="uq_finalizer_registry_id_version"),
++        UniqueConstraint(
++            "finalizer_id", "finalizer_version", name="uq_finalizer_registry_id_version"
++        ),
+         CheckConstraint(
+             "execution_type IN ('agent_task', 'custom_runtime')",
+             name="ck_finalizer_registry_exec_type",
+@@ -369,7 +426,9 @@ class FinalizerRegistry(Base):
+         Index("ix_finalizer_registry_finalizer_id", "finalizer_id"),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     finalizer_id: Mapped[str] = mapped_column(String(255), nullable=False)
+     finalizer_version: Mapped[str] = mapped_column(String(63), nullable=False)
+     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+@@ -378,9 +437,15 @@ class FinalizerRegistry(Base):
+     prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+     skills_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+     mcps_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
+-    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=_utc_now)
++    is_active: Mapped[bool] = mapped_column(
++        Boolean, nullable=False, default=True, server_default=true()
++    )
++    registered_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now
++    )
++    updated_at: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True, onupdate=_utc_now
++    )
+ 
+ 
+ class FinalizerExecution(Base):
+@@ -396,7 +461,9 @@ class FinalizerExecution(Base):
+         Index("ix_finalizer_execution_registry_id", "finalizer_registry_id"),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     inspection_id: Mapped[str] = mapped_column(
+         String(36),
+         ForeignKey(
+@@ -417,13 +484,23 @@ class FinalizerExecution(Base):
+         ),
+         nullable=False,
+     )
+-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="planned", server_default="planned")
++    is_active: Mapped[bool] = mapped_column(
++        Boolean, nullable=False, default=True, server_default=true()
++    )
++    status: Mapped[str] = mapped_column(
++        String(20), nullable=False, default="planned", server_default="planned"
++    )
+     status_message: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+     path_to_hdlf: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
+-    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=_utc_now)
+-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
++    created_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now
++    )
++    updated_at: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True, onupdate=_utc_now
++    )
++    finished_at: Mapped[Optional[datetime]] = mapped_column(
++        DateTime(timezone=True), nullable=True
++    )
+ 
+ 
+ class Feedback(Base):
+@@ -436,14 +513,17 @@ class Feedback(Base):
+             name="ck_feedback_source",
+         ),
+         CheckConstraint(
+-            "assessment IN ('helpful', 'not_helpful', 'false_positive', 'correct_fix', 'wrong_fix')",
++            "assessment IN ('helpful', 'not_helpful', 'false_positive', "
++            "'correct_fix', 'wrong_fix')",
+             name="ck_feedback_assessment",
+         ),
+         Index("ix_feedback_finalizer_execution", "finalizer_execution_id"),
+         Index("ix_feedback_source_created", "source", "created_at"),
+     )
+ 
+-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
++    id: Mapped[str] = mapped_column(
++        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
++    )
+     finalizer_execution_id: Mapped[str] = mapped_column(
+         String(36),
+         ForeignKey(
+@@ -457,15 +537,50 @@ class Feedback(Base):
+     source: Mapped[str] = mapped_column(String(20), nullable=False)
+     assessment: Mapped[str] = mapped_column(String(20), nullable=False)
+     comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
++    created_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), nullable=False, default=_utc_now
++    )
+ 
+ 
+ async def get_db() -> AsyncGenerator[AsyncSession, None]:
+-    """Yield a database session for use as a FastAPI dependency."""
++    """FastAPI dependency that yields a database session."""
+     async with async_session() as session:
+         yield session
+ 
+ 
++@asynccontextmanager
++async def session_scope() -> AsyncGenerator[AsyncSession, None]:
++    """Context manager that commits on success, rolls back on exception."""
++    async with async_session() as session:
++        try:
++            yield session
++            await session.commit()
++        except Exception:
++            await session.rollback()
++            raise
++
++
++def _health_check_query() -> str:
++    """Return a trivial SELECT valid for the configured dialect."""
++    return "SELECT 1 FROM DUMMY" if engine.dialect.name == "hana" else "SELECT 1"
++
++
++async def verify_db_connection() -> None:
++    """Verify database connectivity by executing a trivial query."""
++    async with engine.connect() as conn:
++        await conn.execute(text(_health_check_query()))
++
++
++async def ensure_tables() -> None:
++    """Create all tables if using SQLite (local dev only).
++
++    No-op on HANA — production schema is managed by Alembic migrations.
++    """
++    if engine.dialect.name == "sqlite":
++        async with engine.begin() as conn:
++            await conn.run_sync(Base.metadata.create_all)
++
++
+ class PipelineAnalyzerResult(Base):
+     """One gate verdict written by the Pipeline Analyzer for a single mission.
+ 
+@@ -505,36 +620,3 @@ class PipelineAnalyzerResult(Base):
+     created_at: Mapped[datetime] = mapped_column(
+         DateTime(timezone=True), nullable=False, default=_utc_now
+     )
+-
+-
+-@asynccontextmanager
+-async def session_scope() -> AsyncGenerator[AsyncSession, None]:
+-    """Context manager that commits on success, rolls back on exception."""
+-    async with async_session() as session:
+-        try:
+-            yield session
+-            await session.commit()
+-        except Exception:
+-            await session.rollback()
+-            raise
+-
+-
+-def _health_check_query() -> str:
+-    """Return a trivial SELECT valid for the configured dialect."""
+-    return "SELECT 1 FROM DUMMY" if engine.dialect.name == "hana" else "SELECT 1"
+-
+-
+-async def verify_db_connection() -> None:
+-    """Verify database connectivity by executing a trivial query."""
+-    async with engine.connect() as conn:
+-        await conn.execute(text(_health_check_query()))
+-
+-
+-async def ensure_tables() -> None:
+-    """Create all tables if using SQLite (local dev only).
+-
+-    No-op on HANA — production schema is managed by Alembic migrations.
+-    """
+-    if engine.dialect.name == "sqlite":
+-        async with engine.begin() as conn:
+-            await conn.run_sync(Base.metadata.create_all)
+diff --git a/fl_control_plane/exceptions.py b/fl_control_plane/exceptions.py
+index efca08ce..b5628f81 100644
+--- a/fl_control_plane/exceptions.py
++++ b/fl_control_plane/exceptions.py
+@@ -22,4 +22,8 @@ class CrdNotFoundError(ControllerError):
+ 
+ 
+ class KubeConfigError(ControllerError):
+-    """Raised when Kubernetes client configuration fails."""
+\ No newline at end of file
++    """Raised when Kubernetes client configuration fails."""
++
++
++class InspectionNotFoundError(BaseError):
++    """Raised when an inspection_id does not match any row in the database."""
+\ No newline at end of file
+diff --git a/fl_control_plane/execution_contracts.py b/fl_control_plane/execution_contracts.py
+index 7d44ff0c..30067696 100644
+--- a/fl_control_plane/execution_contracts.py
++++ b/fl_control_plane/execution_contracts.py
+@@ -1,91 +1,16 @@
+-"""Shared contract models between the Handler Orchestrator and Execution Engine."""
+-
+-from __future__ import annotations
+-
+-from typing import Literal
+-
+-from pydantic import BaseModel
+-
+-
+-class FaultHandlerExecution(BaseModel):
+-    """The execution block from a FaultHandler CR spec.
+-
+-    Attributes:
+-        type: Execution strategy. "agent_task" launches an LLM agent; "custom_runtime"
+-            runs an arbitrary container image with a custom entrypoint.
+-        task: Agent prompt passed as TASK_TEXT. Ignored when type is "custom_runtime".
+-        image: Container image override. Falls back to settings.agent_image when None.
+-        entrypoint: Command override for the container (splits into argv). None means
+-            the image default CMD is used — typical for agent_task handlers.
+-        skill_paths: Paths within the config repo to skill files injected into the agent.
+-        mcp_config_paths: Paths within the config repo to MCP config files for the agent.
+-    """
+-
+-    type: Literal["agent_task", "custom_runtime"] = "agent_task"
+-    task: str = ""
+-    image: str | None = None
+-    entrypoint: str | None = None
+-    skill_paths: list[str] = []
+-    mcp_config_paths: list[str] = []
+-
+-
+-class FaultHandlerSpec(BaseModel):
+-    """The spec block from a FaultHandler CR.
+-
+-    Attributes:
+-        fault_id: Logical identifier for the fault this handler addresses. Used as a
+-            label on the k8s Job. Falls back to metadata.name when absent.
+-        execution: Execution configuration for the handler job.
+-        description: Optional human-readable description of what this handler's
+-            output represents.  When set, the CR-reconciliation loop persists
+-            this string into ``fault_handlers.default_output_description``.
+-            The handler-results write endpoint reads that column as the fallback
+-            when a lean PUT body omits ``output_description``.  ``None`` means
+-            the author registered no default — handlers wanting a description
+-            on their results must send it in the PUT body.
+-    """
+-
+-    fault_id: str | None = None
+-    execution: FaultHandlerExecution = FaultHandlerExecution()
+-    description: str | None = None
+-
+-
+-class FaultHandlerMetadata(BaseModel):
+-    """The metadata block from a FaultHandler CR.
+-
+-    Attributes:
+-        name: CR name — used as the handler identifier when fault_id is absent.
+-    """
+-
+-    name: str = "unknown"
+-
+-
+-class FaultHandlerCR(BaseModel):
+-    """A FaultHandler custom resource as passed to the execution engine.
+-
+-    This is not a raw k8s CR — it is the subset of CR fields the execution engine
+-    needs. The Handler Orchestrator is responsible for selecting applicable handlers
+-    and constructing these objects before calling dispatch_all().
+-
+-    Example::
+-
+-        FaultHandlerCR(
+-            metadata=FaultHandlerMetadata(name="jenkins-bounded-analysis"),
+-            spec=FaultHandlerSpec(
+-                fault_id="jenkins-bounded-analysis",
+-                execution=FaultHandlerExecution(
+-                    type="agent_task",
+-                    task="Analyze the failed Jenkins pipeline run ...",
+-                    skill_paths=[],
+-                    mcp_config_paths=[],
+-                ),
+-            ),
+-        )
+-
+-    Attributes:
+-        metadata: CR metadata — currently only name is used.
+-        spec: Handler specification including execution config.
+-    """
+-
+-    metadata: FaultHandlerMetadata = FaultHandlerMetadata()
+-    spec: FaultHandlerSpec = FaultHandlerSpec()
++"""Shared contract types for FaultHandler dispatch.
++
++FaultHandlerSpec from fl_shared.cr_models is the single canonical model used
++by the controller, orchestrator, and execution engine.
++"""
++from fl_shared.cr_models import (  # noqa: F401
++    Applicability,
++    ExecutionSpec,
++    FaultHandlerSpec,
++    FailureMatch,
++    MatchStrategy,
++    OutputConfig,
++    SecretRef,
++    TriggerScope,
++    CISystem,
++)
+diff --git a/fl_control_plane/execution_engine/__init__.py b/fl_control_plane/execution_engine/__init__.py
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/fl_control_plane/execution_engine/config.py b/fl_control_plane/execution_engine/config.py
+index 9bd3688e..c2087952 100644
+--- a/fl_control_plane/execution_engine/config.py
++++ b/fl_control_plane/execution_engine/config.py
+@@ -7,7 +7,7 @@
+ 
+ 
+ class Settings(BaseSettings):
+-    """Execution engine settings. All fields are read from FL_* environment variables.
++    """Execution engine settings. All fields are read from EE_* environment variables.
+ 
+     Attributes:
+         namespace: Kubernetes namespace where handler Jobs are created.
+@@ -22,33 +22,43 @@ class Settings(BaseSettings):
+         config_repo_commitish: Branch or commit to check out in the config repo.
+         job_active_deadline_seconds: Hard wall-clock timeout for the entire Job.
+             Kubernetes terminates the pod and marks the Job failed when exceeded.
++            Keep this generous (default 3600s) — it is a safety net, not the
++            primary timeout mechanism.
++        job_poll_timeout_seconds: Client-side deadline for the dispatcher's poll
++            loop. Raised as TimeoutError if the job has not reached a terminal
++            state within this window. Should be set equal to or slightly above
++            job_active_deadline_seconds so Kubernetes always wins the race.
+         job_ttl_seconds_after_finished: How long Kubernetes retains a completed or
+             failed Job object before garbage-collecting it.
+         job_backoff_limit: Maximum pod restart attempts before the Job is marked failed.
++            Must stay at 0 — Temporal retries by submitting a new Job, so k8s retries
++            would create multiple pods per job, making pod log retrieval ambiguous.
+         job_poll_interval_seconds: How often the dispatcher polls job status.
+         test_repo_url: Repo URL injected into agent jobs until HDLF SDK ships.
+-            Maps to FL_TEST_REPO_URL.
++            Maps to EE_TEST_REPO_URL.
+         test_commitish: Commit-ish injected alongside test_repo_url.
+-            Maps to FL_TEST_COMMITISH.
++            Maps to EE_TEST_COMMITISH.
+         test_stage_error: Optional failure context appended to the task prompt
+-            during local testing. Maps to FL_TEST_STAGE_ERROR.
++            during local testing. Maps to EE_TEST_STAGE_ERROR.
+     """
+ 
+     namespace: str = "default"
+     agent_image: str = "pipeline-fl-control-plane:latest"
+     agent_image_pull_policy: str = "IfNotPresent"
+     agent_env_secret: str = ""
++    secret_store_name: str = "vault-clusters"
+     config_repo_url: str
+     config_repo_commitish: str = "main"
+     job_active_deadline_seconds: int = 3600
++    job_poll_timeout_seconds: int = 3660
+     job_ttl_seconds_after_finished: int = 3600
+-    job_backoff_limit: int = 3
++    job_backoff_limit: int = 0
+     job_poll_interval_seconds: int = 10
+     test_repo_url: str = ""
+     test_commitish: str = "HEAD"
+     test_stage_error: str = ""
+ 
+-    model_config = {"env_prefix": "FL_"}
++    model_config = {"env_prefix": "EE_"}
+ 
+ 
+ @lru_cache
+diff --git a/fl_control_plane/execution_engine/dispatcher.py b/fl_control_plane/execution_engine/dispatcher.py
+index f911cbd6..10a37f0e 100644
+--- a/fl_control_plane/execution_engine/dispatcher.py
++++ b/fl_control_plane/execution_engine/dispatcher.py
+@@ -1,4 +1,5 @@
+ """Dispatch FaultHandler jobs to Kubernetes and poll for completion."""
++
+ from __future__ import annotations
+ 
+ import asyncio
+@@ -9,11 +10,13 @@
+ from dataclasses import dataclass
+ from uuid import uuid4
+ 
+-from kubernetes_asyncio import client, config as k8s_config
++from kubernetes_asyncio import client
++from kubernetes_asyncio import config as k8s_config
+ 
+-from config import get_settings
+-from fl_control_plane.execution_contracts import FaultHandlerCR
+-from models import HandlerExecution
++from fl_control_plane.execution_engine.config import get_settings
++from fl_control_plane.execution_engine.models import HandlerExecution
++from fl_shared.cr_models import FaultHandlerSpec, SecretRef
++from fl_shared.hdlf_client.config import settings as hdlf_settings
+ 
+ log = logging.getLogger(__name__)
+ 
+@@ -22,13 +25,14 @@
+ _K8S_CONDITION_FAILED = "Failed"
+ _STATUS_SUCCEEDED = "succeeded"
+ _STATUS_FAILED = "failed"
++_IMAGE_PULL_ERROR_REASONS = {"ImagePullBackOff", "ErrImagePull", "InvalidImageName"}
+ 
+ 
+ @dataclass
+ class _JobSpec:
+     """Internal value object grouping everything needed to create one k8s Job."""
+ 
+-    handler: FaultHandlerCR
++    handler: FaultHandlerSpec
+     inspection_id: str
+     execution_id: str
+     fault_id: str
+@@ -39,6 +43,7 @@ class _JobSpec:
+     repo_url: str
+     commitish: str
+     stage_error: str
++    secrets: list[SecretRef]
+ 
+ 
+ async def _load_k8s() -> None:
+@@ -49,22 +54,27 @@ async def _load_k8s() -> None:
+         await k8s_config.load_kube_config()
+ 
+ 
+-def _make_job_spec(handler: FaultHandlerCR, inspection_id: str) -> _JobSpec:
++def _make_job_spec(
++    handler: FaultHandlerSpec,
++    inspection_id: str,
++    execution_id: str | None = None,
++) -> _JobSpec:
+     """Extract all dispatch-time values from a handler into a typed object."""
+-    execution = handler.spec.execution
++    execution = handler.execution
+     settings = get_settings()
+     return _JobSpec(
+         handler=handler,
+         inspection_id=inspection_id,
+-        execution_id=str(uuid4()),
+-        fault_id=handler.spec.fault_id or handler.metadata.name,
+-        handler_name=handler.metadata.name,
++        execution_id=execution_id or str(uuid4()),
++        fault_id=handler.fault_id or "unknown",
++        handler_name=handler.fault_id or "unknown",
+         image=execution.image or settings.agent_image,
+         entrypoint=execution.entrypoint,
+         job_type=execution.type.lower().replace("_", "-"),
+         repo_url=settings.test_repo_url,
+         commitish=settings.test_commitish,
+         stage_error=settings.test_stage_error,
++        secrets=handler.secrets,
+     )
+ 
+ 
+@@ -76,21 +86,28 @@ def _build_env(js: _JobSpec) -> list[client.V1EnvVar]:
+     The agent reads pipeline data (repo URL, stage logs, etc.) from HDLF using
+     the inspection_id — those values are NOT passed here.
+     """
+-    execution = js.handler.spec.execution
++    execution = js.handler.execution
+     task_text = execution.task
+     if js.stage_error:
+         task_text += f"\n\nFailure context:\n{js.stage_error}"
+ 
+     return [
+-        client.V1EnvVar(name="TASK_ID",              value=js.execution_id),
+-        client.V1EnvVar(name="TASK_TEXT",             value=task_text),
+-        client.V1EnvVar(name="INSPECTION_ID",         value=js.inspection_id),
+-        client.V1EnvVar(name="REPO_URL",              value=js.repo_url),
+-        client.V1EnvVar(name="REPO_COMMITISH",        value=js.commitish),
+-        client.V1EnvVar(name="CONFIG_REPO_URL",       value=get_settings().config_repo_url),
++        client.V1EnvVar(name="TASK_ID", value=js.execution_id),
++        client.V1EnvVar(name="TASK_TEXT", value=task_text),
++        client.V1EnvVar(name="INSPECTION_ID", value=js.inspection_id),
++        client.V1EnvVar(name="REPO_URL", value=js.repo_url),
++        client.V1EnvVar(name="REPO_COMMITISH", value=js.commitish),
++        client.V1EnvVar(name="CONFIG_REPO_URL", value=get_settings().config_repo_url),
+         client.V1EnvVar(name="CONFIG_REPO_COMMITISH", value=get_settings().config_repo_commitish),
+-        client.V1EnvVar(name="CONFIG_MCP_PATHS",      value=json.dumps(execution.mcp_config_paths)),
+-        client.V1EnvVar(name="CONFIG_SKILL_PATHS",    value=json.dumps(execution.skill_paths)),
++        client.V1EnvVar(name="MCPS", value=json.dumps(execution.mcps or [])),
++        client.V1EnvVar(name="SKILLS", value=json.dumps(execution.skills or [])),
++        client.V1EnvVar(name="HDLF_REST_API_HOST", value=hdlf_settings.hdlf_rest_api_host),
++        client.V1EnvVar(name="HDLF_CONTAINER_ID", value=hdlf_settings.hdlf_container_id),
++        *(
++            [client.V1EnvVar(name="HDLF_CERT_DIR", value=hdlf_settings.hdlf_cert_dir)]
++            if hdlf_settings.hdlf_cert_secret_name
++            else []
++        ),
+     ]
+ 
+ 
+@@ -101,6 +118,9 @@ def _build_k8s_job(js: _JobSpec) -> client.V1Job:
+         env_from.append(
+             client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=get_settings().agent_env_secret))
+         )
++    if js.secrets:
++        # Per-job ExternalSecret synced to a k8s Secret with the same name as the job.
++        env_from.append(client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=f"fl-job-{js.execution_id}")))
+ 
+     return client.V1Job(
+         metadata=client.V1ObjectMeta(
+@@ -115,16 +135,23 @@ def _build_k8s_job(js: _JobSpec) -> client.V1Job:
+             },
+         ),
+         spec=client.V1JobSpec(
+-            # Each retry submits a new Atom to Cline Central. The previous Atom
+-            # keeps running but is abandoned — wasted compute, not a correctness issue.
++            # backoff_limit=0: Temporal handles retries by submitting a new Job.
++            # k8s retries would create multiple pods per job, making log retrieval ambiguous.
+             backoff_limit=get_settings().job_backoff_limit,
+             active_deadline_seconds=get_settings().job_active_deadline_seconds,
+             ttl_seconds_after_finished=get_settings().job_ttl_seconds_after_finished,
+             template=client.V1PodTemplateSpec(
+-                metadata=client.V1ObjectMeta(labels={
+-                    "fl.sap.com/inspection-id": js.inspection_id,
+-                    "pipeline-fl/faulthandler": js.handler_name,
+-                }),
++                metadata=client.V1ObjectMeta(
++                    labels={
++                        "fl.sap.com/inspection-id": js.inspection_id,
++                        "pipeline-fl/faulthandler": js.handler_name,
++                    },
++                    # Kyma uses init-container ambient mesh, not traditional sidecars.
++                    # Disabling injection lets the node-level ztunnel handle the pod,
++                    # and PeerAuthentication PERMISSIVE on the HDLF server allows
++                    # plaintext inbound from job pods outside the mesh.
++                    annotations={"sidecar.istio.io/inject": "false"},
++                ),
+                 spec=client.V1PodSpec(
+                     restart_policy="Never",
+                     containers=[
+@@ -154,6 +181,15 @@ def _build_k8s_job(js: _JobSpec) -> client.V1Job:
+                                 client.V1VolumeMount(name="tmp", mount_path="/tmp"),
+                                 # MLflow defaults to writing ./mlruns relative to the working dir.
+                                 client.V1VolumeMount(name="mlruns", mount_path="/home/app/app/mlruns"),
++                                *(
++                                    [
++                                        client.V1VolumeMount(
++                                            name="hdlf-tls", mount_path="/etc/hdlf-certs", read_only=True
++                                        )
++                                    ]
++                                    if hdlf_settings.hdlf_cert_secret_name
++                                    else []
++                                ),
+                             ],
+                         )
+                     ],
+@@ -162,8 +198,6 @@ def _build_k8s_job(js: _JobSpec) -> client.V1Job:
+                         seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
+                         fs_group=1001,
+                     ),
+-                    # TODO: verify that the dispatcher's ServiceAccount has RBAC
+-                    # permissions to create/get Jobs in the target namespace.
+                     volumes=[
+                         client.V1Volume(
+                             name="tmp",
+@@ -173,6 +207,16 @@ def _build_k8s_job(js: _JobSpec) -> client.V1Job:
+                             name="mlruns",
+                             empty_dir=client.V1EmptyDirVolumeSource(),
+                         ),
++                        *(
++                            [
++                                client.V1Volume(
++                                    name="hdlf-tls",
++                                    secret=client.V1SecretVolumeSource(secret_name=hdlf_settings.hdlf_cert_secret_name),
++                                )
++                            ]
++                            if hdlf_settings.hdlf_cert_secret_name
++                            else []
++                        ),
+                     ],
+                 ),
+             ),
+@@ -180,21 +224,121 @@ def _build_k8s_job(js: _JobSpec) -> client.V1Job:
+     )
+ 
+ 
++def _build_external_secret(js: _JobSpec, job_uid: str) -> dict:
++    """Build an ExternalSecret manifest that syncs each handler secret from Vault.
++
++    Secret names follow the convention ``<vault-path>/<KEY>`` — the last segment
++    becomes both the Vault property name and the env var injected into the job.
++
++    ownerReferences points to the Job so that when the Job is garbage-collected
++    (via ttlSecondsAfterFinished), Kubernetes cascades the deletion to this
++    ExternalSecret and the k8s Secret it owns (creationPolicy: Owner).
++    """
++    data = [
++        {
++            "secretKey": secret.name.rsplit("/", 1)[-1],
++            "remoteRef": {
++                "key": secret.name.rsplit("/", 1)[0],
++                "property": secret.name.rsplit("/", 1)[-1],
++            },
++        }
++        for secret in js.secrets
++    ]
++    return {
++        "apiVersion": "external-secrets.io/v1",
++        "kind": "ExternalSecret",
++        "metadata": {
++            "name": f"fl-job-{js.execution_id}",
++            "namespace": get_settings().namespace,
++            "labels": {
++                "fl.sap.com/execution-id": js.execution_id,
++                "fl.sap.com/inspection-id": js.inspection_id,
++            },
++            "ownerReferences": [
++                {
++                    "apiVersion": "batch/v1",
++                    "kind": "Job",
++                    "name": f"fl-job-{js.execution_id}",
++                    "uid": job_uid,
++                    "blockOwnerDeletion": True,
++                    "controller": True,
++                }
++            ],
++        },
++        "spec": {
++            "refreshInterval": "1h",
++            "secretStoreRef": {
++                "kind": "ClusterSecretStore",
++                "name": get_settings().secret_store_name,
++            },
++            "target": {
++                "name": f"fl-job-{js.execution_id}",
++                "creationPolicy": "Owner",
++            },
++            "data": data,
++        },
++    }
++
++
+ async def _submit_job(js: _JobSpec) -> HandlerExecution:
+     """Submit a single k8s Job and return a HandlerExecution tracking it.
+ 
+-    Raises on any k8s API error — the caller collects failures across
+-    parallel dispatches and raises a single RuntimeError at the end.
++    When the handler declares secrets the sequence is:
++      1. Create the ExternalSecret (no ownerRef yet) so ESO starts syncing the
++         k8s Secret immediately. Kubernetes holds the pod Pending until the Secret
++         referenced by envFrom exists — this gives ESO time to sync before the
++         container starts.
++      2. Create the Job.
++      3. Patch ownerReferences on the ExternalSecret to point at the Job UID so
++         Kubernetes cascades GC: Job TTL expiry → ExternalSecret deleted → k8s
++         Secret deleted (creationPolicy: Owner).
+     """
++    if js.secrets:
++        manifest = _build_external_secret(js, "")
++        manifest["metadata"].pop("ownerReferences", None)
++        async with client.ApiClient() as api_client:
++            await client.CustomObjectsApi(api_client).create_namespaced_custom_object(
++                group="external-secrets.io",
++                version="v1",
++                namespace=get_settings().namespace,
++                plural="externalsecrets",
++                body=manifest,
++            )
++
+     job = _build_k8s_job(js)
+     try:
+         async with client.ApiClient() as api_client:
+-            await client.BatchV1Api(api_client).create_namespaced_job(get_settings().namespace, job)
++            created_job = await client.BatchV1Api(api_client).create_namespaced_job(get_settings().namespace, job)
+     except Exception:
+-        log.error("Failed to create job for inspection %s (execution %s)", js.inspection_id, js.execution_id, exc_info=True)
++        log.error(
++            "Failed to create job for inspection %s (execution %s)", js.inspection_id, js.execution_id, exc_info=True
++        )
+         raise
+ 
+-    log.info("Handler dispatched: inspection_id=%s fault_id=%s job=%s", js.inspection_id, js.fault_id, job.metadata.name)
++    if js.secrets:
++        owner_ref = _build_external_secret(js, created_job.metadata.uid)["metadata"]["ownerReferences"]
++        try:
++            async with client.ApiClient() as api_client:
++                await client.CustomObjectsApi(api_client).patch_namespaced_custom_object(
++                    group="external-secrets.io",
++                    version="v1",
++                    namespace=get_settings().namespace,
++                    plural="externalsecrets",
++                    name=f"fl-job-{js.execution_id}",
++                    body={"metadata": {"ownerReferences": owner_ref}},
++                )
++        except Exception:
++            # ownerRef is a GC convenience — the job runs fine without it.
++            # Secrets will linger until manual cleanup but correctness is unaffected.
++            log.warning(
++                "Failed to patch ownerReferences on ExternalSecret %s — check RBAC (externalsecrets patch verb)",
++                f"fl-job-{js.execution_id}",
++                exc_info=True,
++            )
++
++    log.info(
++        "Handler dispatched: inspection_id=%s fault_id=%s job=%s", js.inspection_id, js.fault_id, job.metadata.name
++    )
+     print(f"Check jobs:  kubectl get jobs -l fl.sap.com/inspection-id={js.inspection_id}")
+     print(f"Follow logs: kubectl logs -l fl.sap.com/inspection-id={js.inspection_id} --follow")
+ 
+@@ -210,20 +354,31 @@ async def _poll_job(finding: HandlerExecution) -> HandlerExecution:
+     """Block until the job reaches a terminal state, then return finding with status set.
+ 
+     Raises:
++        RuntimeError: if any container is stuck in an image pull error (ImagePullBackOff,
++            ErrImagePull, InvalidImageName). The job is deleted immediately so it doesn't
++            linger until activeDeadlineSeconds.
+         TimeoutError: if the job has not reached a terminal state within
+-            job_active_deadline_seconds. This guards against a flaky k8s API
++            job_poll_timeout_seconds. This guards against a flaky k8s API
+             that never returns a terminal status despite the job having timed out
+             on the cluster side.
+     """
+-    deadline = time.monotonic() + get_settings().job_active_deadline_seconds
++    deadline = time.monotonic() + get_settings().job_poll_timeout_seconds
+     while True:
+-        status = await _job_status(finding.job_name)
++        status, image_pull_error = await asyncio.gather(
++            _job_status(finding.job_name),
++            _check_for_image_pull_error(finding.job_name),
++        )
++        if image_pull_error:
++            await _delete_job(finding.job_name)
++            raise RuntimeError(
++                f"Job {finding.job_name!r} terminated: image pull failed ({image_pull_error}). Check EE_AGENT_IMAGE."
++            )
+         if status is not None:
+             return finding.model_copy(update={"status": status})
+         if time.monotonic() >= deadline:
+             raise TimeoutError(
+                 f"Job {finding.job_name!r} did not reach a terminal state within "
+-                f"{get_settings().job_active_deadline_seconds}s"
++                f"{get_settings().job_poll_timeout_seconds}s"
+             )
+         await asyncio.sleep(get_settings().job_poll_interval_seconds)
+ 
+@@ -243,6 +398,42 @@ async def _job_status(job_name: str) -> str | None:
+     return None
+ 
+ 
++async def _check_for_image_pull_error(job_name: str) -> str | None:
++    """Return the waiting reason if any container is stuck on an image pull error, else None.
++
++    Queries pods by the ``job-name`` label k8s attaches automatically to every pod
++    spawned by a Job. ``container_statuses`` is absent until the container is first
++    scheduled, so every field in the chain is guarded against None.
++    """
++    async with client.ApiClient() as api_client:
++        pods = await client.CoreV1Api(api_client).list_namespaced_pod(
++            get_settings().namespace,
++            label_selector=f"job-name={job_name}",
++        )
++    for pod in pods.items:
++        for cs in (pod.status and pod.status.container_statuses) or []:
++            if cs.state and cs.state.waiting and cs.state.waiting.reason in _IMAGE_PULL_ERROR_REASONS:
++                return cs.state.waiting.reason
++    return None
++
++
++async def _delete_job(job_name: str) -> None:
++    """Delete a k8s Job and its pods immediately using foreground cascading deletion.
++
++    Failure is logged but not re-raised — the caller has already decided to abort
++    and must surface the original error regardless of whether cleanup succeeds.
++    """
++    try:
++        async with client.ApiClient() as api_client:
++            await client.BatchV1Api(api_client).delete_namespaced_job(
++                job_name,
++                get_settings().namespace,
++                propagation_policy="Foreground",
++            )
++    except Exception:
++        log.warning("Failed to delete job %s — check RBAC (jobs delete verb)", job_name, exc_info=True)
++
++
+ def _finalize(inspection_id: str) -> None:
+     # TODO: call the Finalizer component, passing inspection_id.
+     # The Finalizer will use an MCP to fetch each handler's findings from HDLF
+@@ -250,7 +441,7 @@ def _finalize(inspection_id: str) -> None:
+     log.info("Finalizer stub called for inspection %s", inspection_id)
+ 
+ 
+-async def dispatch_all(inspection_id: str, handlers: list[FaultHandlerCR]) -> list[HandlerExecution]:
++async def dispatch_all(inspection_id: str, handlers: list[FaultHandlerSpec]) -> list[HandlerExecution]:
+     """Dispatch k8s Jobs for the selected handlers and wait for completion.
+ 
+     Called by the Handler Orchestrator after applicability evaluation.
+@@ -276,7 +467,9 @@ async def dispatch_all(inspection_id: str, handlers: list[FaultHandlerCR]) -> li
+     failed: list[str] = []
+     for js, result in zip(job_specs, results):
+         if isinstance(result, BaseException):
+-            log.error("Failed to dispatch handler %s for inspection %s", js.handler_name, inspection_id, exc_info=result)
++            log.error(
++                "Failed to dispatch handler %s for inspection %s", js.handler_name, inspection_id, exc_info=result
++            )
+             failed.append(js.handler_name)
+         else:
+             findings.append(result)
+@@ -286,7 +479,7 @@ async def dispatch_all(inspection_id: str, handlers: list[FaultHandlerCR]) -> li
+             f"{len(failed)} of {len(handlers)} handler(s) failed to dispatch for inspection {inspection_id!r}: {failed}"
+         )
+ 
+-    completed = await asyncio.gather(*[_poll_job(f) for f in findings])
++    completed = await asyncio.gather(*[_poll_job(f) for f in findings], return_exceptions=True)
+ 
+     failed_count = sum(1 for f in completed if f.status != _STATUS_SUCCEEDED)
+     if failed_count:
+diff --git a/fl_control_plane/execution_engine/job_activity.py b/fl_control_plane/execution_engine/job_activity.py
+new file mode 100644
+index 00000000..a270dde5
+--- /dev/null
++++ b/fl_control_plane/execution_engine/job_activity.py
+@@ -0,0 +1,220 @@
++"""Temporal activities for dispatching and polling k8s handler jobs."""
++
++from __future__ import annotations
++
++import asyncio
++import time
++
++import structlog
++from kubernetes_asyncio import client
++from kubernetes_asyncio.client.exceptions import ApiException
++from temporalio import activity
++from temporalio.exceptions import ApplicationError
++
++from fl_control_plane.execution_engine.config import get_settings
++from fl_control_plane.execution_engine.dispatcher import (
++    _check_for_image_pull_error,
++    _delete_job,
++    _job_status,
++    _load_k8s,
++    _make_job_spec,
++    _submit_job,
++)
++from fl_control_plane.execution_engine.models import (
++    HandlerExecutionResult,
++    HandlerJobSubmission,
++    SubmitHandlerJobRequest,
++)
++
++log = structlog.get_logger(__name__)
++
++_LOG_TAIL_LINES = 400
++
++
++async def _fetch_pod_logs(job_name: str) -> str | None:
++    """Return the last _LOG_TAIL_LINES lines of logs from the job's pod.
++
++    Queries pods by the ``job-name`` label that k8s attaches automatically to
++    every pod spawned by a Job. Handler jobs run with ``backoff_limit=0`` so
++    there is exactly one pod per job. Returns ``None`` on any error (missing pod,
++    already GC'd, RBAC denial) so a log fetch failure never blocks the activity result.
++    """
++    try:
++        async with client.ApiClient() as api_client:
++            core = client.CoreV1Api(api_client)
++            pods = await core.list_namespaced_pod(
++                get_settings().namespace,
++                label_selector=f"job-name={job_name}",
++            )
++            if not pods.items:
++                return None
++            pod_name = pods.items[0].metadata.name
++            logs: str = await core.read_namespaced_pod_log(
++                pod_name,
++                get_settings().namespace,
++                tail_lines=_LOG_TAIL_LINES,
++            )
++            return logs
++    except Exception:
++        log.warning("pod_log_fetch_failed", job_name=job_name, exc_info=True)
++        return None
++
++
++@activity.defn
++async def submit_handler_job_activity(
++    request: SubmitHandlerJobRequest,
++) -> HandlerJobSubmission:
++    """Create a k8s Job for one FaultHandler and return submission metadata.
++
++    Generates a fresh ``execution_id`` UUID on every call — each Temporal retry
++    produces a new job. Orphaned jobs from previous attempts expire via k8s
++    ``active_deadline_seconds`` and do not affect correctness.
++
++    Args:
++        request: Inspection ID and FaultHandler spec needed to build the job manifest.
++
++    Returns:
++        HandlerJobSubmission carrying the job name and execution ID needed by the
++        poll activity.
++
++    Raises:
++        ApplicationError: Non-retryable (``type="InvalidInput"``) for 4xx k8s API
++            errors or malformed handler specs — permanent misconfiguration.
++        ApplicationError: Retryable for 5xx k8s API errors and network failures —
++            Temporal will retry with exponential backoff.
++    """
++    await _load_k8s()
++
++    job_spec = _make_job_spec(request.handler, request.inspection_id, request.execution_id)
++
++    try:
++        finding = await _submit_job(job_spec)
++    except ApiException as exc:
++        # 409 Conflict means the Job already exists from a prior attempt whose
++        # response was lost. Treat as success — the job is running with the
++        # correct execution_id. This makes retries idempotent when execution_id
++        # is pre-generated by the workflow.
++        if exc.status == 409 and request.execution_id:
++            log.info(
++                "handler_job_already_exists",
++                inspection_id=request.inspection_id,
++                execution_id=job_spec.execution_id,
++                handler_name=job_spec.handler_name,
++            )
++            return HandlerJobSubmission(
++                execution_id=job_spec.execution_id,
++                job_name=f"fl-job-{job_spec.execution_id}",
++                fault_id=job_spec.fault_id,
++                handler_name=job_spec.handler_name,
++            )
++        if exc.status is not None and 400 <= exc.status < 500:
++            raise ApplicationError(
++                f"k8s rejected job for handler {job_spec.handler_name!r}: {exc.reason}",
++                type="InvalidInput",
++                non_retryable=True,
++            ) from exc
++        raise
++
++    log.info(
++        "handler_job_submitted",
++        inspection_id=request.inspection_id,
++        fault_id=job_spec.fault_id,
++        handler_name=job_spec.handler_name,
++        job_name=finding.job_name,
++        execution_id=job_spec.execution_id,
++    )
++
++    return HandlerJobSubmission(
++        execution_id=finding.execution_id,
++        job_name=finding.job_name,
++        fault_id=finding.fault_id,
++        handler_name=finding.handler_name,
++    )
++
++
++@activity.defn
++async def poll_handler_job_activity(
++    submission: HandlerJobSubmission,
++) -> HandlerExecutionResult:
++    """Poll a k8s Job until it reaches a terminal state and return the outcome.
++
++    Heartbeats on every poll iteration so Temporal can detect a dead worker and
++    reschedule. On reschedule the activity re-queries the same job by name —
++    idempotent because the job name is stable for the life of the submission.
++
++    Job failure (container exits non-zero, k8s deadline exceeded) is returned as
++    ``status="failed"`` rather than raised — handler failure is expected and
++    non-fatal to the workflow.
++
++    Args:
++        submission: Job name, execution ID, and handler identifiers from the submit
++            activity.
++
++    Returns:
++        HandlerExecutionResult with ``status="succeeded"`` or ``status="failed"``.
++
++    Raises:
++        ApplicationError: Non-retryable (``type="InvalidInput"``) for 4xx k8s errors.
++        ApiException: For 5xx / network errors during polling — Temporal retries.
++    """
++    deadline = time.monotonic() + get_settings().job_poll_timeout_seconds
++
++    while True:
++        # Re-load on every iteration: projected SA tokens rotate (default 1h)
++        # and load_incluster_config reads the token file fresh each call.
++        await _load_k8s()
++        try:
++            terminal_status, image_pull_error = await asyncio.gather(
++                _job_status(submission.job_name),
++                _check_for_image_pull_error(submission.job_name),
++            )
++        except ApiException as exc:
++            if exc.status is not None and 400 <= exc.status < 500:
++                raise ApplicationError(
++                    f"k8s 4xx reading job {submission.job_name!r}: {exc.reason}",
++                    type="InvalidInput",
++                    non_retryable=True,
++                ) from exc
++            raise
++
++        if image_pull_error:
++            await _delete_job(submission.job_name)
++            raise ApplicationError(
++                f"Job {submission.job_name!r} terminated: image pull failed "
++                f"({image_pull_error}). Check EE_AGENT_IMAGE.",
++                type="InvalidInput",
++                non_retryable=True,
++            )
++
++        if terminal_status is not None:
++            pod_logs = await _fetch_pod_logs(submission.job_name)
++            log.info(
++                "handler_job_finished",
++                job_name=submission.job_name,
++                execution_id=submission.execution_id,
++                fault_id=submission.fault_id,
++                handler_name=submission.handler_name,
++                status=terminal_status,
++            )
++            return HandlerExecutionResult(
++                execution_id=submission.execution_id,
++                fault_id=submission.fault_id,
++                handler_name=submission.handler_name,
++                status=terminal_status,  # type: ignore[arg-type]
++                pod_logs=pod_logs,
++            )
++
++        if time.monotonic() >= deadline:
++            log.warning(
++                "handler_job_client_timeout",
++                job_name=submission.job_name,
++                job_active_deadline_seconds=get_settings().job_poll_timeout_seconds,
++            )
++            raise ApplicationError(
++                f"Client-side poll timeout after {get_settings().job_poll_timeout_seconds}s"
++                " — k8s may not have reported terminal status",
++                type="PollTimeout",
++            )
++
++        activity.heartbeat({"job_name": submission.job_name})
++        await asyncio.sleep(get_settings().job_poll_interval_seconds)
+diff --git a/fl_control_plane/execution_engine/local_testing/trigger.py b/fl_control_plane/execution_engine/local_testing/trigger.py
+index 3198f764..94b7ce30 100644
+--- a/fl_control_plane/execution_engine/local_testing/trigger.py
++++ b/fl_control_plane/execution_engine/local_testing/trigger.py
+@@ -5,61 +5,100 @@
+   Ingestion API → Metadata Extractor → Pipeline Analyzer → Data Extractor
+   → Handler Orchestrator → [trigger mechanism TBD] → Execution Engine
+ 
+-The Handler Orchestrator is not available on this branch. This script
+-stands in for all missing upstream components and calls dispatch_all()
+-directly with a hardcoded handler so the Execution Engine can be tested.
++None of those components upstream of the Execution Engine are built yet.
++This script simulates all of them so the Execution Engine can be exercised locally:
++
++  1. Seeds FaultHandler rows into an in-memory DB     (stand-in for k8s operator)
++  2. Creates Inspection + FailedStage rows            (stand-in for Ingestion API + Data Extractor)
++  3. Calls evaluate() — the real Handler Orchestrator
++  4. Calls dispatch_all() — the real Execution Engine
++
++Steps 1-3 and the call to dispatch_all() will be replaced by the production
++components when they are built. This file will be deleted at that point.
+ 
+ Usage:
+-    FL_TEST_PIPELINE_URL=https://... FL_TEST_REPO_URL=https://... ./dev.sh
++    ./local_testing/dev.sh
+ 
+ Verify afterwards:
+-    kubectl get jobs -l fl.sap.com/inspection-id=...
+-    kubectl logs -l fl.sap.com/inspection-id=... --follow
++    kubectl get jobs -l fl.sap.com/run-id=...
++    kubectl logs -l fl.sap.com/run-id=... --follow
+ """
+ import asyncio
+ import json
++import os
+ import sys
+-from uuid import uuid4
+-sys.path.insert(0, ".")
+-
+-from dispatcher import dispatch_all
+-from config import get_settings
+-from fl_control_plane.execution_contracts import FaultHandlerCR, FaultHandlerExecution, FaultHandlerMetadata, FaultHandlerSpec
+-
+-if not get_settings().test_repo_url:
+-    sys.exit("Set FL_TEST_REPO_URL to the repository to analyse (e.g. https://github.example.com/org/repo)")
+-
+-inspection_id = f"insp-local-{uuid4().hex[:8]}"
+-
+-handlers = [
+-    FaultHandlerCR(
+-        metadata=FaultHandlerMetadata(name="jenkins-bounded-analysis"),
+-        spec=FaultHandlerSpec(
+-            fault_id="jenkins-bounded-analysis",
+-            execution=FaultHandlerExecution(
+-                type="agent_task",
+-                task=(
+-                    "You are a software engineer and good at program and DevOps, you can find root cause "
+-                    "of the error message in source code, and give summary of root cause, root cause "
+-                    "explanation and the fix suggestion.\n"
+-                    "Return your findings as a JSON object in your final message. Do not write to any file.\n"
+-                    "Only output these fields: 'critical_error' (one line summary), 'explanation' (3-5 lines), "
+-                    "'fix_suggestion' (actionable steps), 'diff' (git diff format, empty string if no code "
+-                    "change needed).\n\n"
+-                    "Analyze the failed Jenkins pipeline run and identify the root cause of the failure."
+-                ),
+-                skill_paths=[],
+-                mcp_config_paths=[],
+-            ),
+-        ),
++
++from alembic import command
++from alembic.config import Config
++from pathlib import Path
++from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
++
++from fl_control_plane.database import FailedStage, Inspection
++from fl_control_plane.execution_engine.dispatcher import dispatch_all
++from fl_control_plane.handler_orchestrator.orchestrator import evaluate
++from fl_control_plane.handler_orchestrator.seed import seed_fault_handlers
++
++
++ALEMBIC_INI = Path(__file__).resolve().parents[3] / "alembic.ini"
++
++
++def _alembic_cfg(sync_conn) -> Config:
++    """Wire an Alembic Config to an existing sync connection."""
++    cfg = Config(str(ALEMBIC_INI))
++    cfg.set_main_option("script_location", str(ALEMBIC_INI.parent / "db" / "migrations"))
++    cfg.attributes["connection"] = sync_conn
++    return cfg
++
++
++async def run() -> None:
++    """Run the full trigger workflow: seed, inspect, evaluate, dispatch."""
++    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
++    async with engine.begin() as conn:
++        await conn.run_sync(lambda c: command.upgrade(_alembic_cfg(c), "head"))
++
++    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
++
++    async with session_factory() as db:
++        await seed_fault_handlers(db)
++
++        inspection = Inspection(
++            status="IN_PROGRESS",
++            pipeline_url=os.environ["FL_TEST_PIPELINE_URL"],
++            github_repo_url=os.environ["FL_TEST_REPO_URL"],
++            commit_id=os.environ.get("FL_TEST_COMMITISH", "HEAD"),
++        )
++        db.add(inspection)
++        await db.flush()
++
++        db.add(FailedStage(
++            inspection_id=inspection.id,
++            stage_name=os.environ.get("FL_TEST_STAGE", "build"),
++            error_message=os.environ.get("FL_TEST_STAGE_ERROR", "compilation failed"),
++        ))
++        await db.commit()
++
++        result = await evaluate(inspection.id, db)
++
++    print(f"selected handlers: {len(result.handlers)}")
++    for h in result.handlers:
++        print(f"  - {h.metadata.name} (fault_id={h.spec.fault_id})")
++    print()
++    for d in result.decisions:
++        print(f"  {d.result:20s} {d.handler_name}: {d.reason}")
++    print()
++
++    if not result.handlers:
++        print("No handlers matched — nothing to dispatch.")
++        sys.exit(0)
++
++    print(f"Dispatching {len(result.handlers)} handler(s)...")
++    findings = await dispatch_all(
++        inspection_id=inspection.id,
++        handlers=result.handlers,
+     )
+-]
+ 
+-print(f"Dispatching {len(handlers)} handler(s)...")
+-findings = asyncio.run(dispatch_all(
+-    inspection_id=inspection_id,
+-    handlers=handlers,
+-))
++    for f in findings:
++        print(json.dumps(f.model_dump(), indent=2))
++
+ 
+-for f in findings:
+-    print(json.dumps(f.model_dump(), indent=2))
++asyncio.run(run())
+diff --git a/fl_control_plane/execution_engine/models.py b/fl_control_plane/execution_engine/models.py
+index 6a29866b..d0d673f5 100644
+--- a/fl_control_plane/execution_engine/models.py
++++ b/fl_control_plane/execution_engine/models.py
+@@ -1,8 +1,13 @@
+ """Data models for the execution engine."""
++
+ from __future__ import annotations
+ 
++from typing import Literal
++
+ from pydantic import BaseModel
+ 
++from fl_shared.cr_models import FaultHandlerSpec
++
+ 
+ class PipelineRun(BaseModel):
+     """Describes a failed pipeline run that the execution engine should analyze.
+@@ -54,3 +59,90 @@ class HandlerExecution(BaseModel):
+     handler_name: str
+     job_name: str
+     status: str | None = None
++
++
++class SubmitHandlerJobRequest(BaseModel):
++    """Input to ``submit_handler_job_activity``.
++
++    Provenance: constructed by the workflow for each ``FaultHandlerSpec`` returned
++    by ``orchestrate_handlers_activity``.
++
++    Attributes:
++        inspection_id: UUID4 string of the ``Inspection`` row. Passed as a k8s
++            Job label and as ``INSPECTION_ID`` env var so the agent can retrieve
++            pipeline data from HDLF.
++        handler: Full FaultHandler specification used to build the k8s Job manifest.
++        execution_id: Pre-generated UUID4 string from the workflow (via
++            ``workflow.uuid4()``). When provided, the submit activity uses this
++            as the k8s Job name suffix instead of generating a fresh UUID. This
++            ensures the execution_id persisted to the DB matches the actual job.
++            ``None`` for backward compatibility — the activity falls back to
++            generating a UUID internally.
++    """
++
++    inspection_id: str
++    handler: FaultHandlerSpec
++    execution_id: str | None = None
++
++
++class HandlerJobSubmission(BaseModel):
++    """Output of ``submit_handler_job_activity``; input to ``poll_handler_job_activity``.
++
++    Provenance: produced by ``submit_handler_job_activity`` immediately after the
++    k8s Job is accepted by the API server.
++
++    Attributes:
++        execution_id: UUID generated at submission time. Used as the k8s Job name
++            suffix (``fl-job-<execution_id>``) and passed to the agent container
++            as ``TASK_ID``. Stable for the life of this job — a retry of the
++            *submit* activity generates a new UUID and a new job.
++        job_name: Full k8s Job name (``fl-job-<execution_id>``). Used by the poll
++            activity to query job status by name — stable across poll retries.
++        fault_id: Logical handler identifier from ``FaultHandlerSpec.spec.fault_id``,
++            carried forward for logging and result correlation.
++        handler_name: CR ``metadata.name``, carried forward for logging.
++    """
++
++    execution_id: str
++    job_name: str
++    fault_id: str
++    handler_name: str
++
++
++class HandlerExecutionResult(BaseModel):
++    """Output of ``poll_handler_job_activity``.
++
++    Provenance: produced by ``poll_handler_job_activity`` once the k8s Job
++    reaches a terminal state (``Complete`` or ``Failed`` condition). Also
++    produced by the workflow directly when a submit or poll activity exhausts
++    its retries — in that case ``status="failed"`` and ``failure_reason``
++    describes the activity error.
++
++    Attributes:
++        execution_id: UUID from ``HandlerJobSubmission.execution_id``. Correlates
++            this result back to the specific job run. ``None`` when the job was
++            never submitted (submit activity failed before a job was created).
++        fault_id: Logical handler identifier, forwarded from ``HandlerJobSubmission``.
++        handler_name: CR ``metadata.name``, forwarded for logging and audit.
++        status: Terminal outcome.
++            ``"succeeded"`` — job container exited 0, k8s Job condition ``Complete``.
++            ``"failed"`` — job container exited non-zero, k8s deadline exceeded,
++            or the submit/poll activity exhausted its retries. ⚠️ A ``"failed"``
++            result is NOT an error — handler failure is expected and non-fatal to
++            the workflow.
++        failure_reason: Human-readable description of why the job or activity
++            failed. ``None`` on ``"succeeded"``. Set to the k8s Job condition
++            ``message`` field when available, or to the activity error message
++            when the failure is infrastructure-level.
++        pod_logs: Last 400 lines of stdout/stderr from the job's pod, captured
++            after the job reaches a terminal state. ``None`` when log fetching
++            failed or the pod could not be found (e.g. already garbage-collected).
++            Available for both ``"succeeded"`` and ``"failed"`` jobs.
++    """
++
++    execution_id: str | None
++    fault_id: str
++    handler_name: str
++    status: Literal["succeeded", "failed"]
++    failure_reason: str | None = None
++    pod_logs: str | None = None
+diff --git a/fl_control_plane/execution_engine/repository.py b/fl_control_plane/execution_engine/repository.py
+index 9ea022c9..323183dd 100644
+--- a/fl_control_plane/execution_engine/repository.py
++++ b/fl_control_plane/execution_engine/repository.py
+@@ -3,8 +3,8 @@
+ 
+ from typing import Protocol
+ 
+-from fl_control_plane.execution_contracts import FaultHandlerCR
+-from models import PipelineRun
++from fl_shared.cr_models import FaultHandlerSpec
++from fl_control_plane.execution_engine.models import PipelineRun
+ 
+ 
+ class PipelineRunRepository(Protocol):
+@@ -17,8 +17,8 @@ def get(self, inspection_id: str) -> PipelineRun | None: ...
+ class HandlerRepository(Protocol):
+     """Store and retrieve the list of applicable FaultHandlers by inspection_id."""
+ 
+-    def save(self, inspection_id: str, handlers: list[FaultHandlerCR]) -> None: ...
+-    def get(self, inspection_id: str) -> list[FaultHandlerCR] | None: ...
++    def save(self, inspection_id: str, handlers: list[FaultHandlerSpec]) -> None: ...
++    def get(self, inspection_id: str) -> list[FaultHandlerSpec] | None: ...
+ 
+ 
+ class InMemoryPipelineRunRepository:
+@@ -38,10 +38,10 @@ class InMemoryHandlerRepository:
+     """In-memory HandlerRepository used in tests and local development."""
+ 
+     def __init__(self) -> None:
+-        self._store: dict[str, list[FaultHandlerCR]] = {}
++        self._store: dict[str, list[FaultHandlerSpec]] = {}
+ 
+-    def save(self, inspection_id: str, handlers: list[FaultHandlerCR]) -> None:
++    def save(self, inspection_id: str, handlers: list[FaultHandlerSpec]) -> None:
+         self._store[inspection_id] = handlers
+ 
+-    def get(self, inspection_id: str) -> list[FaultHandlerCR] | None:
++    def get(self, inspection_id: str) -> list[FaultHandlerSpec] | None:
+         return self._store.get(inspection_id)
+diff --git a/fl_control_plane/finalizer_dispatcher/selector.py b/fl_control_plane/finalizer_dispatcher/selector.py
+index a2efdb8d..c3935ef6 100644
+--- a/fl_control_plane/finalizer_dispatcher/selector.py
++++ b/fl_control_plane/finalizer_dispatcher/selector.py
+@@ -87,7 +87,7 @@ async def _pick_default_finalizer(session: AsyncSession) -> FinalizerRegistryRow
+     """
+     result = await session.execute(
+         select(FinalizerRegistry)
+-        .where(FinalizerRegistry.is_active.is_(True))
++        .where(FinalizerRegistry.is_active == True)  # noqa: E712
+         .order_by(FinalizerRegistry.registered_at.desc())
+         .limit(1)
+     )
+diff --git a/fl_control_plane/handler_orchestrator/activity.py b/fl_control_plane/handler_orchestrator/activity.py
+new file mode 100644
+index 00000000..5fd12670
+--- /dev/null
++++ b/fl_control_plane/handler_orchestrator/activity.py
+@@ -0,0 +1,73 @@
++"""Temporal activity that runs the Handler Orchestrator for one inspection."""
++
++import structlog
++from sqlalchemy.exc import SQLAlchemyError
++from temporalio import activity
++from temporalio.exceptions import ApplicationError
++
++from fl_control_plane.database import async_session
++from fl_control_plane.handler_orchestrator.orchestrator import evaluate
++from fl_control_plane.temporal.models import (
++    OrchestrateHandlersRequest,
++    OrchestrateHandlersResult,
++)
++
++log = structlog.get_logger(__name__)
++
++
++@activity.defn
++async def orchestrate_handlers_activity(
++    request: OrchestrateHandlersRequest,
++) -> OrchestrateHandlersResult:
++    """Evaluate all active FaultHandlers against an inspection and return matched ones.
++
++    Loads the ``Inspection`` and ``FailedStage`` rows, runs all applicability
++    levels (Level 2 infrastructure filter, Level 3 failure matching, version
++    selection), and returns the full result for the workflow to act on.
++
++    Read-only: does not write any database rows and does not dispatch jobs.
++    The calling workflow is responsible for passing ``result.handlers`` to the
++    dispatch activity when ``result.handlers`` is non-empty.
++
++    Args:
++        request: Activity input carrying the ``inspection_id`` to evaluate.
++
++    Returns:
++        OrchestrateHandlersResult carrying the matched handlers ready for
++        dispatch and the full applicability audit trail.
++
++    Raises:
++        ApplicationError: Non-retryable (``type="InvalidInput"``) when the
++            Inspection row is not found — the inspection must exist before this
++            activity is scheduled.
++        ApplicationError: Retryable (``type="TransientFailure"``) when a
++            transient database error prevents loading pipeline context or
++            handler rows.
++    """
++    async with async_session() as db:
++        try:
++            result = await evaluate(request.inspection_id, db)
++        except KeyError as exc:
++            raise ApplicationError(
++                str(exc),
++                type="InvalidInput",
++                non_retryable=True,
++            ) from exc
++        except SQLAlchemyError as exc:
++            raise ApplicationError(
++                f"Transient database error during handler orchestration: {exc}",
++                type="TransientFailure",
++            ) from exc
++
++    log.info(
++        "orchestrate_handlers_activity_complete",
++        inspection_id=request.inspection_id,
++        handlers_matched=len(result.handlers),
++        handlers_evaluated=len(result.decisions),
++    )
++
++    return OrchestrateHandlersResult(
++        inspection_id=request.inspection_id,
++        handlers=result.handlers,
++        decisions=result.decisions,
++    )
+diff --git a/fl_control_plane/handler_orchestrator/applicability.py b/fl_control_plane/handler_orchestrator/applicability.py
+index 3cc63595..04c02e8d 100644
+--- a/fl_control_plane/handler_orchestrator/applicability.py
++++ b/fl_control_plane/handler_orchestrator/applicability.py
+@@ -13,7 +13,9 @@
+ from fl_control_plane.database import FaultHandler
+ from fl_control_plane.pipeline_url_validators import VALIDATORS
+ 
+-from .models import FailedStageContext, PipelineContext, StageMatchCriteria
++from fl_shared.cr_models import FailureMatch
++
++from .models import FailedStageContext, PipelineContext
+ 
+ 
+ def detect_ci_system(pipeline_url: str) -> str | None:
+@@ -62,11 +64,16 @@ def filter_level2(handler: FaultHandler, ctx: PipelineContext) -> str | None:
+     if repo_patterns and ctx.github_repo_url is not None:
+         bare_url = ctx.github_repo_url.removeprefix("https://").removeprefix("http://")
+         if not any(fnmatch.fnmatch(bare_url, pat) for pat in repo_patterns):
+-            return f"repo '{ctx.github_repo_url}' matches none of repo_patterns {repo_patterns}"
++            return (
++                f"repo '{ctx.github_repo_url}' matches none of repo_patterns {repo_patterns}"
++            )
+ 
+     if handler.merge_target_branch and ctx.pr_target_branch is not None:
+         if ctx.pr_target_branch != handler.merge_target_branch:
+-            return f"pr_target_branch '{ctx.pr_target_branch}' != merge_target_branch '{handler.merge_target_branch}'"
++            return (
++                f"pr_target_branch '{ctx.pr_target_branch}' != "
++                f"merge_target_branch '{handler.merge_target_branch}'"
++            )
+ 
+     if ctx.is_pr is not None:
+         if handler.trigger_scope == "pr_only" and not ctx.is_pr:
+@@ -77,7 +84,9 @@ def filter_level2(handler: FaultHandler, ctx: PipelineContext) -> str | None:
+     return None
+ 
+ 
+-def match_stages(criteria: StageMatchCriteria | None, stages: list[FailedStageContext]) -> list[str]:
++def match_stages(
++    criteria: FailureMatch | None, stages: list[FailedStageContext]
++) -> list[str]:
+     """Return IDs of stages matching all supplied criteria.
+ 
+     A stage matches when:
+@@ -123,7 +132,7 @@ def compute_weight(handler: FaultHandler) -> float:
+ 
+ 
+ def select_versions(
+-    candidates: list[tuple[FaultHandler, list[str]]],
++    candidates: list[tuple[FaultHandler, list[str]]]
+ ) -> tuple[list[tuple[FaultHandler, list[str]]], list[tuple[FaultHandler, str]]]:
+     """Select one handler per fault_id from the Level 2+3 candidates.
+ 
+diff --git a/fl_control_plane/handler_orchestrator/models.py b/fl_control_plane/handler_orchestrator/models.py
+index 9f00bcba..89393378 100644
+--- a/fl_control_plane/handler_orchestrator/models.py
++++ b/fl_control_plane/handler_orchestrator/models.py
+@@ -4,7 +4,7 @@
+ 
+ from pydantic import BaseModel
+ 
+-from fl_control_plane.execution_contracts import FaultHandlerCR  # noqa: F401 — re-exported for orchestrator consumers
++from fl_shared.cr_models import FaultHandlerSpec
+ 
+ 
+ class FailedStageContext(BaseModel):
+@@ -37,39 +37,6 @@ class PipelineContext(BaseModel):
+     failed_stages: list[FailedStageContext]
+ 
+ 
+-class StageMatchCriteria(BaseModel):
+-    """Match criteria for stage_scoped handlers."""
+-
+-    stage_name: str | None = None
+-    log_contains: str | None = None
+-
+-
+-class ParsedFailureMatch(BaseModel):
+-    """Parsed failure_match section from a FaultHandler spec_json."""
+-
+-    strategy: Literal["stage_scoped", "pipeline_scoped"]
+-    match: StageMatchCriteria | None = None
+-
+-
+-class ParsedExecution(BaseModel):
+-    """Parsed execution section from a FaultHandler spec_json."""
+-
+-    type: Literal["agent_task", "custom_runtime"]
+-    task: str | None = None
+-    skills: list[str] = []
+-    mcps: list[str] = []
+-    image: str | None = None
+-    entrypoint: str | None = None
+-
+-
+-class ParsedHandlerSpec(BaseModel):
+-    """Handler specification parsed from FaultHandler.spec_json."""
+-
+-    fault_id: str
+-    execution: ParsedExecution
+-    failure_match: ParsedFailureMatch
+-
+-
+ class ApplicabilityDecision(BaseModel):
+     """Records why a handler was selected, filtered, or superseded.
+ 
+@@ -101,5 +68,5 @@ class OrchestrationResult(BaseModel):
+         decisions: Full audit trail — one entry per active FaultHandler evaluated.
+     """
+ 
+-    handlers: list[FaultHandlerCR]
+-    decisions: list[ApplicabilityDecision]
+\ No newline at end of file
++    handlers: list[FaultHandlerSpec]
++    decisions: list[ApplicabilityDecision]
+diff --git a/fl_control_plane/handler_orchestrator/orchestrator.py b/fl_control_plane/handler_orchestrator/orchestrator.py
+index 1d0f6ea7..f3d4defe 100644
+--- a/fl_control_plane/handler_orchestrator/orchestrator.py
++++ b/fl_control_plane/handler_orchestrator/orchestrator.py
+@@ -12,12 +12,7 @@
+ from sqlalchemy.ext.asyncio import AsyncSession
+ 
+ from fl_control_plane.database import FailedStage, FaultHandler, Inspection
+-from fl_control_plane.execution_contracts import (
+-    FaultHandlerCR,
+-    FaultHandlerExecution,
+-    FaultHandlerMetadata,
+-    FaultHandlerSpec,
+-)
++from fl_shared.cr_models import FaultHandlerSpec
+ 
+ from .applicability import (
+     detect_ci_system,
+@@ -29,24 +24,26 @@
+     ApplicabilityDecision,
+     FailedStageContext,
+     OrchestrationResult,
+-    ParsedFailureMatch,
+-    ParsedHandlerSpec,
+     PipelineContext,
+ )
+ 
+-_Candidate = tuple[FaultHandler, ParsedHandlerSpec, list[str]]
++_Candidate = tuple[FaultHandler, FaultHandlerSpec, list[str]]
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ async def _load_pipeline_context(inspection_id: str, db: AsyncSession) -> PipelineContext:
+     """Load Inspection and FailedStage rows and assemble a PipelineContext."""
+-    inspection_result = await db.execute(select(Inspection).where(Inspection.id == inspection_id))
+-    inspection = inspection_result.scalar_one_or_none()
++    inspection_result = await db.execute(
++        select(Inspection).where(Inspection.id == inspection_id)
++    )
++    inspection: Inspection | None = inspection_result.scalar_one_or_none()
+     if inspection is None:
+         raise KeyError(f"Inspection '{inspection_id}' not found")
+ 
+-    stages_result = await db.execute(select(FailedStage).where(FailedStage.inspection_id == inspection_id))
++    stages_result = await db.execute(
++        select(FailedStage).where(FailedStage.inspection_id == inspection_id)
++    )
+     failed_stages = [
+         FailedStageContext(
+             stage_id=stage.id,
+@@ -70,11 +67,13 @@ async def _load_pipeline_context(inspection_id: str, db: AsyncSession) -> Pipeli
+ 
+ async def _load_active_handlers(db: AsyncSession) -> list[FaultHandler]:
+     """Load all active FaultHandler rows from the DB."""
+-    result = await db.execute(select(FaultHandler).where(FaultHandler.is_active.is_(True)))
++    result = await db.execute(
++        select(FaultHandler).where(FaultHandler.is_active == True)  # noqa: E712
++    )
+     return list(result.scalars().all())
+ 
+ 
+-def _parse_spec(handler: FaultHandler) -> ParsedHandlerSpec | None:
++def _parse_spec(handler: FaultHandler) -> FaultHandlerSpec | None:
+     """Parse spec_json from a FaultHandler row. Returns None if missing or malformed."""
+     if not handler.spec_json:
+         logger.warning(
+@@ -84,18 +83,7 @@ def _parse_spec(handler: FaultHandler) -> ParsedHandlerSpec | None:
+         return None
+     try:
+         raw = json.loads(handler.spec_json)
+-        spec = ParsedHandlerSpec.model_validate(raw)
+-        # DB strategy column is authoritative; keep failure_match strategy in sync
+-        if spec.failure_match.strategy != handler.strategy:
+-            spec = spec.model_copy(
+-                update={
+-                    "failure_match": ParsedFailureMatch(
+-                        strategy=handler.strategy,  # type: ignore[arg-type]
+-                        match=spec.failure_match.match,
+-                    )
+-                }
+-            )
+-        return spec
++        return FaultHandlerSpec.model_validate(raw)
+     except (json.JSONDecodeError, ValueError) as exc:
+         logger.warning(
+             "handler_spec_parse_error",
+@@ -106,7 +94,7 @@ def _parse_spec(handler: FaultHandler) -> ParsedHandlerSpec | None:
+ 
+ def _evaluate_handler(
+     handler: FaultHandler,
+-    spec: ParsedHandlerSpec,
++    spec: FaultHandlerSpec,
+     ctx: PipelineContext,
+ ) -> tuple[list[str], ApplicabilityDecision | None]:
+     """Apply Level 2 and Level 3 filters to a single handler.
+@@ -125,10 +113,18 @@ def _evaluate_handler(
+             reason=level2_reason,
+         )
+ 
+-    if spec.failure_match.strategy == "pipeline_scoped":
++    failure_match = spec.applicability and spec.applicability.failure_match
++    strategy = (failure_match and failure_match.strategy) or handler.strategy
++
++    if strategy == "pipeline_scoped":
+         return [], None
+ 
+-    matched_stage_ids = match_stages(spec.failure_match.match, ctx.failed_stages)
++    match_criteria = failure_match.match if failure_match else None
++    # controller writes match as a list; match_stages expects a single entry
++    if isinstance(match_criteria, list):
++        match_criteria = match_criteria[0] if match_criteria else None
++
++    matched_stage_ids = match_stages(match_criteria, ctx.failed_stages)
+     if not matched_stage_ids:
+         return [], ApplicabilityDecision(
+             handler_db_id=handler.id,
+@@ -141,22 +137,9 @@ def _evaluate_handler(
+     return matched_stage_ids, None
+ 
+ 
+-def _build_handler_cr(handler: FaultHandler, spec: ParsedHandlerSpec) -> FaultHandlerCR:
+-    """Build a FaultHandlerCR for dispatch_all from a DB row and its parsed spec."""
+-    return FaultHandlerCR(
+-        metadata=FaultHandlerMetadata(name=handler.cr_name),
+-        spec=FaultHandlerSpec(
+-            fault_id=handler.fault_id,
+-            execution=FaultHandlerExecution(
+-                type=handler.execution_type,
+-                task=spec.execution.task or "",
+-                skill_paths=spec.execution.skills,
+-                mcp_config_paths=spec.execution.mcps,
+-                image=spec.execution.image,
+-                entrypoint=spec.execution.entrypoint,
+-            ),
+-        ),
+-    )
++def _build_handler_cr(handler: FaultHandler, spec: FaultHandlerSpec) -> FaultHandlerSpec:
++    """Return a FaultHandlerSpec for dispatch_all with fault_id from the DB column."""
++    return spec.model_copy(update={"fault_id": handler.fault_id})
+ 
+ 
+ async def evaluate(inspection_id: str, db: AsyncSession) -> OrchestrationResult:
+@@ -184,15 +167,13 @@ async def evaluate(inspection_id: str, db: AsyncSession) -> OrchestrationResult:
+     for handler in handlers:
+         spec = _parse_spec(handler)
+         if spec is None:
+-            decisions.append(
+-                ApplicabilityDecision(
+-                    handler_db_id=handler.id,
+-                    fault_id=handler.fault_id,
+-                    handler_name=handler.cr_name,
+-                    result="filtered_level2",
+-                    reason="spec_json missing or unparseable",
+-                )
+-            )
++            decisions.append(ApplicabilityDecision(
++                handler_db_id=handler.id,
++                fault_id=handler.fault_id,
++                handler_name=handler.cr_name,
++                result="filtered_level2",
++                reason="spec_json missing or unparseable",
++            ))
+             continue
+ 
+         matched_stage_ids, rejection = _evaluate_handler(handler, spec, ctx)
+@@ -205,32 +186,28 @@ async def evaluate(inspection_id: str, db: AsyncSession) -> OrchestrationResult:
+     selected_pairs, discarded = select_versions([(h, ids) for h, _, ids in candidates])
+ 
+     for loser, reason in discarded:
+-        decisions.append(
+-            ApplicabilityDecision(
+-                handler_db_id=loser.id,
+-                fault_id=loser.fault_id,
+-                handler_name=loser.cr_name,
+-                result="selected_out",
+-                reason=reason,
+-            )
+-        )
++        decisions.append(ApplicabilityDecision(
++            handler_db_id=loser.id,
++            fault_id=loser.fault_id,
++            handler_name=loser.cr_name,
++            result="selected_out",
++            reason=reason,
++        ))
+ 
+     spec_by_handler_id = {h.id: spec for h, spec, _ in candidates}
+ 
+-    selected_handlers: list[FaultHandlerCR] = []
++    selected_handlers: list[FaultHandlerSpec] = []
+     for handler, matched_stage_ids in selected_pairs:
+         spec = spec_by_handler_id[handler.id]
+         selected_handlers.append(_build_handler_cr(handler, spec))
+-        decisions.append(
+-            ApplicabilityDecision(
+-                handler_db_id=handler.id,
+-                fault_id=handler.fault_id,
+-                handler_name=handler.cr_name,
+-                result="matched",
+-                reason="passed all applicability levels",
+-                matched_stage_ids=matched_stage_ids,
+-            )
+-        )
++        decisions.append(ApplicabilityDecision(
++            handler_db_id=handler.id,
++            fault_id=handler.fault_id,
++            handler_name=handler.cr_name,
++            result="matched",
++            reason="passed all applicability levels",
++            matched_stage_ids=matched_stage_ids,
++        ))
+         logger.info(
+             "handler_matched",
+             extra={"inspection_id": inspection_id, "fault_id": handler.fault_id, "handler": handler.cr_name},
+@@ -238,11 +215,7 @@ async def evaluate(inspection_id: str, db: AsyncSession) -> OrchestrationResult:
+ 
+     logger.info(
+         "orchestration_complete",
+-        extra={
+-            "inspection_id": inspection_id,
+-            "handlers_evaluated": len(handlers),
+-            "handlers_matched": len(selected_handlers),
+-        },
++        extra={"inspection_id": inspection_id, "handlers_evaluated": len(handlers), "handlers_matched": len(selected_handlers)},
+     )
+ 
+-    return OrchestrationResult(handlers=selected_handlers, decisions=decisions)
++    return OrchestrationResult(handlers=selected_handlers, decisions=decisions)
+\ No newline at end of file
+diff --git a/fl_control_plane/handler_orchestrator/seed.py b/fl_control_plane/handler_orchestrator/seed.py
+index 1ed4d17c..0e7ef488 100644
+--- a/fl_control_plane/handler_orchestrator/seed.py
++++ b/fl_control_plane/handler_orchestrator/seed.py
+@@ -2,45 +2,22 @@
+ 
+ In production, FaultHandler rows are written by the k8s operator when it
+ detects FaultHandler CRs deployed to the cluster via GitOps. Until that
+-operator is built, this module provides two representative rows that mirror
++operator is built, this module provides representative rows that mirror
+ real-world CRs as closely as possible so the orchestrator and execution
+ engine can be exercised locally.
+ 
+-Each seed definition has two parts that mirror the DB schema:
+-
+-1. The top-level fields stored as individual columns on the fault_handlers
+-   table — used by the orchestrator for Level 2 applicability filtering
+-   without parsing JSON (ci_systems, repo_patterns, scope, trigger_scope,
+-   merge_target_branch).
+-
+-2. spec_json — the full handler spec stored as a JSON blob. Parsed by the
+-   orchestrator only after a handler passes Level 2. Contains the execution
+-   details (type, task prompt, skills, MCPs, image, entrypoint) and the
+-   failure_match strategy used for Level 3 filtering.
++spec_json uses the controller's FaultHandlerSpec format so the seed data
++is structurally identical to what the controller writes.
+ 
+ Handlers provided:
+ 
+-  landscape-ado-analysis
+-    Targets the ADO landscape pipeline (github.tools.sap/hci/landscape).
+-    pipeline_scoped — receives the full pipeline context and decides
+-    internally whether to take the known-issue fast path (vector similarity
+-    search via KGE) or invoke full AI analysis via AICC.
+-    Mirrors the concrete example in FL_Architecture_Design.md §5.3.
+-
+-  hadolint-analysis
+-    stage_scoped — fires only when a stage named "*adolint*" fails.
+-    Uses a Hadolint-specific skill that goes directly to the referenced
+-    Dockerfile line without exploring the repo broadly.
+-
+-  jenkins-bounded-analysis
+-    Mirrors the prompt and skill configuration from engineering_agent/k8s/configmap.yaml.
+-    Bounded output format (JSON with critical_error, explanation, fix_suggestion, diff)
+-    and a specific skill path — avoids open-ended exploration and excessive token usage.
+-    Use this for dev runs against real Jenkins repos.
++  pullrequest-handler
++    custom_runtime handler running pipeline-fl-handlers-impl via
++    python -m fl_handlers_impl.handlers.pullrequest. Reads inspection data
++    from the HDLF server and invokes the LLM via SAP AI Hub.
+ """
+ 
+ import json
+-import uuid
+ from datetime import datetime, timezone
+ 
+ from sqlalchemy import select
+@@ -53,138 +30,94 @@ def _utc_now() -> datetime:
+     return datetime.now(timezone.utc)
+ 
+ 
+-_LANDSCAPE_ADO_SPEC = {
+-    "fault_id": "landscape-ado-analysis",
+-    "execution": {
+-        "type": "agent_task",
+-        "task": (
+-            "Analyze the failed Azure DevOps landscape pipeline run.\n"
+-            "1. Call get_pipeline_info to retrieve the stage/job/task hierarchy and identify the failing task.\n"
+-            "2. Call find_similar_error_log with the failing task's log to check for known issues.\n"
+-            "   If a match with score >= 0.85 is found, call get_jira_ticket for the entry and return\n"
+-            "   the result immediately — no further analysis needed.\n"
+-            "3. If no known issue is found, call get_suggestion with the build_id for AI-driven root\n"
+-            "   cause analysis.\n"
+-            "4. Call get_failure_reasons to classify the failure category.\n"
+-            "5. Return findings in FL standard output format (critical_error, explanation, fix_suggestion)."
+-        ),
+-        "skills": [],
+-        "mcps": ["landscape-pipeline-mcp"],
+-        "image": None,
+-    },
+-    "failure_match": {
+-        "strategy": "pipeline_scoped",
+-        "match": None,
+-    },
+-}
+-
+-_JENKINS_BOUNDED_SPEC = {
+-    "fault_id": "jenkins-bounded-analysis",
++_PULLREQUEST_SPEC = {
++    "fault_id": "pullrequest",
+     "execution": {
+-        "type": "agent_task",
+-        "task": "Analyze the failed Jenkins pipeline run and identify the root cause of the failure.",
+-        "skills": ["skills/jenkins-fault-analysis/SKILL.md"],
+-        "mcps": [],
+-        "image": None,
++        "type": "custom_runtime",
++        "image": "keppel.eu-de-1.cloud.sap/hana-qa-lenny/pipeline-fl-handlers-impl:0.0.1-20260627083422_93d2681afd57e64def9ba7feb89c952d800e278a",
++        "entrypoint": "python -m fl_handlers_impl.handlers.pullrequest",
+     },
+-    "failure_match": {
+-        "strategy": "pipeline_scoped",
+-        "match": None,
+-    },
+-}
+-
+-_HADOLINT_SPEC = {
+-    "fault_id": "hadolint-analysis",
+-    "execution": {
+-        "type": "agent_task",
+-        "task": "Analyze the Hadolint Dockerfile lint failure and identify the root cause.",
+-        "skills": ["skills/hadolint-fault-analysis/SKILL.md"],
+-        "mcps": [],
+-        "image": None,
+-    },
+-    "failure_match": {
+-        "strategy": "stage_scoped",
+-        "match": {
+-            "stage_name": "*adolint*",
+-            "log_contains": None,
++    "applicability": {
++        "infrastructure": {
++            "ci_systems": ["jenkins"],
++            "trigger_scope": "all",
++        },
++        "failure_match": {
++            "strategy": "pipeline_scoped",
++            "match": None,
+         },
+     },
++    "secrets": [
++        {"name": "common/pipeline3_fl_sap_ai_core/AICORE_AUTH_URL", "required": True},
++        {"name": "common/pipeline3_fl_sap_ai_core/AICORE_BASE_URL", "required": True},
++        {"name": "common/pipeline3_fl_sap_ai_core/AICORE_CLIENT_ID", "required": True},
++        {"name": "common/pipeline3_fl_sap_ai_core/AICORE_CLIENT_SECRET", "required": True},
++        {"name": "common/pipeline3_fl_sap_ai_core/AICORE_RESOURCE_GROUP", "required": True},
++    ],
+ }
+ 
+-_SEED_HANDLERS: list[dict[str, object]] = [
++_SEED_HANDLERS: list[dict] = [
+     {
+-        "cr_name": "hadolint-analysis",
++        "id": "a1b2c3d4-0002-0002-0002-000000000002",
++        "cr_name": "pullrequest-handler",
+         "cr_namespace": "fl-system",
+-        "fault_id": "hadolint-analysis",
+-        "execution_type": "agent_task",
+-        "scope": "stage_scoped",
+-        "ci_systems": json.dumps(["jenkins"]),
+-        "repo_patterns": None,
+-        "trigger_scope": "all",
+-        "merge_target_branch": None,
+-        "spec_json": json.dumps(_HADOLINT_SPEC),
+-        "default_output_description": "Hadolint Dockerfile lint analysis completed.",
+-        "resource_version": "seed-v1",
+-    },
+-    {
+-        "cr_name": "landscape-ado-analysis",
+-        "cr_namespace": "fl-system",
+-        "fault_id": "landscape-ado-analysis",
+-        "execution_type": "agent_task",
+-        "scope": "pipeline_scoped",
+-        "ci_systems": json.dumps(["azure_devops"]),
+-        "repo_patterns": json.dumps(["github.tools.sap/hci/landscape"]),
+-        "trigger_scope": "all",
+-        "merge_target_branch": None,
+-        "spec_json": json.dumps(_LANDSCAPE_ADO_SPEC),
+-        "default_output_description": "Landscape ADO pipeline failure analysis completed.",
+-        "resource_version": "seed-v1",
+-    },
+-    {
+-        "cr_name": "jenkins-bounded-analysis",
+-        "cr_namespace": "fl-system",
+-        "fault_id": "jenkins-bounded-analysis",
+-        "execution_type": "agent_task",
+-        "scope": "pipeline_scoped",
++        "fault_id": "pullrequest",
++        "execution_type": "custom_runtime",
++        "strategy": "pipeline_scoped",
+         "ci_systems": json.dumps(["jenkins"]),
+         "repo_patterns": None,
+         "trigger_scope": "all",
+         "merge_target_branch": None,
+-        "spec_json": json.dumps(_JENKINS_BOUNDED_SPEC),
+-        "default_output_description": "Jenkins pipeline failure analysis completed.",
++        "spec_json": json.dumps(_PULLREQUEST_SPEC),
+         "resource_version": "seed-v1",
+     },
+ ]
+ 
+ 
+ async def seed_fault_handlers(db: AsyncSession) -> None:
+-    """Insert representative FaultHandler rows if they are not already present.
++    """Upsert representative FaultHandler rows — insert on first run, update on subsequent runs.
+ 
+-    Idempotent: skips rows whose cr_name already exists in the table.
++    Matches on ``id`` (fixed UUID per seed entry). If a row already exists its
++    mutable fields (spec_json, execution_type, strategy, ci_systems, repo_patterns,
++    trigger_scope, merge_target_branch, resource_version, is_active) are
++    overwritten so that re-deploying the application picks up spec changes
++    without a manual DB migration.
+     """
++    return
+     for definition in _SEED_HANDLERS:
+-        existing = await db.execute(select(FaultHandler).where(FaultHandler.cr_name == definition["cr_name"]))
+-        if existing.scalar_one_or_none() is not None:
+-            continue
+-
+-        handler = FaultHandler(
+-            id=str(uuid.uuid4()),
+-            cr_id=f"seed/{definition['cr_name']}",
+-            cr_name=definition["cr_name"],
+-            cr_namespace=definition["cr_namespace"],
+-            fault_id=definition["fault_id"],
+-            execution_type=definition["execution_type"],
+-            strategy=definition["scope"],
+-            ci_systems=definition["ci_systems"],
+-            repo_patterns=definition["repo_patterns"],
+-            trigger_scope=definition["trigger_scope"],
+-            merge_target_branch=definition["merge_target_branch"],
+-            spec_json=definition["spec_json"],
+-            default_output_description=definition.get("default_output_description"),
+-            resource_version=definition["resource_version"],
+-            is_active=True,
+-            registered_at=_utc_now(),
++        result = await db.execute(
++            select(FaultHandler).where(FaultHandler.id == definition["id"])
+         )
+-        db.add(handler)
++        existing = result.scalar_one_or_none()
++
++        if existing is not None:
++            existing.fault_id = definition["fault_id"]
++            existing.execution_type = definition["execution_type"]
++            existing.strategy = definition["strategy"]
++            existing.ci_systems = definition["ci_systems"]
++            existing.repo_patterns = definition["repo_patterns"]
++            existing.trigger_scope = definition["trigger_scope"]
++            existing.merge_target_branch = definition["merge_target_branch"]
++            existing.spec_json = definition["spec_json"]
++            existing.resource_version = definition["resource_version"]
++            existing.is_active = True
++        else:
++            db.add(FaultHandler(
++                id=definition["id"],
++                cr_id=f"seed/{definition['cr_name']}",
++                cr_name=definition["cr_name"],
++                cr_namespace=definition["cr_namespace"],
++                fault_id=definition["fault_id"],
++                execution_type=definition["execution_type"],
++                strategy=definition["strategy"],
++                ci_systems=definition["ci_systems"],
++                repo_patterns=definition["repo_patterns"],
++                trigger_scope=definition["trigger_scope"],
++                merge_target_branch=definition["merge_target_branch"],
++                spec_json=definition["spec_json"],
++                resource_version=definition["resource_version"],
++                is_active=True,
++                registered_at=_utc_now(),
++            ))
+ 
+     await db.commit()
+diff --git a/fl_control_plane/ingestion_api/app.py b/fl_control_plane/ingestion_api/app.py
+index c6ebbeff..47d6b379 100644
+--- a/fl_control_plane/ingestion_api/app.py
++++ b/fl_control_plane/ingestion_api/app.py
+@@ -22,6 +22,8 @@
+ from temporalio.client import Client
+ 
+ from fl_control_plane.config import settings
++from fl_control_plane.database import async_session
++from fl_control_plane.handler_orchestrator.seed import seed_fault_handlers
+ from fl_control_plane.health import router as health_router
+ from fl_control_plane.log_config import configure_logging
+ from fl_control_plane.temporal.client import connect_temporal_client
+@@ -105,6 +107,10 @@ def _on_worker_done(task: asyncio.Task) -> None:
+ 
+     worker_task.add_done_callback(_on_worker_done)
+ 
++    async with async_session() as db:
++        await seed_fault_handlers(db)
++    log.info("fault_handlers_seeded")
++
+     try:
+         yield
+     finally:
+diff --git a/fl_control_plane/metadata_extractor/db_writer.py b/fl_control_plane/metadata_extractor/db_writer.py
+new file mode 100644
+index 00000000..20122203
+--- /dev/null
++++ b/fl_control_plane/metadata_extractor/db_writer.py
+@@ -0,0 +1,121 @@
++"""Database writer for pipeline inspection metadata and failed stages.
++
++Two entry points:
++  - persist_inspection_metadata: updates the Inspection row with fields from
++    the enriched metadata dict (commit_id, github_repo_url, repo_name).
++  - persist_failed_stages: deletes and re-inserts FailedStage rows for an
++    inspection; called from build_capture_plan which already knows which stages
++    failed as a by-product of building the capture plan.
++"""
++
++from __future__ import annotations
++
++import logging
++import uuid
++from typing import Any
++
++from sqlalchemy import delete, select, update
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from fl_control_plane.database import FailedStage, Inspection
++from fl_control_plane.exceptions import InspectionNotFoundError
++
++log = logging.getLogger(__name__)
++
++
++async def persist_inspection_metadata(
++    inspection_id: str,
++    metadata: dict[str, Any],
++    db: AsyncSession,
++) -> None:
++    """Update the Inspection row with fields from the enriched metadata dict.
++
++    Writes commit_id, github_repo_url, and repo_name. Called from
++    extract_metadata immediately after metadata.json is written to HDLF, reusing
++    the db session already open there.
++
++    Args:
++        inspection_id: UUID of the Inspection row to update.
++        metadata: The dict produced by extract_metadata — the same content written
++            to metadata.json. "commit_id" and "github_repo_url" are used when present.
++        db: SQLAlchemy AsyncSession. Caller is responsible for committing.
++
++    Raises:
++        ValueError: If inspection_id is not a valid UUID.
++        InspectionNotFoundError: If no Inspection row with that id exists.
++    """
++    try:
++        uuid.UUID(inspection_id)
++    except ValueError:
++        raise ValueError(f"inspection_id is not a valid UUID: {inspection_id!r}")
++
++    commit_id: str | None = metadata.get("commit_id")
++    github_repo_url: str | None = metadata.get("github_repo_url")
++    repo_name: str | None = github_repo_url.rstrip("/").split("/")[-1].removesuffix(".git") if github_repo_url else None
++
++    result = await db.execute(
++        update(Inspection)
++        .where(Inspection.id == inspection_id)
++        .values(
++            commit_id=commit_id,
++            github_repo_url=github_repo_url,
++            repo_name=repo_name,
++        )
++    )
++    if result.rowcount == 0:
++        raise InspectionNotFoundError(f"No Inspection found with id={inspection_id!r}")
++    log.info(
++        "db_writer: inspection %s — updated Inspection: commit_id=%s repo=%s",
++        inspection_id, commit_id, repo_name,
++    )
++
++
++async def persist_failed_stages(
++    inspection_id: str,
++    failed_stages: list[tuple[str, str | None]],
++    db: AsyncSession,
++) -> None:
++    """Delete and re-insert FailedStage rows for an inspection.
++
++    Idempotent: the delete-before-insert pattern means a retried call replaces
++    any partial write from a previously interrupted attempt. The existence check
++    runs before the delete so a missing inspection is caught before any mutation.
++
++    Called from build_capture_plan which discovers failed stages as a
++    by-product of building the per-stage capture items — no extra HTTP calls
++    are needed.
++
++    Args:
++        inspection_id: UUID of the parent Inspection row.
++        failed_stages: List of (stage_name, error_message) pairs. error_message
++            is None when the source API (Blue Ocean) does not surface one.
++        db: SQLAlchemy AsyncSession. Caller is responsible for committing.
++
++    Raises:
++        ValueError: If inspection_id is not a valid UUID.
++        InspectionNotFoundError: If no Inspection row with that id exists.
++    """
++    try:
++        uuid.UUID(inspection_id)
++    except ValueError:
++        raise ValueError(f"inspection_id is not a valid UUID: {inspection_id!r}")
++
++    exists = await db.scalar(select(Inspection.id).where(Inspection.id == inspection_id))
++    if exists is None:
++        raise InspectionNotFoundError(f"No Inspection found with id={inspection_id!r}")
++
++    await db.execute(
++        delete(FailedStage).where(FailedStage.inspection_id == inspection_id)
++    )
++    for stage_name, error_message in failed_stages:
++        db.add(FailedStage(
++            inspection_id=inspection_id,
++            stage_name=stage_name,
++            error_message=error_message,
++        ))
++    log.info(
++        "db_writer: inspection %s — inserted %d failed stage(s): %s",
++        inspection_id,
++        len(failed_stages),
++        [name for name, _ in failed_stages],
++    )
+diff --git a/fl_control_plane/metadata_extractor/extractor.py b/fl_control_plane/metadata_extractor/extractor.py
+index ff0c75aa..a8278d53 100644
+--- a/fl_control_plane/metadata_extractor/extractor.py
++++ b/fl_control_plane/metadata_extractor/extractor.py
+@@ -29,6 +29,8 @@
+ from fl_control_plane.database import Inspection
+ from fl_shared.hdlf_client import HdlfClient
+ 
++from fl_control_plane.metadata_extractor.db_writer import persist_inspection_metadata
++
+ log = logging.getLogger(__name__)
+ 
+ 
+@@ -186,6 +188,7 @@ class BuildInfo(BaseModel):
+     commit_id: str | None = None
+     commit_url: str | None = None
+     pull_request: PrInfo | None = None
++    github_repo_url: str | None = None
+     git_repos: list[GitRepoInfo] = Field(default_factory=list)
+     changesets: list[ChangesetItem] = Field(default_factory=list)
+     parameters: dict[str, Any] = Field(default_factory=dict)
+@@ -222,6 +225,23 @@ def _blue_ocean_run_url(build_url: str) -> str:
+ 
+ 
+ 
++def _repo_url_from_github_url(url: str | None) -> str | None:
++    """Extract the GitHub repository base URL from any URL under that repo.
++
++    Works for any GitHub host (github.com, GitHub Enterprise).
++
++    >>> _repo_url_from_github_url(
++    ...     "https://github.wdf.sap.corp/DBaaS/hc-idm/pull/1184"
++    ... )
++    'https://github.wdf.sap.corp/DBaaS/hc-idm'
++    """
++    if not url:
++        return None
++    m = re.match(r"(https?://[^/]+/[^/]+/[^/]+)", url)
++    return m.group(1) if m else None
++
++
++
+ @retry(
+     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError, OSError)),
+     stop=stop_after_attempt(3),
+@@ -263,20 +283,22 @@ async def _fetch_build_info(jenkins_url: str, session: aiohttp.ClientSession) ->
+ 
+     pr_info = None
+     if blue.pullRequest and blue.pullRequest.id:
++        pr_url = blue.pullRequest.url or (blue.branch.url if blue.branch else None)
+         pr_info = PrInfo(
+             pr_number=int(blue.pullRequest.id),
+-            pr_title=blue.pullRequest.title,
+-            pr_author=blue.pullRequest.author,
+-            pr_url=blue.pullRequest.url,
++            pr_title=blue.pullRequest.title or "",
++            pr_author=blue.pullRequest.author or "",
++            pr_url=pr_url or "",
+         )
+     else:
+         pr_match = re.match(r"PR-(\d+)$", blue.pipeline or "")
+         if pr_match:
++            pr_url = blue.branch.url if blue.branch else None
+             pr_info = PrInfo(
+                 pr_number=int(pr_match.group(1)),
+                 pr_title="",
+                 pr_author="",
+-                pr_url=blue.branch.url if blue.branch else "",
++                pr_url=pr_url or "",
+             )
+         else:
+             for repo in git_repos:
+@@ -290,6 +312,10 @@ async def _fetch_build_info(jenkins_url: str, session: aiohttp.ClientSession) ->
+                     )
+                     break
+ 
++    github_repo_url = _repo_url_from_github_url(
++        (pr_info.pr_url if pr_info else None) or (blue.branch.url if blue.branch else None)
++    )
++
+     changesets = [
+         ChangesetItem(
+             commit_id=(item.commitId or "")[:8],
+@@ -330,6 +356,7 @@ async def _fetch_build_info(jenkins_url: str, session: aiohttp.ClientSession) ->
+         commit_id=commit_id,
+         commit_url=blue.commitUrl,
+         pull_request=pr_info,
++        github_repo_url=github_repo_url,
+         git_repos=git_repos,
+         changesets=changesets,
+         parameters={p.name: p.value for p in api.get_parameters()},
+@@ -353,6 +380,7 @@ def _build_metadata(jenkins_url: str, source_event: dict[str, Any]) -> dict[str,
+         "canonical_url": None,
+         "commit_id": commit_id,
+         "commit_url": None,
++        "github_repo_url": None,
+         "pr_url": pr_url,
+         "pr_number": None,
+         "build_number": None,
+@@ -405,6 +433,7 @@ async def _enrich_from_jenkins(
+         "canonical_url": info.url or metadata["jenkins_url"],
+         "commit_id": info.commit_id or metadata.get("commit_id"),
+         "commit_url": info.commit_url,
++        "github_repo_url": info.github_repo_url,
+         "pr_url": (pr.pr_url if pr else None) or metadata.get("pr_url"),
+         "pr_number": pr.pr_number if pr else None,
+         "build_number": info.number,
+@@ -490,6 +519,9 @@ async def extract_metadata(
+ 
+     payload = json.dumps(metadata, indent=2, ensure_ascii=False).encode()
+     await hdlf_client.put_object_atomic(f"{folder}/metadata.json", payload)
+-
+     log.info("metadata_extractor: inspection %s — metadata.json written", uuid)
++
++    await persist_inspection_metadata(uuid, metadata, db)
++    await db.commit()
++
+     return ExtractionResult(success=True)
+diff --git a/fl_control_plane/temporal/finalize_activity.py b/fl_control_plane/temporal/finalize_activity.py
+new file mode 100644
+index 00000000..809c77da
+--- /dev/null
++++ b/fl_control_plane/temporal/finalize_activity.py
+@@ -0,0 +1,176 @@
++"""Temporal activity that runs the finalizer agent and marks the Inspection terminal."""
++
++import asyncio
++import json
++import os
++from datetime import datetime, timezone
++from functools import lru_cache
++from uuid import uuid4
++
++import structlog
++from pydantic_settings import BaseSettings
++from sqlalchemy import select, update
++from temporalio import activity
++from temporalio.exceptions import ApplicationError
++
++from fl_control_plane.database import Inspection, async_session
++from fl_control_plane.finalizer_dispatcher.activity import write_finalizer_execution
++from fl_control_plane.finalizer_dispatcher.selector import pick_finalizer, should_dispatch
++from fl_control_plane.temporal.models import FinalizeInspectionRequest, FinalizeInspectionResult
++from finalizer_agent import agent_task_runner
++from finalizer_agent.models import FinalizerTaskRequest, FinalizerTaskResult
++
++log = structlog.get_logger(__name__)
++
++
++class FinalizerSettings(BaseSettings):
++    """Finalizer-specific config injected as FL_FINALIZER_* env vars.
++
++    Attributes:
++        config_repo_url: URL of the config repo containing finalizer skills and MCP configs.
++        config_repo_commitish: Branch or commit of the config repo to use.
++    """
++
++    config_repo_url: str
++    config_repo_commitish: str = "main"
++
++    model_config = {"env_prefix": "FL_FINALIZER_", "extra": "ignore"}
++
++
++@lru_cache
++def _get_finalizer_settings() -> FinalizerSettings:
++    return FinalizerSettings()
++
++
++@activity.defn
++async def finalize_inspection_activity(request: FinalizeInspectionRequest) -> FinalizeInspectionResult:
++    """Run the finalizer agent then write the terminal status to the Inspection row.
++
++    Steps:
++      1. Load the inspection row; raise non-retryable if missing.
++      2. Skip immediately if already in a terminal state (idempotent retry guard).
++      3. Call ``should_dispatch`` — if any STOP gate suppresses finalization, skip
++         the agent and go straight to writing COMPLETED/FAILED.
++      4. Pick the active finalizer from ``finalizer_registry``.
++      5. Run the finalizer agent synchronously via ``agent_task_runner.run()``
++         (offloaded to a thread — Temporal activities must not block the event loop).
++      6. Write a ``finalizer_execution`` row.
++      7. Write the terminal status and ``finished_at`` on the Inspection row.
++
++    Args:
++        request: Finalization parameters carrying ``inspection_id`` and the target
++            status (``"COMPLETED"`` or ``"FAILED"``).
++
++    Raises:
++        ApplicationError: Non-retryable when the inspection row is not found.
++    """
++    async with async_session() as db:
++        result = await db.execute(
++            select(Inspection).where(Inspection.id == request.inspection_id)
++        )
++        inspection = result.scalar_one_or_none()
++        if inspection is None:
++            raise ApplicationError(
++                f"Inspection {request.inspection_id} not found",
++                type="InvalidInput",
++                non_retryable=True,
++            )
++
++        if inspection.status in ("COMPLETED", "FAILED"):
++            log.info(
++                "finalize_inspection_skipped",
++                inspection_id=request.inspection_id,
++                current_status=inspection.status,
++                reason="already_terminal",
++            )
++            return
++
++        dispatch, skip_reason = await should_dispatch(request.inspection_id, db)
++
++        if dispatch:
++            finalizer_row = await pick_finalizer(request.inspection_id, db)
++        else:
++            log.info(
++                "finalizer_dispatch_suppressed",
++                inspection_id=request.inspection_id,
++                reason=skip_reason,
++            )
++            finalizer_row = None
++
++    if finalizer_row is not None:
++        settings = _get_finalizer_settings()
++        execution_id = str(uuid4())
++        started_at = datetime.now(timezone.utc)
++
++        os.environ["MCP_FL_INSPECTION_ID"] = request.inspection_id
++        task_request = FinalizerTaskRequest(
++            task_id=execution_id,
++            task_text=finalizer_row.prompt or "",
++            repo_url=inspection.github_repo_url or "",
++            repo_commitish=inspection.commit_id or "HEAD",
++            config_repo_url=settings.config_repo_url,
++            config_repo_commitish=settings.config_repo_commitish,
++            config_mcp_paths=json.loads(finalizer_row.mcps_json),
++            config_skill_paths=json.loads(finalizer_row.skills_json),
++        )
++
++        loop = asyncio.get_event_loop()
++        task_future = loop.run_in_executor(None, agent_task_runner.run, task_request)
++
++        # Heartbeat every 30 s so Temporal does not cancel the activity while the
++        # agent thread is running — the heartbeat_timeout on this activity is 60 s.
++        while not task_future.done():
++            activity.heartbeat()
++            try:
++                await asyncio.wait_for(asyncio.shield(task_future), timeout=30)
++            except asyncio.TimeoutError:
++                pass
++
++        task_result: FinalizerTaskResult = await task_future
++
++        async with async_session() as db:
++            await write_finalizer_execution(
++                session=db,
++                execution_id=execution_id,
++                inspection_id=request.inspection_id,
++                registry_id=finalizer_row.id,
++                status="success",
++                status_message=None,
++                started_at=started_at,
++            )
++            await db.commit()
++
++        log.info(
++            "finalizer_agent_completed",
++            inspection_id=request.inspection_id,
++            execution_id=execution_id,
++        )
++    else:
++        task_result = None
++
++    now = datetime.now(timezone.utc)
++    async with async_session() as db:
++        await db.execute(
++            update(Inspection)
++            .where(
++                Inspection.id == request.inspection_id,
++                Inspection.status.not_in(("COMPLETED", "FAILED")),
++            )
++            .values(
++                status=request.status,
++                finished_at=now,
++            )
++        )
++        await db.commit()
++
++    log.info(
++        "inspection_finalized",
++        inspection_id=request.inspection_id,
++        status=request.status,
++    )
++
++    return FinalizeInspectionResult(
++        mlflow_run_id=task_result.mlflow_run_id if task_result is not None else None,
++        atom_inspector_url=task_result.atom_inspector_url if task_result is not None else None,
++        completion_text=task_result.completion_text if task_result is not None else None,
++    )
+diff --git a/fl_control_plane/temporal/handler_execution_activity.py b/fl_control_plane/temporal/handler_execution_activity.py
+new file mode 100644
+index 00000000..63e5c787
+--- /dev/null
++++ b/fl_control_plane/temporal/handler_execution_activity.py
+@@ -0,0 +1,166 @@
++"""Temporal activities for persisting handler execution records."""
++
++from datetime import datetime, timezone
++
++import structlog
++from sqlalchemy import text
++from sqlalchemy.exc import IntegrityError, SQLAlchemyError
++from temporalio import activity
++from temporalio.exceptions import ApplicationError
++
++from fl_control_plane.database import (
++    HandlerExecution,
++    HandlerExecutionFailedStage,
++    async_session,
++)
++from fl_control_plane.temporal.models import (
++    PersistHandlerExecutionsRequest,
++    UpdateHandlerExecutionStatusRequest,
++)
++
++log = structlog.get_logger(__name__)
++
++_MAX_STATUS_MESSAGE_LENGTH = 100
++
++
++@activity.defn
++async def persist_handler_executions_activity(
++    request: PersistHandlerExecutionsRequest,
++) -> int:
++    """Bulk-insert handler_executions rows with status='planned' and junction rows.
++
++    Uses begin_nested (SAVEPOINT) + IntegrityError suppression so that
++    Temporal workflow replays that re-execute this activity are idempotent —
++    duplicate execution_id values are silently skipped.
++
++    Args:
++        request: Inspection ID and list of planned executions to persist.
++
++    Returns:
++        Number of handler_executions rows actually inserted (0 on replay/conflict).
++
++    Raises:
++        ApplicationError: Retryable on transient DB errors.
++    """
++    if not request.planned_executions:
++        return 0
++
++    async with async_session() as session:
++        try:
++            rows_inserted = 0
++            now = datetime.now(timezone.utc)
++
++            for pe in request.planned_executions:
++                row = HandlerExecution(
++                    id=pe.execution_id,
++                    inspection_id=request.inspection_id,
++                    fault_handler_id=pe.fault_handler_id,
++                    fault_id=pe.fault_id,
++                    status="planned",
++                    created_at=now,
++                )
++                try:
++                    async with session.begin_nested():
++                        session.add(row)
++                    rows_inserted += 1
++                except IntegrityError:
++                    pass
++
++                # Junction rows for matched stages
++                for stage_id in pe.matched_stage_ids:
++                    junction = HandlerExecutionFailedStage(
++                        handler_execution_id=pe.execution_id,
++                        failed_stage_id=stage_id,
++                    )
++                    try:
++                        async with session.begin_nested():
++                            session.add(junction)
++                    except IntegrityError:
++                        pass
++
++            await session.commit()
++
++            log.info(
++                "handler_executions_persisted",
++                inspection_id=request.inspection_id,
++                rows_inserted=rows_inserted,
++                total_planned=len(request.planned_executions),
++            )
++            return rows_inserted
++
++        except SQLAlchemyError as exc:
++            await session.rollback()
++            raise ApplicationError(
++                f"Transient DB error persisting handler executions: {exc}",
++                type="TransientFailure",
++            ) from exc
++
++
++@activity.defn
++async def update_handler_execution_status_activity(
++    request: UpdateHandlerExecutionStatusRequest,
++) -> int:
++    """Bulk-update handler_executions rows with terminal status.
++
++    Sets status, finished_at, status_message, and path_to_hdlf for each
++    execution that reached a terminal state.
++
++    Args:
++        request: List of status updates to apply.
++
++    Returns:
++        Number of rows updated.
++
++    Raises:
++        ApplicationError: Retryable on transient DB errors.
++    """
++    if not request.updates:
++        return 0
++
++    now = datetime.now(timezone.utc)
++
++    async with async_session() as session:
++        try:
++            rows_updated = 0
++            for update in request.updates:
++                # Truncate status_message to column limit
++                status_message = update.status_message
++                if status_message and len(status_message) > _MAX_STATUS_MESSAGE_LENGTH:
++                    status_message = status_message[:_MAX_STATUS_MESSAGE_LENGTH]
++
++                result = await session.execute(
++                    text("""
++                        UPDATE handler_executions
++                        SET status = :status,
++                            status_message = :status_message,
++                            path_to_hdlf = :path_to_hdlf,
++                            finished_at = :finished_at,
++                            updated_at = :updated_at
++                        WHERE id = :execution_id
++                    """),
++                    {
++                        "execution_id": update.execution_id,
++                        "status": update.status,
++                        "status_message": status_message,
++                        "path_to_hdlf": update.path_to_hdlf,
++                        "finished_at": now,
++                        "updated_at": now,
++                    },
++                )
++                rows_updated += result.rowcount
++
++            await session.commit()
++
++            log.info(
++                "handler_execution_statuses_updated",
++                rows_updated=rows_updated,
++                total_updates=len(request.updates),
++            )
++            return rows_updated
++
++        except SQLAlchemyError as exc:
++            await session.rollback()
++            raise ApplicationError(
++                f"Transient DB error updating handler execution statuses: {exc}",
++                type="TransientFailure",
++            ) from exc
+diff --git a/fl_control_plane/temporal/models.py b/fl_control_plane/temporal/models.py
+index b32a227c..2d12203b 100644
+--- a/fl_control_plane/temporal/models.py
++++ b/fl_control_plane/temporal/models.py
+@@ -4,6 +4,10 @@
+ 
+ from pydantic import BaseModel, ConfigDict
+ 
++from fl_control_plane.execution_engine.models import HandlerExecutionResult
++from fl_control_plane.handler_orchestrator.models import ApplicabilityDecision
++from fl_shared.cr_models import FaultHandlerSpec
++
+ 
+ class IngestionRequest(BaseModel):
+     """Payload constructed in router.py and passed into PipelineInspectionWorkflow.
+@@ -250,6 +254,26 @@ class DataExtractionResult(BaseModel):
+     idempotency_key: str
+ 
+ 
++class FinalizeInspectionResult(BaseModel):
++    """Output of ``finalize_inspection_activity`` carrying finalizer observability links.
++
++    Provenance: assembled inside ``finalize_inspection_activity`` from the
++    ``FinalizerTaskResult`` returned by ``agent_task_runner.run()``.
++
++    Attributes:
++        mlflow_run_id: MLflow run identifier for the Doit atom. ``None`` when the
++            finalizer was skipped or the SDK did not return one.
++        atom_inspector_url: URL to the Atom Inspector page for this run. ``None``
++            when the finalizer was skipped or the atom has no inspector URL.
++        completion_text: Agent's final text response. ``None`` when the finalizer
++            was skipped or the trajectory contained no completion_text.
++    """
++
++    mlflow_run_id: str | None = None
++    atom_inspector_url: str | None = None
++    completion_text: str | None = None
++
++
+ class WorkflowResult(BaseModel):
+     """Final result returned by ``PipelineInspectionWorkflow`` upon completion.
+ 
+@@ -257,7 +281,7 @@ class WorkflowResult(BaseModel):
+     activity results and returned via ``await handle.result()`` from callers
+     that wait on the workflow.
+ 
+-    Example — data extraction complete::
++    Example — finalizer dispatched (PR pipeline)::
+ 
+         {
+             "inspection_id": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0",
+@@ -270,7 +294,27 @@ class WorkflowResult(BaseModel):
+             },
+             "metadata_reference": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0/metadata.json",
+             "data_extraction_status": "success",
+-            "manifest_reference": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0/manifest.json"
++            "manifest_reference": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0/manifest.json",
++            "finalization_status": "dispatched",
++            "finalizer_execution_id": "11111111-2222-3333-4444-555555555555"
++        }
++
++    Example — finalizer skipped (non-PR pipeline, gate blocked)::
++
++        {
++            "inspection_id": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0",
++            "tenant_id": "default",
++            "metadata_extraction_status": "success",
++            "metadata_summary": {
++                "source_system": "jenkins",
++                "pipeline_url": "https://jenkins.example.com/job/my-pipeline/42/",
++                "metadata_path": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0/metadata.json"
++            },
++            "metadata_reference": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0/metadata.json",
++            "data_extraction_status": "success",
++            "manifest_reference": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0/manifest.json",
++            "finalization_status": "skipped",
++            "finalizer_execution_id": null
+         }
+ 
+     Attributes:
+@@ -295,3 +339,171 @@ class WorkflowResult(BaseModel):
+     metadata_reference: str | None
+     data_extraction_status: str
+     manifest_reference: str | None
++    handler_execution_results: list[HandlerExecutionResult] = []
++    finalize_inspection_result: FinalizeInspectionResult | None = None
++
++
++class FinalizeInspectionRequest(BaseModel):
++    """Input to ``finalize_inspection_activity``.
++
++    Attributes:
++        inspection_id: UUID4 string identifying the row to update.
++        status: Terminal status to write — ``"COMPLETED"`` on success,
++            ``"FAILED"`` when the workflow encountered an unrecoverable error.
++    """
++
++    inspection_id: str
++    status: Literal["COMPLETED", "FAILED"]
++
++
++class OrchestrateHandlersRequest(BaseModel):
++    """Input to ``orchestrate_handlers_activity``.
++
++    Provenance: constructed by the workflow after the data extraction activity
++    completes and passed into ``execute_activity(orchestrate_handlers_activity, ...)``.
++
++    Example::
++
++        {
++            "inspection_id": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0"
++        }
++
++    Attributes:
++        inspection_id: UUID4 string of the ``Inspection`` row to evaluate
++            handlers against. The row and its associated ``FailedStage`` rows
++            must already exist in the database when the activity runs.
++    """
++
++    model_config = ConfigDict(extra="forbid")
++
++    inspection_id: str
++
++
++class OrchestrateHandlersResult(BaseModel):
++    """Result returned by ``orchestrate_handlers_activity`` upon completion.
++
++    Provenance: produced inside ``orchestrate_handlers_activity`` after
++    ``fl_control_plane.handler_orchestrator.orchestrator.evaluate`` runs and
++    returns to the calling workflow. The workflow uses ``handlers`` to drive the
++    downstream dispatch activity; ``decisions`` are available for audit/logging.
++
++    Example — two handlers selected::
++
++        {
++            "inspection_id": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0",
++            "handlers": [
++                {
++                    "metadata": {"name": "jenkins-bounded-analysis"},
++                    "spec": {"fault_id": "jenkins-bounded-analysis", "execution": {...}}
++                }
++            ],
++            "decisions": [
++                {
++                    "handler_db_id": "...", "fault_id": "jenkins-bounded-analysis",
++                    "handler_name": "jenkins-bounded-analysis",
++                    "result": "matched", "reason": "passed all applicability levels",
++                    "matched_stage_ids": ["stage-uuid-1"]
++                },
++                {
++                    "handler_db_id": "...", "fault_id": "hadolint-analysis",
++                    "handler_name": "hadolint-analysis",
++                    "result": "filtered_level3", "reason": "no failed stages matched handler's match criteria",
++                    "matched_stage_ids": []
++                }
++            ]
++        }
++
++    Example — no matching handlers::
++
++        {
++            "inspection_id": "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0",
++            "handlers": [],
++            "decisions": [...]
++        }
++
++    Attributes:
++        inspection_id: Echoed from ``OrchestrateHandlersRequest.inspection_id``
++            for correlation in workflow history.
++        handlers: Handlers that passed all applicability levels, ready to be
++            passed directly to ``dispatch_all(inspection_id, result.handlers)``.
++            Empty list is a valid outcome — no active handler matched this
++            inspection. ⚠️ The workflow must skip dispatch when this is empty.
++        decisions: Full audit trail — one entry per active ``FaultHandler``
++            evaluated, regardless of outcome. Carries the reason each handler
++            was matched, filtered, or superseded.
++    """
++
++    inspection_id: str
++    handlers: list[FaultHandlerSpec]
++    decisions: list[ApplicabilityDecision]
++
++
++class PlannedExecution(BaseModel):
++    """One handler execution planned for dispatch.
++
++    Built by the workflow after orchestration — correlates a pre-generated
++    ``execution_id`` with the handler's DB identity and the stages it matched.
++
++    Attributes:
++        execution_id: UUID4 string generated deterministically in the workflow
++            via ``workflow.uuid4()``. Used as the primary key for the
++            ``handler_executions`` row and as the k8s Job name suffix.
++        fault_handler_id: Primary key of the ``fault_handlers`` row — the exact
++            handler revision selected by the orchestrator.
++        fault_id: Logical handler identifier from ``FaultHandlerSpec.fault_id``.
++        matched_stage_ids: DB primary keys of ``failed_stages`` rows this handler
++            addresses. Empty for pipeline-scoped handlers.
++    """
++
++    execution_id: str
++    fault_handler_id: str
++    fault_id: str
++    matched_stage_ids: list[str] = []
++
++
++class PersistHandlerExecutionsRequest(BaseModel):
++    """Input to ``persist_handler_executions_activity``.
++
++    Carries the full batch of planned executions for one inspection so they
++    can be inserted in a single transaction.
++
++    Attributes:
++        inspection_id: UUID4 string of the ``Inspection`` row these executions
++            belong to.
++        planned_executions: One entry per matched handler, ordered consistently
++            with ``OrchestrateHandlersResult.handlers``.
++    """
++
++    inspection_id: str
++    planned_executions: list[PlannedExecution]
++
++
++class HandlerExecutionStatusUpdate(BaseModel):
++    """Terminal status for one handler execution, used as an element in the
++    bulk-update request.
++
++    Attributes:
++        execution_id: UUID4 string matching the ``handler_executions.id`` row.
++        status: Terminal DB status — mapped from the k8s job outcome.
++            ``"success"`` (job exited 0), ``"failed"`` (job failed or never
++            submitted), ``"timed_out"`` (poll timeout).
++        status_message: Optional human-readable failure description. Truncated
++            to 100 characters by the activity before writing.
++        path_to_hdlf: URI to the handler output in HDLF. ``None`` when the
++            handler failed before producing output.
++    """
++
++    execution_id: str
++    status: Literal["success", "failed", "timed_out"]
++    status_message: str | None = None
++    path_to_hdlf: str | None = None
++
++
++class UpdateHandlerExecutionStatusRequest(BaseModel):
++    """Input to ``update_handler_execution_status_activity``.
++
++    Attributes:
++        updates: One entry per handler execution that reached a terminal state.
++    """
++
++    updates: list[HandlerExecutionStatusUpdate]
+diff --git a/fl_control_plane/temporal/worker.py b/fl_control_plane/temporal/worker.py
+index fb20cbf8..d1a1a88b 100644
+--- a/fl_control_plane/temporal/worker.py
++++ b/fl_control_plane/temporal/worker.py
+@@ -16,7 +16,17 @@
+ 
+ from fl_control_plane.config import settings
+ from fl_control_plane.data_extractor.activity import extract_data_activity
++from fl_control_plane.execution_engine.job_activity import (
++    poll_handler_job_activity,
++    submit_handler_job_activity,
++)
++from fl_control_plane.handler_orchestrator.activity import orchestrate_handlers_activity
+ from fl_control_plane.metadata_extractor.activity import extract_metadata_activity
++from fl_control_plane.temporal.finalize_activity import finalize_inspection_activity
++from fl_control_plane.temporal.handler_execution_activity import (
++    persist_handler_executions_activity,
++    update_handler_execution_status_activity,
++)
+ from fl_control_plane.temporal.interceptor import LoggingInterceptor
+ from fl_control_plane.temporal.workflow import PipelineInspectionWorkflow
+ 
+@@ -44,6 +54,12 @@ def create_worker(client: Client) -> Worker:
+         activities=[
+             extract_metadata_activity,
+             extract_data_activity,
++            orchestrate_handlers_activity,
++            submit_handler_job_activity,
++            poll_handler_job_activity,
++            persist_handler_executions_activity,
++            update_handler_execution_status_activity,
++            finalize_inspection_activity,
+         ],
+         interceptors=[LoggingInterceptor()],
+     )
+@@ -51,12 +67,15 @@ def create_worker(client: Client) -> Worker:
+ 
+ async def _run_worker() -> None:
+     from dotenv import load_dotenv
++
+     load_dotenv()
+ 
+     from fl_control_plane.log_config import configure_logging
++
+     configure_logging(settings.log_level)
+ 
+     from fl_control_plane.temporal.client import connect_temporal_client
++
+     client = await connect_temporal_client()
+     worker = create_worker(client)
+     log.info(
+diff --git a/fl_control_plane/temporal/workflow.py b/fl_control_plane/temporal/workflow.py
+index 7b688dde..eb1f5124 100644
+--- a/fl_control_plane/temporal/workflow.py
++++ b/fl_control_plane/temporal/workflow.py
+@@ -37,30 +37,57 @@
+ event loop with full access to process state, env vars, and external I/O.
+ """
+ 
++import asyncio
+ from datetime import timedelta
+ 
+ from temporalio import workflow
+ from temporalio.common import RetryPolicy
++from temporalio.exceptions import ActivityError
+ 
+ with workflow.unsafe.imports_passed_through():
+     from temporalio.workflow import execute_activity
+ 
+     from fl_control_plane.data_extractor.activity import extract_data_activity
++    from fl_control_plane.execution_engine.job_activity import (
++        poll_handler_job_activity,
++        submit_handler_job_activity,
++    )
++    from fl_control_plane.execution_engine.models import (
++        HandlerExecutionResult,
++        HandlerJobSubmission,
++        SubmitHandlerJobRequest,
++    )
++    from fl_control_plane.handler_orchestrator.activity import orchestrate_handlers_activity
++    from fl_control_plane.handler_orchestrator.models import ApplicabilityDecision
+     from fl_control_plane.metadata_extractor.activity import extract_metadata_activity
++    from fl_control_plane.temporal.finalize_activity import finalize_inspection_activity
++    from fl_control_plane.temporal.handler_execution_activity import (
++        persist_handler_executions_activity,
++        update_handler_execution_status_activity,
++    )
+     from fl_control_plane.temporal.models import (
+         DataExtractionResult,
++        FinalizeInspectionRequest,
++        FinalizeInspectionResult,
++        HandlerExecutionStatusUpdate,
+         IngestionRequest,
+         MetadataExtractionResult,
++        OrchestrateHandlersRequest,
++        OrchestrateHandlersResult,
++        PersistHandlerExecutionsRequest,
++        PlannedExecution,
++        UpdateHandlerExecutionStatusRequest,
+         WorkflowResult,
+     )
++    from fl_shared.cr_models import FaultHandlerSpec
+ 
+ 
+ @workflow.defn
+ class PipelineInspectionWorkflow:
+     """Temporal workflow that drives the pipeline inspection stage.
+ 
+-    Orchestrates metadata extraction and data extraction in sequence,
+-    mapping results to a WorkflowResult consumed by the caller.
++    Orchestrates metadata extraction followed by data extraction, mapping
++    results to a WorkflowResult consumed by the caller.
+ 
+     Activity failures raise ``ApplicationError`` and propagate through
+     Temporal's retry policy. ``ConfigError`` and ``InvalidInput`` types are
+@@ -92,19 +119,132 @@ async def run(self, request: IngestionRequest) -> WorkflowResult:
+             non_retryable_error_types=["ConfigError", "InvalidInput"],
+         )
+ 
+-        metadata_result: MetadataExtractionResult = await execute_activity(
+-            extract_metadata_activity,
+-            request,
+-            start_to_close_timeout=timedelta(minutes=5),
+-            retry_policy=_activity_retry_policy,
++        _finalize_retry_policy = RetryPolicy(
++            maximum_attempts=1,
++            initial_interval=timedelta(seconds=2),
++            backoff_coefficient=2.0,
++            maximum_interval=timedelta(seconds=30),
+         )
+ 
+-        data_result: DataExtractionResult = await execute_activity(
+-            extract_data_activity,
+-            request,
+-            start_to_close_timeout=timedelta(minutes=30),
+-            retry_policy=_activity_retry_policy,
+-        )
++        _finalize_status = "FAILED"
++        try:
++            metadata_result: MetadataExtractionResult = await execute_activity(
++                extract_metadata_activity,
++                request,
++                start_to_close_timeout=timedelta(minutes=5),
++                retry_policy=_activity_retry_policy,
++            )
++
++            data_result: DataExtractionResult = await execute_activity(
++                extract_data_activity,
++                request,
++                start_to_close_timeout=timedelta(minutes=30),
++                retry_policy=_activity_retry_policy,
++            )
++
++            orchestration_result: OrchestrateHandlersResult = await execute_activity(
++                orchestrate_handlers_activity,
++                OrchestrateHandlersRequest(inspection_id=request.inspection_id),
++                start_to_close_timeout=timedelta(minutes=5),
++                retry_policy=_activity_retry_policy,
++            )
++
++            # Correlate matched handlers with their ApplicabilityDecision to
++            # retrieve handler_db_id and matched_stage_ids for persistence.
++            matched_decisions: dict[str, ApplicabilityDecision] = {
++                d.fault_id: d for d in orchestration_result.decisions if d.result == "matched"
++            }
++
++            # Build planned executions with deterministic UUIDs for DB persistence.
++            planned_executions: list[PlannedExecution] = []
++            handler_execution_ids: dict[str, str] = {}
++            for handler in orchestration_result.handlers:
++                execution_id = str(workflow.uuid4())
++                decision = matched_decisions.get(handler.fault_id)
++                planned_executions.append(
++                    PlannedExecution(
++                        execution_id=execution_id,
++                        fault_handler_id=decision.handler_db_id if decision else "",
++                        fault_id=handler.fault_id,
++                        matched_stage_ids=decision.matched_stage_ids if decision else [],
++                    )
++                )
++                handler_execution_ids[handler.fault_id] = execution_id
++
++            # Persist planned executions to the DB before dispatching jobs.
++            if planned_executions:
++                await execute_activity(
++                    persist_handler_executions_activity,
++                    PersistHandlerExecutionsRequest(
++                        inspection_id=request.inspection_id,
++                        planned_executions=planned_executions,
++                    ),
++                    start_to_close_timeout=timedelta(minutes=2),
++                    retry_policy=_activity_retry_policy,
++                )
++
++            async def _run_handler(handler: FaultHandlerSpec) -> HandlerExecutionResult:
++                try:
++                    submission: HandlerJobSubmission = await execute_activity(
++                        submit_handler_job_activity,
++                        SubmitHandlerJobRequest(
++                            inspection_id=request.inspection_id,
++                            handler=handler,
++                            execution_id=handler_execution_ids.get(handler.fault_id),
++                        ),
++                        start_to_close_timeout=timedelta(minutes=2),
++                        retry_policy=_activity_retry_policy,
++                    )
++                    return await execute_activity(
++                        poll_handler_job_activity,
++                        submission,
++                        start_to_close_timeout=timedelta(minutes=75),
++                        heartbeat_timeout=timedelta(seconds=30),
++                        retry_policy=_activity_retry_policy,
++                    )
++                except ActivityError as exc:
++                    return HandlerExecutionResult(
++                        execution_id=handler_execution_ids.get(handler.fault_id),
++                        fault_id=handler.fault_id,
++                        handler_name="omitted",
++                        status="failed",
++                        failure_reason=str(exc),
++                    )
++
++            handler_results: list[HandlerExecutionResult] = list(
++                await asyncio.gather(*[_run_handler(h) for h in orchestration_result.handlers])
++            )
++
++            # Persist terminal statuses back to the DB.
++            status_updates: list[HandlerExecutionStatusUpdate] = [
++                HandlerExecutionStatusUpdate(
++                    execution_id=r.execution_id,
++                    status="success" if r.status == "succeeded" else "failed",
++                    status_message=r.failure_reason,
++                )
++                for r in handler_results
++                if r.execution_id is not None
++            ]
++            if status_updates:
++                await execute_activity(
++                    update_handler_execution_status_activity,
++                    UpdateHandlerExecutionStatusRequest(updates=status_updates),
++                    start_to_close_timeout=timedelta(minutes=2),
++                    retry_policy=_activity_retry_policy,
++                )
++
++            _finalize_status = "COMPLETED"
++        finally:
++            finalize_result: FinalizeInspectionResult = await execute_activity(
++                finalize_inspection_activity,
++                FinalizeInspectionRequest(
++                    inspection_id=request.inspection_id,
++                    status=_finalize_status,
++                ),
++                start_to_close_timeout=timedelta(minutes=75),
++                heartbeat_timeout=timedelta(seconds=60),
++                retry_policy=_finalize_retry_policy,
++            )
+ 
+         return WorkflowResult(
+             inspection_id=request.inspection_id,
+@@ -114,4 +254,6 @@ async def run(self, request: IngestionRequest) -> WorkflowResult:
+             metadata_reference=metadata_result.metadata_reference,
+             data_extraction_status=data_result.status,
+             manifest_reference=data_result.manifest_reference,
++            handler_execution_results=handler_results,
++            finalize_inspection_result=finalize_result,
+         )
+diff --git a/fl_mcp_servers/Dockerfile b/fl_mcp_servers/Dockerfile
+index 8aaa9558..4a40dbee 100644
+--- a/fl_mcp_servers/Dockerfile
++++ b/fl_mcp_servers/Dockerfile
+@@ -1,27 +1,30 @@
+-FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp6-app-pyenv-minimal-3.14 AS builder
++FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp3-app-pyenv-3.12 AS builder
+ 
+ USER app
+ RUN mkdir /home/app/build
+ WORKDIR /home/app/build
+ 
++COPY pip.conf /etc/pip.conf
+ COPY /pyproject.toml ./
+ COPY /fl_control_plane/ ./fl_control_plane/
+ COPY /fl_shared/ ./fl_shared/
+ COPY /hdlf_server/ ./hdlf_server/
+ COPY /fl_mcp_servers/ ./fl_mcp_servers/
++COPY /finalizer_agent/ ./finalizer_agent/
+ 
+ RUN pip install --no-cache-dir build \
+     && python -m build --wheel --outdir /home/app/build/wheels
+ 
+-FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp6-app-pyenv-minimal-3.14
++FROM keppel.eu-de-1.cloud.sap/hana-qa-infrastructure/infra/sles15-sp3-app-pyenv-3.12
+ 
+ USER app
+ WORKDIR /home/app/app
+ 
++COPY pip.conf /etc/pip.conf
+ COPY --from=builder --chown=app:app /home/app/build/wheels/*.whl /tmp/
+ 
+ RUN WHEEL=$(ls /tmp/*.whl) \
+-    && pip install --no-cache-dir "${WHEEL}" \
++    && pip install --no-cache-dir "${WHEEL}[hps-sdk]" \
+     && rm -rf /tmp/*.whl
+ 
+ ENV PYTHONDONTWRITEBYTECODE=1
+diff --git a/fl_shared/cr_models.py b/fl_shared/cr_models.py
+new file mode 100644
+index 00000000..a450d0ef
+--- /dev/null
++++ b/fl_shared/cr_models.py
+@@ -0,0 +1,170 @@
++"""Pydantic models for FaultHandler CR spec parsing and validation."""
++
++from typing import Any, Literal
++
++from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
++
++HandlerPhase = Literal["Pending", "Registering", "Active", "Inactive", "Error"]
++ReconcileOutcome = Literal["registered", "rejected", "deactivated"]
++CISystem = Literal["jenkins", "github_actions", "azure_devops"]
++TriggerScope = Literal["all", "pr_only", "non_pr_only"]
++ExecutionType = Literal["agent_task", "custom_runtime"]
++MatchStrategy = Literal["stage_scoped", "pipeline_scoped"]
++
++
++class CRMetadata(BaseModel):
++    """Kubernetes CR metadata fields accessed during reconciliation."""
++
++    model_config = ConfigDict(extra="ignore", populate_by_name=True)
++
++    uid: str
++    name: str
++    namespace: str
++    resource_version: str = Field(alias="resourceVersion")
++
++
++class RawCRObject(BaseModel):
++    """Raw FaultHandler CR as delivered by kopf or the Kubernetes LIST API.
++
++    Attributes:
++        spec: May be absent on delete events where the API server strips
++            the spec before delivering the event to the watch stream.
++    """
++
++    model_config = ConfigDict(extra="ignore", populate_by_name=True)
++
++    metadata: CRMetadata
++    spec: dict[str, Any] | None = None
++
++
++class FailureMatch(BaseModel):
++    """Match criteria for stage-scoped handlers."""
++
++    model_config = ConfigDict(extra="ignore")
++
++    stage_name: str | None = None
++    log_contains: str | None = None
++    relevance: str | None = None
++
++
++class Applicability(BaseModel):
++    """Applicability section of the FaultHandler CR spec."""
++
++    model_config = ConfigDict(extra="ignore")
++
++    class FailureMatchConfig(BaseModel):
++        """Strategy and match criteria for failure detection.
++        Attributes:
++            strategy: Determines matching behavior. When "stage_scoped",
++                match criteria should be specified.
++            match: List of match criteria. Empty or None means no match filtering.
++        """
++
++        model_config = ConfigDict(extra="ignore")
++
++        strategy: MatchStrategy | None = None
++        match: list[FailureMatch] | None = None
++
++        @field_validator("match", mode="before")
++        @classmethod
++        def _coerce_single_match_to_list(cls, v: Any) -> Any:
++            if isinstance(v, dict):
++                return [v]
++            return v
++
++    class Infrastructure(BaseModel):
++        """Infrastructure-level filtering for handler applicability.
++        Attributes:
++            ci_systems: Restrict to specific CI systems. None means all systems.
++            repo_patterns: Glob patterns for repository matching. None means default
++                handler (matches all repos for the fault_id).
++            trigger_scope: Filter by pipeline trigger type ("all", "pr_only", "non_pr_only").
++            merge_target_branch: Optional branch name filter for applicability.
++        """
++
++        model_config = ConfigDict(extra="ignore")
++
++        ci_systems: list[CISystem] | None = None
++        repo_patterns: list[str] | None = None
++        trigger_scope: TriggerScope | None = None
++        merge_target_branch: str | None = None
++
++    failure_match: FailureMatchConfig | None = None
++    infrastructure: Infrastructure | None = None
++
++
++class ExecutionSpec(BaseModel):
++    """Execution section of the FaultHandler CR spec.
++    Attributes:
++        type: Determines which execution backend is used.
++        task: Required when type is "agent_task" — the task identifier to execute.
++            Must be None when type is "custom_runtime".
++        image: Required when type is "custom_runtime" — the container image to run.
++            Must be None when type is "agent_task".
++        entrypoint: Optional override for the container entrypoint when type is
++            "custom_runtime". If None, the image's default ENTRYPOINT is used.
++        skills: Optional list of skill identifiers available to the agent.
++        mcps: Optional list of MCP server identifiers available to the agent.
++    """
++
++    model_config = ConfigDict(extra="ignore")
++
++    type: ExecutionType
++    task: str | None = None
++    image: str | None = None
++    entrypoint: str | None = None
++    skills: list[str] | None = None
++    mcps: list[str] | None = None
++
++    @model_validator(mode="after")
++    def _check_cross_field_constraints(self) -> "ExecutionSpec":
++        if self.type == "agent_task" and self.image is not None:
++            raise ValueError("agent_task execution type must not specify 'image'")
++        if self.type == "custom_runtime" and self.task is not None:
++            raise ValueError("custom_runtime execution type must not specify 'task'")
++        return self
++
++
++class SecretRef(BaseModel):
++    """Reference to a secret required by the handler."""
++
++    model_config = ConfigDict(extra="ignore")
++
++    name: str
++    description: str | None = None
++    required: bool = False
++
++
++class OutputConfig(BaseModel):
++    """Output format and documentation for handler results.
++    Attributes:
++        format: Output serialization format. Defaults to "json" at the application
++            level when None.
++        output_description: Inline markdown describing the factual contents of the
++            handler's JSON output. Used by finalizers to understand what data is available.
++        output_description_ref: File path in the Failure Checks Repo pointing to a
++            detailed description of the output schema.
++    """
++
++    model_config = ConfigDict(extra="ignore")
++
++    format: str | None = None
++    output_description: str | None = None
++    output_description_ref: str | None = None
++
++
++class FaultHandlerSpec(BaseModel):
++    """Top-level spec of a FaultHandler CR.
++    Provenance: Parsed from the `.spec` field of a faulthandlers.faultlocalization.sap.com/v1 CR.
++    Backwards-compatible: new controller versions work with older CRs missing newer fields
++    (all non-core fields have defaults). Unknown fields from newer CRD versions are silently
++    dropped via extra="ignore".
++    """
++
++    model_config = ConfigDict(extra="ignore")
++
++    fault_id: str = Field(min_length=1, max_length=253, pattern=r"^[a-z0-9][a-z0-9\-]*$")
++    execution: ExecutionSpec
++    applicability: Applicability | None = None
++    secrets: list[SecretRef] | None = None
++    output: OutputConfig | None = None
+diff --git a/fl_shared/hdlf_client/config.py b/fl_shared/hdlf_client/config.py
+index f90cac03..1b70b766 100644
+--- a/fl_shared/hdlf_client/config.py
++++ b/fl_shared/hdlf_client/config.py
+@@ -26,6 +26,7 @@ class Settings(BaseSettings):
+     hdlf_rest_api_host: str | None = None
+     hdlf_container_id: str | None = None
+     hdlf_cert_dir: str | None = None
++    hdlf_cert_secret_name: str = ""
+     hdlf_client_certificate: SecretStr | None = None
+     hdlf_client_key: SecretStr | None = None
+ 
+@@ -53,3 +54,6 @@ def _require_hdlf_settings(self) -> "Settings":
+         if has_inline and not (self.hdlf_client_certificate and self.hdlf_client_key):
+             raise ValueError("Both HDLF_CLIENT_CERTIFICATE and HDLF_CLIENT_KEY must be set together.")
+         return self
++
++
++settings = Settings()
+diff --git a/handler_controller/cr_models.py b/handler_controller/cr_models.py
+index a450d0ef..ec74168e 100644
+--- a/handler_controller/cr_models.py
++++ b/handler_controller/cr_models.py
+@@ -1,170 +1,18 @@
+-"""Pydantic models for FaultHandler CR spec parsing and validation."""
+-
+-from typing import Any, Literal
+-
+-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+-
+-HandlerPhase = Literal["Pending", "Registering", "Active", "Inactive", "Error"]
+-ReconcileOutcome = Literal["registered", "rejected", "deactivated"]
+-CISystem = Literal["jenkins", "github_actions", "azure_devops"]
+-TriggerScope = Literal["all", "pr_only", "non_pr_only"]
+-ExecutionType = Literal["agent_task", "custom_runtime"]
+-MatchStrategy = Literal["stage_scoped", "pipeline_scoped"]
+-
+-
+-class CRMetadata(BaseModel):
+-    """Kubernetes CR metadata fields accessed during reconciliation."""
+-
+-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+-
+-    uid: str
+-    name: str
+-    namespace: str
+-    resource_version: str = Field(alias="resourceVersion")
+-
+-
+-class RawCRObject(BaseModel):
+-    """Raw FaultHandler CR as delivered by kopf or the Kubernetes LIST API.
+-
+-    Attributes:
+-        spec: May be absent on delete events where the API server strips
+-            the spec before delivering the event to the watch stream.
+-    """
+-
+-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+-
+-    metadata: CRMetadata
+-    spec: dict[str, Any] | None = None
+-
+-
+-class FailureMatch(BaseModel):
+-    """Match criteria for stage-scoped handlers."""
+-
+-    model_config = ConfigDict(extra="ignore")
+-
+-    stage_name: str | None = None
+-    log_contains: str | None = None
+-    relevance: str | None = None
+-
+-
+-class Applicability(BaseModel):
+-    """Applicability section of the FaultHandler CR spec."""
+-
+-    model_config = ConfigDict(extra="ignore")
+-
+-    class FailureMatchConfig(BaseModel):
+-        """Strategy and match criteria for failure detection.
+-        Attributes:
+-            strategy: Determines matching behavior. When "stage_scoped",
+-                match criteria should be specified.
+-            match: List of match criteria. Empty or None means no match filtering.
+-        """
+-
+-        model_config = ConfigDict(extra="ignore")
+-
+-        strategy: MatchStrategy | None = None
+-        match: list[FailureMatch] | None = None
+-
+-        @field_validator("match", mode="before")
+-        @classmethod
+-        def _coerce_single_match_to_list(cls, v: Any) -> Any:
+-            if isinstance(v, dict):
+-                return [v]
+-            return v
+-
+-    class Infrastructure(BaseModel):
+-        """Infrastructure-level filtering for handler applicability.
+-        Attributes:
+-            ci_systems: Restrict to specific CI systems. None means all systems.
+-            repo_patterns: Glob patterns for repository matching. None means default
+-                handler (matches all repos for the fault_id).
+-            trigger_scope: Filter by pipeline trigger type ("all", "pr_only", "non_pr_only").
+-            merge_target_branch: Optional branch name filter for applicability.
+-        """
+-
+-        model_config = ConfigDict(extra="ignore")
+-
+-        ci_systems: list[CISystem] | None = None
+-        repo_patterns: list[str] | None = None
+-        trigger_scope: TriggerScope | None = None
+-        merge_target_branch: str | None = None
+-
+-    failure_match: FailureMatchConfig | None = None
+-    infrastructure: Infrastructure | None = None
+-
+-
+-class ExecutionSpec(BaseModel):
+-    """Execution section of the FaultHandler CR spec.
+-    Attributes:
+-        type: Determines which execution backend is used.
+-        task: Required when type is "agent_task" — the task identifier to execute.
+-            Must be None when type is "custom_runtime".
+-        image: Required when type is "custom_runtime" — the container image to run.
+-            Must be None when type is "agent_task".
+-        entrypoint: Optional override for the container entrypoint when type is
+-            "custom_runtime". If None, the image's default ENTRYPOINT is used.
+-        skills: Optional list of skill identifiers available to the agent.
+-        mcps: Optional list of MCP server identifiers available to the agent.
+-    """
+-
+-    model_config = ConfigDict(extra="ignore")
+-
+-    type: ExecutionType
+-    task: str | None = None
+-    image: str | None = None
+-    entrypoint: str | None = None
+-    skills: list[str] | None = None
+-    mcps: list[str] | None = None
+-
+-    @model_validator(mode="after")
+-    def _check_cross_field_constraints(self) -> "ExecutionSpec":
+-        if self.type == "agent_task" and self.image is not None:
+-            raise ValueError("agent_task execution type must not specify 'image'")
+-        if self.type == "custom_runtime" and self.task is not None:
+-            raise ValueError("custom_runtime execution type must not specify 'task'")
+-        return self
+-
+-
+-class SecretRef(BaseModel):
+-    """Reference to a secret required by the handler."""
+-
+-    model_config = ConfigDict(extra="ignore")
+-
+-    name: str
+-    description: str | None = None
+-    required: bool = False
+-
+-
+-class OutputConfig(BaseModel):
+-    """Output format and documentation for handler results.
+-    Attributes:
+-        format: Output serialization format. Defaults to "json" at the application
+-            level when None.
+-        output_description: Inline markdown describing the factual contents of the
+-            handler's JSON output. Used by finalizers to understand what data is available.
+-        output_description_ref: File path in the Failure Checks Repo pointing to a
+-            detailed description of the output schema.
+-    """
+-
+-    model_config = ConfigDict(extra="ignore")
+-
+-    format: str | None = None
+-    output_description: str | None = None
+-    output_description_ref: str | None = None
+-
+-
+-class FaultHandlerSpec(BaseModel):
+-    """Top-level spec of a FaultHandler CR.
+-    Provenance: Parsed from the `.spec` field of a faulthandlers.faultlocalization.sap.com/v1 CR.
+-    Backwards-compatible: new controller versions work with older CRs missing newer fields
+-    (all non-core fields have defaults). Unknown fields from newer CRD versions are silently
+-    dropped via extra="ignore".
+-    """
+-
+-    model_config = ConfigDict(extra="ignore")
+-
+-    fault_id: str = Field(min_length=1, max_length=253, pattern=r"^[a-z0-9][a-z0-9\-]*$")
+-    execution: ExecutionSpec
+-    applicability: Applicability | None = None
+-    secrets: list[SecretRef] | None = None
+-    output: OutputConfig | None = None
++"""Re-export from fl_shared.cr_models — canonical location."""
++from fl_shared.cr_models import *  # noqa: F401, F403
++from fl_shared.cr_models import (
++    Applicability,
++    CRMetadata,
++    ExecutionSpec,
++    ExecutionType,
++    FaultHandlerSpec,
++    FailureMatch,
++    HandlerPhase,
++    MatchStrategy,
++    OutputConfig,
++    RawCRObject,
++    ReconcileOutcome,
++    SecretRef,
++    TriggerScope,
++    CISystem,
++)
+diff --git a/openspec/changes/persist-handler-executions/tasks.md b/openspec/changes/persist-handler-executions/tasks.md
+new file mode 100644
+index 00000000..6d759908
+--- /dev/null
++++ b/openspec/changes/persist-handler-executions/tasks.md
+@@ -0,0 +1,33 @@
++## 1. Models and Activity Inputs
++
++- [x] 1.1 Create `PlannedExecution` Pydantic model (fields: `execution_id`, `fault_handler_id`, `fault_id`, `matched_stage_ids`) in `fl_control_plane/temporal/models.py`
++- [x] 1.2 Create `PersistHandlerExecutionsRequest` model carrying `inspection_id` and `planned_executions: list[PlannedExecution]`
++- [x] 1.3 Create `UpdateHandlerExecutionStatusRequest` model carrying a list of `(execution_id, status, status_message, path_to_hdlf)` tuples
++
++## 2. Persist Activity
++
++- [x] 2.1 Implement `persist_handler_executions_activity` that bulk-inserts `handler_executions` rows with `status='planned'` and `handler_execution_failed_stages` junction rows using ON CONFLICT DO NOTHING
++- [x] 2.2 Register the new activity with the Temporal worker
++
++## 3. Update Status Activity
++
++- [x] 3.1 Implement `update_handler_execution_status_activity` that bulk-updates `handler_executions` rows with terminal status, `finished_at`, `status_message`, and `path_to_hdlf`
++- [x] 3.2 Register the new activity with the Temporal worker
++
++## 4. Workflow Integration
++
++- [x] 4.1 Generate `execution_id` per matched handler in the workflow using `workflow.uuid4()`
++- [x] 4.2 Call `persist_handler_executions_activity` after orchestration and before dispatch (skip if zero handlers matched)
++- [x] 4.3 Pass pre-generated `execution_id` to `SubmitHandlerJobRequest` (adjust model if needed)
++- [x] 4.4 After `asyncio.gather` collects results, call `update_handler_execution_status_activity` with terminal statuses
++
++## 5. Submit Activity Adjustment
++
++- [x] 5.1 Accept `execution_id` from the request instead of generating it internally in `submit_handler_job_activity`
++- [x] 5.2 Ensure k8s Job name still uses `fl-job-<execution_id>` pattern
++
++## 6. Tests
++
++- [x] 6.1 Unit test `persist_handler_executions_activity`: verify rows created with correct status, junction rows populated, idempotent on duplicate call
++- [x] 6.2 Unit test `update_handler_execution_status_activity`: verify status transitions (success, failed), `finished_at` set, `status_message` truncated to 100 chars
++- [ ] 6.3 Integration test: full workflow run produces `handler_executions` rows queryable by the HDLF server's `resolve_handler_defaults()`
+diff --git a/pip.conf b/pip.conf
+new file mode 100644
+index 00000000..50d8ab38
+--- /dev/null
++++ b/pip.conf
+@@ -0,0 +1,6 @@
++[global]
++extra-index-url =
++    https://int.repositories.cloud.sap/artifactory/api/pypi/lenny/simple
++    https://int.repositories.cloud.sap/artifactory/api/pypi/build-releases-pypi/simple
++    https://int.repositories.cloud.sap/artifactory/api/pypi/deploy-releases-pypi/simple
++    https://pypi.me.sap.corp
+diff --git a/pyproject.toml b/pyproject.toml
+index 105ae325..bff00d84 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -23,10 +23,24 @@ dependencies = [
+     "uvicorn[standard]>=0.30.0",
+     "structlog>=25.0.0",
+     "temporalio>=1.27.2",
+-    "kubernetes>=35.0.0,<36.0.0",
++    "hana-program-synthesis==0.0.9",
+ ]
+ 
+ [project.optional-dependencies]
++hps-sdk = [
++    "mlflow==3.5.1",
++    "pyarrow==21.0.0",
++    "grpcio==1.80.0",
++    "numpy==1.26.4",
++    "pandas==2.3.3",
++    "unidiff>=0.7.5,<1",
++    "evaluate==0.4.6",
++    "rouge-score==0.1.2",
++    "python-dotenv>=1.1.1,<2",
++    "ai-api-client-sdk",
++    "ai-core-sdk",
++    "daas==0.118.2",
++]
+ dev = [
+     "language-formatters-pre-commit-hooks>=2.14.0",
+     "mypy>=1.13.0",
+diff --git a/scripts/deploy-dev.sh b/scripts/deploy-dev.sh
+index 115decb8..c1297785 100755
+--- a/scripts/deploy-dev.sh
++++ b/scripts/deploy-dev.sh
+@@ -294,8 +294,10 @@ if [[ "$INFRA_ONLY" == "true" ]]; then
+   echo "==> Infrastructure-only mode (replicaCount=0)..."
+   _HELM_EXTRA=(
+     --set "replicaCount=0"
+-    --set "image.repository=placeholder"
+-    --set "image.tag=none"
++    --set "image.pipeline_fl_control_plane.repository=placeholder"
++    --set "image.pipeline_fl_control_plane.tag=none"
++    --set "image.pipeline_fl_control_plane_engineering_agent.repository=placeholder"
++    --set "image.pipeline_fl_control_plane_engineering_agent.tag=none"
+     --set "secret.enabled=false"
+     --set "imagePullSecret.name="
+     --set "hanaDb.enabled=true"
+@@ -304,8 +306,10 @@ if [[ "$INFRA_ONLY" == "true" ]]; then
+ else
+   _HELM_EXTRA=(
+     --set "replicaCount=1"
+-    --set "image.repository=${_REGISTRY_NODEPORT}/${IMAGE_NAME}"
+-    --set "image.tag=${TAG}"
++    --set "image.pipeline_fl_control_plane.repository=${_REGISTRY_NODEPORT}/${IMAGE_NAME}"
++    --set "image.pipeline_fl_control_plane.tag=${TAG}"
++    --set "image.pipeline_fl_control_plane_engineering_agent.repository=${_REGISTRY_NODEPORT}/${IMAGE_NAME}"
++    --set "image.pipeline_fl_control_plane_engineering_agent.tag=${TAG}"
+     --set "secret.enabled=false"
+     --set "imagePullSecret.name=${_REGISTRY_PULL_SECRET_NAME}"
+     --set "hanaDb.enabled=true"
+diff --git a/tests/data_extractor/test_data_extractor.py b/tests/data_extractor/test_data_extractor.py
+index c522f9f1..51155ffe 100644
+--- a/tests/data_extractor/test_data_extractor.py
++++ b/tests/data_extractor/test_data_extractor.py
+@@ -30,7 +30,7 @@
+     CaptureItem,
+     build_capture_plan,
+ )
+-from fl_control_plane.data_extractor.jenkins_client import BlueOceanStep, JenkinsAPIClient
++from fl_control_plane.data_extractor.jenkins_client import BlueOceanNode, BlueOceanStep, JenkinsAPIClient
+ from fl_control_plane.data_extractor.config import DataExtractorSettings
+ from fl_control_plane.data_extractor.models import DEFAULT_PER_FILE_CAP, DEFAULT_PER_INSPECTION_CAP
+ from fl_control_plane.data_extractor.downloader import (
+@@ -53,6 +53,16 @@
+ # Constructed at import time so static-secret scanners don't flag a literal base64 credential.
+ _BASIC_TEST_AUTH = "Basic " + base64.b64encode(b"test:test").decode()
+ 
++_UUID_1 = "00000000-0000-0000-0000-000000000001"
++_UUID_DONE = "10000000-0000-0000-0000-000000000001"
++_UUID_R = "10000000-0000-0000-0000-000000000002"
++_UUID_R2 = "10000000-0000-0000-0000-000000000003"
++_UUID_U = "10000000-0000-0000-0000-000000000004"
++_UUID_M = "10000000-0000-0000-0000-000000000005"
++_UUID_M2 = "10000000-0000-0000-0000-000000000006"
++_UUID_M3 = "10000000-0000-0000-0000-000000000007"
++_UUID_FAIL = "10000000-0000-0000-0000-000000000008"
++
+ 
+ # ---------------------------------------------------------------------------
+ # Helpers
+@@ -99,10 +109,16 @@ async def _request_json(url):
+ def _blue_ocean_jenkins(*, nodes=None):
+     jc = MagicMock(spec=JenkinsAPIClient)
+     _nodes = nodes or []
++    _blue_ocean_nodes = [
++        BlueOceanNode(
++            id=n["id"],
++            display_name=n.get("displayName", ""),
++            result=n.get("result"),
++        )
++        for n in _nodes
++    ]
+ 
+     async def _request_json(url):
+-        if "/nodes/" in url:
+-            return _nodes
+         if "testReport" in url:
+             raise aiohttp.ClientError("no test reports")
+         if url.endswith("/api/json"):
+@@ -110,6 +126,7 @@ async def _request_json(url):
+         return []
+ 
+     jc.request_json = AsyncMock(side_effect=_request_json)
++    jc.list_nodes = AsyncMock(return_value=_blue_ocean_nodes)
+     jc.blue_ocean_run_url.return_value = (
+         "https://jenkins.example.com/blue/rest/organizations/jenkins"
+         "/pipelines//branches/X/runs/1"
+@@ -124,6 +141,15 @@ def _cfg(**kwargs):
+     return DownloaderConfig(**defaults)
+ 
+ 
++def _db():
++    db = MagicMock()
++    db.execute = AsyncMock()
++    db.scalar = AsyncMock(return_value="placeholder-id")
++    db.add = MagicMock()
++    db.commit = AsyncMock()
++    return db
++
++
+ # ---------------------------------------------------------------------------
+ # Model unit tests
+ # ---------------------------------------------------------------------------
+@@ -194,13 +220,13 @@ def test_config_ignores_unrelated_env_vars(monkeypatch):
+ 
+ class TestCapturePlanGeneration:
+     async def test_wfapi_is_priority(self):
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _jenkins())
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _jenkins(), _db())
+         priority_keys = {i.key for i in plan if i.is_priority}
+         assert "wfapi_describe.json" in priority_keys
+ 
+     async def test_stage_console_log_is_priority_and_flagged(self):
+         jc = _jenkins(stages=[{"id": "10", "name": "Test"}])
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", jc)
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", jc, _db())
+         stage_console = [i for i in plan if i.is_console_log and "stages/" in i.key]
+         assert len(stage_console) == 1
+         assert stage_console[0].is_priority is True
+@@ -208,7 +234,7 @@ async def test_stage_console_log_is_priority_and_flagged(self):
+ 
+     async def test_artifacts_are_non_priority(self):
+         jc = _jenkins(artifacts=[("out/report.txt", "https://j/artifact/out/report.txt")])
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", jc)
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", jc, _db())
+         artifact_items = [i for i in plan if i.key.startswith("artifacts/")]
+         assert all(not i.is_priority for i in artifact_items)
+ 
+@@ -217,7 +243,7 @@ async def test_priority_before_non_priority(self):
+             stages=[{"id": "1", "name": "Build"}],
+             artifacts=[("foo.txt", "https://j/artifact/foo.txt")],
+         )
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", jc)
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", jc, _db())
+         indices_p = [i for i, x in enumerate(plan) if x.is_priority]
+         indices_np = [i for i, x in enumerate(plan) if not x.is_priority]
+         # Both groups must be present — otherwise the ordering assertion is vacuous.
+@@ -230,7 +256,7 @@ async def test_artifacts_included_in_plan(self):
+             ("old.txt", "https://j/artifact/old.txt"),
+             ("new.txt", "https://j/artifact/new.txt"),
+         ])
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", jc)
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", jc, _db())
+         non_prio = [i for i in plan if not i.is_priority and i.key.startswith("artifacts/")]
+         assert len(non_prio) == 2
+         keys = {i.key for i in non_prio}
+@@ -243,7 +269,7 @@ async def test_wfapi_success_stage_is_omitted(self):
+             {"id": "10", "name": "PassedStage", "status": "SUCCESS"},
+             {"id": "11", "name": "FailedStage", "status": "FAILED"},
+         ])
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", jc)
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", jc, _db())
+         assert not any("PassedStage" in i.key for i in plan)
+         assert any("FailedStage" in i.key for i in plan)
+ 
+@@ -253,7 +279,7 @@ async def test_wfapi_not_executed_stage_is_omitted(self):
+             {"id": "20", "name": "SkippedStage", "status": "NOT_EXECUTED"},
+             {"id": "21", "name": "Build", "status": "FAILED"},
+         ])
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", jc)
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", jc, _db())
+         assert not any("SkippedStage" in i.key for i in plan)
+         assert any("Build" in i.key for i in plan)
+ 
+@@ -269,7 +295,7 @@ async def test_stage_console_logs_are_priority(self):
+             {"id": "20", "displayName": "Build"},
+             {"id": "21", "displayName": "Test"},
+         ]
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes))
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes), _db())
+         stage_consoles = [i for i in plan if i.is_console_log and "stages/" in i.key]
+         assert len(stage_consoles) == 2
+         assert all(i.is_priority for i in stage_consoles)
+@@ -277,7 +303,7 @@ async def test_stage_console_logs_are_priority(self):
+     async def test_steps_json_is_non_priority(self):
+         """steps.json discovered via Blue Ocean nodes is non-priority."""
+         nodes = [{"id": "20", "displayName": "Build"}]
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes))
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes), _db())
+         steps = [i for i in plan if i.key.endswith("steps.json")]
+         assert len(steps) == 1
+         assert steps[0].is_priority is False
+@@ -288,7 +314,7 @@ async def test_duplicate_stage_names_get_node_id_suffix(self):
+             {"id": "20", "displayName": "Deploy"},
+             {"id": "21", "displayName": "Deploy"},
+         ]
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes))
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes), _db())
+         stage_consoles = [i for i in plan if i.is_console_log and "stages/" in i.key]
+         assert len(stage_consoles) == 2
+         keys = {i.key for i in stage_consoles}
+@@ -298,7 +324,7 @@ async def test_duplicate_stage_names_get_node_id_suffix(self):
+     async def test_stage_console_logs_have_node_steps_url(self):
+         """Blue Ocean stage console logs carry node_steps_url for the step-log fallback."""
+         nodes = [{"id": "42", "displayName": "Build"}]
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes))
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes), _db())
+         stage_consoles = [i for i in plan if i.is_console_log and "stages/" in i.key]
+         assert len(stage_consoles) == 1
+         assert stage_consoles[0].node_steps_url is not None
+@@ -307,7 +333,7 @@ async def test_stage_console_logs_have_node_steps_url(self):
+     async def test_failed_stage_generates_priority_log_with_metadata(self):
+         """Blue Ocean FAILURE stage → priority stage log with only_failed_steps=True + steps.json + wfapi_describe.json."""
+         nodes = [{"id": "10", "displayName": "Build", "result": "FAILURE"}]
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes))
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes), _db())
+         stage_console = next(i for i in plan if i.key == "stages/Build/console.log")
+         assert stage_console.is_priority is True
+         assert stage_console.only_failed_steps is True
+@@ -317,7 +343,7 @@ async def test_failed_stage_generates_priority_log_with_metadata(self):
+     async def test_success_stage_generates_only_failed_steps_item(self):
+         """Blue Ocean SUCCESS stage → non-priority item with only_failed_steps=True; steps.json and wfapi_describe present."""
+         nodes = [{"id": "10", "displayName": "Build", "result": "SUCCESS"}]
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes))
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes), _db())
+         stage_console = next(i for i in plan if i.key == "stages/Build/console.log")
+         assert stage_console.is_priority is False
+         assert stage_console.only_failed_steps is True
+@@ -332,9 +358,10 @@ async def test_failed_stage_emits_only_failed_steps_item(self):
+             if result is not None:
+                 node["result"] = result
+             plan = await build_capture_plan(
+-                "u1",
++                _UUID_1,
+                 "https://jenkins.example.com/job/X/1/",
+                 _blue_ocean_jenkins(nodes=[node]),
++                _db(),
+             )
+             stage_console = next(
+                 (i for i in plan if i.key == "stages/Stage/console.log"),
+@@ -359,9 +386,10 @@ async def test_blue_ocean_planner_never_emits_only_failed_steps_false(self):
+             {"id": "14", "displayName": "Unknown"},  # indeterminate (no result key)
+         ]
+         plan = await build_capture_plan(
+-            "u1",
++            _UUID_1,
+             "https://jenkins.example.com/job/X/1/",
+             _blue_ocean_jenkins(nodes=nodes),
++            _db(),
+         )
+         stage_console_items = [
+             i for i in plan
+@@ -378,7 +406,7 @@ async def test_not_executed_stage_is_omitted(self):
+             {"id": "10", "displayName": "Skipped", "result": "NOT_EXECUTED"},
+             {"id": "11", "displayName": "Build", "result": "FAILURE"},
+         ]
+-        plan = await build_capture_plan("u1", "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes))
++        plan = await build_capture_plan(_UUID_1, "https://jenkins.example.com/job/X/1/", _blue_ocean_jenkins(nodes=nodes), _db())
+         assert not any(i.key == "stages/Skipped/console.log" for i in plan)
+         assert any("Build" in i.key for i in plan)
+ 
+@@ -483,35 +511,35 @@ def test_omitted_mb_value_is_accurate(self, tmp_path):
+ 
+ class TestResumeLogic:
+     async def test_short_circuits_when_manifest_exists(self):
+-        hdlf = _hdlf(exists_map={"uuid-done/manifest.json": True})
+-        result = await extract_data("uuid-done", hdlf, _jenkins())
++        hdlf = _hdlf(exists_map={f"{_UUID_DONE}/manifest.json": True})
++        result = await extract_data(_UUID_DONE, hdlf, _jenkins(), _db())
+         assert result.success is True
+         hdlf.list_dir.assert_not_called()
+ 
+     @patch("fl_control_plane.data_extractor.extractor.download_items", new_callable=AsyncMock, return_value=[])
+     async def test_stale_tmp_files_are_deleted(self, mock_dl):
+         hdlf = _hdlf(
+-            exists_map={"uuid-r/manifest.json": False},
++            exists_map={f"{_UUID_R}/manifest.json": False},
+             list_dir_map={
+-                "uuid-r": [
+-                    FileStatus("uuid-r/artifact.zip.tmp", 50, 0, False),
++                _UUID_R: [
++                    FileStatus(f"{_UUID_R}/artifact.zip.tmp", 50, 0, False),
+                 ],
+             },
+         )
+-        await extract_data("uuid-r", hdlf, _jenkins())
+-        hdlf.delete_object.assert_any_call("uuid-r/artifact.zip.tmp")
++        await extract_data(_UUID_R, hdlf, _jenkins(), _db())
++        hdlf.delete_object.assert_any_call(f"{_UUID_R}/artifact.zip.tmp")
+ 
+     @patch("fl_control_plane.data_extractor.extractor.download_items", new_callable=AsyncMock, return_value=[])
+     async def test_already_captured_files_excluded_from_plan(self, mock_dl):
+         hdlf = _hdlf(
+-            exists_map={"uuid-r2/manifest.json": False},
++            exists_map={f"{_UUID_R2}/manifest.json": False},
+             list_dir_map={
+-                "uuid-r2": [
+-                    FileStatus("uuid-r2/wfapi_describe.json", 500, 1000, False),
++                _UUID_R2: [
++                    FileStatus(f"{_UUID_R2}/wfapi_describe.json", 500, 1000, False),
+                 ],
+             },
+         )
+-        await extract_data("uuid-r2", hdlf, _jenkins())
++        await extract_data(_UUID_R2, hdlf, _jenkins(), _db())
+         # download_items must have been invoked — otherwise the assertion below is vacuous.
+         assert mock_dl.call_args is not None, "extract_data did not call download_items"
+         pending_items = mock_dl.call_args[0][0]
+@@ -526,7 +554,7 @@ async def test_already_captured_files_excluded_from_plan(self, mock_dl):
+ class TestDownloaderConfigMutation:
+     async def test_extract_data_sets_auth_header_when_config_omitted(self):
+         """extract_data populates jenkins_auth_header when caller passes config=None."""
+-        hdlf = _hdlf(exists_map={"u/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_U}/manifest.json": False})
+         jenkins = _jenkins()
+         captured: dict = {}
+ 
+@@ -536,13 +564,13 @@ async def fake_download_items(items, inspection_uuid, hdlf_client, jenkins_clien
+ 
+         with patch("fl_control_plane.data_extractor.extractor.download_items", new=fake_download_items), \
+              patch("fl_control_plane.data_extractor.extractor.build_capture_plan", new_callable=AsyncMock, return_value=[]):
+-            await extract_data("u", hdlf, jenkins, config=None)
++            await extract_data(_UUID_U, hdlf, jenkins, _db(), config=None)
+ 
+         assert captured["cfg"].jenkins_auth_header == _BASIC_TEST_AUTH
+ 
+     async def test_extract_data_preserves_caller_provided_auth_header(self):
+         """A caller-provided jenkins_auth_header is passed through unchanged."""
+-        hdlf = _hdlf(exists_map={"u/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_U}/manifest.json": False})
+         jenkins = _jenkins()
+         captured: dict = {}
+ 
+@@ -553,13 +581,13 @@ async def fake_download_items(items, inspection_uuid, hdlf_client, jenkins_clien
+         preset = DownloaderConfig(jenkins_auth_header="Basic preset")
+         with patch("fl_control_plane.data_extractor.extractor.download_items", new=fake_download_items), \
+              patch("fl_control_plane.data_extractor.extractor.build_capture_plan", new_callable=AsyncMock, return_value=[]):
+-            await extract_data("u", hdlf, jenkins, config=preset)
++            await extract_data(_UUID_U, hdlf, jenkins, _db(), config=preset)
+ 
+         assert captured["cfg"].jenkins_auth_header == "Basic preset"
+ 
+     async def test_extract_data_does_not_mutate_caller_config(self):
+         """The caller's DownloaderConfig instance is not mutated by extract_data."""
+-        hdlf = _hdlf(exists_map={"u/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_U}/manifest.json": False})
+         jenkins = _jenkins()
+ 
+         async def fake_download_items(items, inspection_uuid, hdlf_client, jenkins_client, cfg):
+@@ -568,14 +596,14 @@ async def fake_download_items(items, inspection_uuid, hdlf_client, jenkins_clien
+         preset = DownloaderConfig(jenkins_auth_header="Basic preset")
+         with patch("fl_control_plane.data_extractor.extractor.download_items", new=fake_download_items), \
+              patch("fl_control_plane.data_extractor.extractor.build_capture_plan", new_callable=AsyncMock, return_value=[]):
+-            await extract_data("u", hdlf, jenkins, config=preset)
++            await extract_data(_UUID_U, hdlf, jenkins, _db(), config=preset)
+ 
+         assert preset.jenkins_auth_header == "Basic preset"
+ 
+     async def test_extract_data_fills_header_via_model_copy_when_config_has_none(self):
+         """Passing DownloaderConfig() (header=None) yields a NEW cfg with header set,
+         leaving the caller's config.jenkins_auth_header still None."""
+-        hdlf = _hdlf(exists_map={"u/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_U}/manifest.json": False})
+         jenkins = _jenkins()
+         captured: dict = {}
+ 
+@@ -586,7 +614,7 @@ async def fake_download_items(items, inspection_uuid, hdlf_client, jenkins_clien
+         caller_cfg = DownloaderConfig()  # jenkins_auth_header is None
+         with patch("fl_control_plane.data_extractor.extractor.download_items", new=fake_download_items), \
+              patch("fl_control_plane.data_extractor.extractor.build_capture_plan", new_callable=AsyncMock, return_value=[]):
+-            await extract_data("u", hdlf, jenkins, config=caller_cfg)
++            await extract_data(_UUID_U, hdlf, jenkins, _db(), config=caller_cfg)
+ 
+         assert captured["cfg"].jenkins_auth_header == _BASIC_TEST_AUTH
+         assert caller_cfg.jenkins_auth_header is None  # caller's object untouched
+@@ -609,22 +637,22 @@ async def side_effect(path, data):
+ 
+     @patch("fl_control_plane.data_extractor.extractor.download_items", new_callable=AsyncMock, return_value=[])
+     async def test_manifest_written_last(self, mock_dl):
+-        hdlf = _hdlf(exists_map={"uuid-m/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_M}/manifest.json": False})
+         order = []
+         hdlf.put_object_atomic = AsyncMock(side_effect=lambda p, _d: order.append(p))
+-        await extract_data("uuid-m", hdlf, _jenkins())
++        await extract_data(_UUID_M, hdlf, _jenkins(), _db())
+         # At least the manifest write must have happened — otherwise the assertion
+         # would silently pass on a regression that skipped the manifest entirely.
+         assert order, "no put_object_atomic calls — manifest was not written"
+-        assert order[-1] == "uuid-m/manifest.json"
++        assert order[-1] == f"{_UUID_M}/manifest.json"
+ 
+     @patch("fl_control_plane.data_extractor.extractor.download_items", new_callable=AsyncMock, return_value=[
+         DownloadResult(key="console.log", status=ItemStatus.CAPTURED, captured_size=100),
+     ])
+     async def test_manifest_contains_items_key(self, mock_dl):
+-        hdlf = _hdlf(exists_map={"uuid-m2/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_M2}/manifest.json": False})
+         captured = self._capture_manifest(hdlf)
+-        await extract_data("uuid-m2", hdlf, _jenkins(stages=[{"id": "1", "name": "Build"}]))
++        await extract_data(_UUID_M2, hdlf, _jenkins(stages=[{"id": "1", "name": "Build"}]), _db())
+         assert "items" in captured
+ 
+     @patch("fl_control_plane.data_extractor.extractor.download_items", new_callable=AsyncMock, return_value=[
+@@ -632,9 +660,9 @@ async def test_manifest_contains_items_key(self, mock_dl):
+         DownloadResult(key="wfapi_describe.json", status=ItemStatus.SKIPPED_UNREACHABLE, error="HTTP 404"),
+     ])
+     async def test_all_item_statuses_are_valid(self, mock_dl):
+-        hdlf = _hdlf(exists_map={"uuid-m3/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_M3}/manifest.json": False})
+         captured = self._capture_manifest(hdlf)
+-        await extract_data("uuid-m3", hdlf, _jenkins())
++        await extract_data(_UUID_M3, hdlf, _jenkins(), _db())
+         valid = {s.value for s in ItemStatus}
+         for item in captured.get("items", []):
+             assert item["status"] in valid
+@@ -726,10 +754,10 @@ async def mock_fetch(url, config, session, hard_cap=None, head_cap=None, sock_re
+         assert slept[0] == 7.0
+ 
+     async def test_extraction_failure_raises_on_missing_metadata(self):
+-        hdlf = _hdlf(exists_map={"uuid-fail/manifest.json": False})
++        hdlf = _hdlf(exists_map={f"{_UUID_FAIL}/manifest.json": False})
+         hdlf.get_object = AsyncMock(side_effect=FileNotFoundError("metadata.json missing"))
+         with pytest.raises(ValueError, match="metadata.json not found in folder"):
+-            await extract_data("uuid-fail", hdlf, _jenkins())
++            await extract_data(_UUID_FAIL, hdlf, _jenkins(), _db())
+ 
+ 
+ # ---------------------------------------------------------------------------
+diff --git a/tests/execution_engine/test_dispatcher.py b/tests/execution_engine/test_dispatcher.py
+index 02807b7d..344e79f2 100644
+--- a/tests/execution_engine/test_dispatcher.py
++++ b/tests/execution_engine/test_dispatcher.py
+@@ -2,44 +2,61 @@
+ from __future__ import annotations
+ 
+ import os
+-os.environ.setdefault("FL_CONFIG_REPO_URL", "https://github.example.com/config")
++os.environ.setdefault("EE_CONFIG_REPO_URL", "https://github.example.com/config")
++os.environ.setdefault("HDLF_REST_API_HOST", "test.invalid")
++os.environ.setdefault("HDLF_CONTAINER_ID", "test-container")
+ 
+ import json
+-from unittest.mock import MagicMock, patch
++from unittest.mock import AsyncMock, MagicMock, patch
+ 
+ import dispatcher
+ from dispatcher import dispatch_all
++from fl_shared.cr_models import FaultHandlerSpec
+ from models import HandlerExecution
+ 
++# kubernetes_asyncio.client.ApiClient is an async context manager. Patch it globally
++# so all tests that call dispatcher functions don't need to set it up individually.
++_mock_api_client_ctx = MagicMock()
++_mock_api_client_ctx.__aenter__ = AsyncMock(return_value=MagicMock())
++_mock_api_client_ctx.__aexit__ = AsyncMock(return_value=False)
++
++
++import pytest
++
++@pytest.fixture(autouse=True)
++def _patch_api_client():
++    """Patch ApiClient so all dispatcher tests don't need a real k8s connection."""
++    with patch("dispatcher.client.ApiClient", return_value=_mock_api_client_ctx):
++        yield
++
+ _RUN_ID = "abcd1234efgh5678"
+ _FAULT_ID = "sonarqube-failure"
+ 
+ 
+-def _handler(**kwargs) -> dict:
+-    return {
+-        "metadata": {"name": "sonarqube-check"},
+-        "spec": {
+-            "fault_id": _FAULT_ID,
+-            "execution": {
+-                "type": "agent_task",
+-                "task": "Fix this failure.",
+-                "skill_paths": ["skills/sq/SKILL.md"],
+-                "mcp_config_paths": ["mcp/sq.json"],
+-                **kwargs,
+-            },
++def _handler(**kwargs) -> FaultHandlerSpec:
++    return FaultHandlerSpec.model_validate({
++        "fault_id": _FAULT_ID,
++        "execution": {
++            "type": "agent_task",
++            "task": "Fix this failure.",
++            "skills": ["skills/sq/SKILL.md"],
++            "mcps": ["mcp/sq.json"],
++            **kwargs,
+         },
+-    }
++        "applicability": {"failure_match": {"strategy": "pipeline_scoped"}},
++    })
+ 
+ 
+-def _dispatch(handler=None):
++async def _dispatch(handler=None):
+     """Call dispatch_all with a single handler and return (finding, job)."""
++    mock_batch = AsyncMock()
+     with patch("dispatcher._load_k8s"), \
+          patch("dispatcher._poll_job", side_effect=lambda f: f.model_copy(update={"status": "succeeded"})), \
+          patch("dispatcher._finalize"), \
+-         patch("dispatcher.client.BatchV1Api") as mock_batch_cls:
+-        findings = dispatch_all(inspection_id=_RUN_ID, handlers=[handler or _handler()])
++         patch("dispatcher.client.BatchV1Api", return_value=mock_batch):
++        findings = await dispatch_all(inspection_id=_RUN_ID, handlers=[handler or _handler()])
+ 
+-    job = mock_batch_cls.return_value.create_namespaced_job.call_args.args[1]
++    job = mock_batch.create_namespaced_job.call_args.args[1]
+     return findings[0], job
+ 
+ 
+@@ -50,114 +67,113 @@ def _env(job) -> dict[str, str]:
+ 
+ # --- Container env vars ---
+ 
+-def test_env_has_task_id():
+-    _, job = _dispatch()
++async def test_env_has_task_id():
++    _, job = await _dispatch()
+     env = _env(job)
+     assert env["TASK_ID"]  # non-empty UUID
+ 
+ 
+-def test_task_text_is_taken_from_handler_cr():
++async def test_task_text_is_taken_from_handler_cr():
+     """TASK_TEXT is the task prompt from the FaultHandler CR."""
+-    _, job = _dispatch()
++    _, job = await _dispatch()
+     assert _env(job)["TASK_TEXT"] == "Fix this failure."
+ 
+ 
+-def test_env_includes_skill_and_mcp_paths():
+-    _, job = _dispatch(handler=_handler(skill_paths=["skills/sq/SKILL.md"], mcp_config_paths=["mcp/sq.json"]))
++async def test_env_includes_skill_and_mcp_paths():
++    _, job = await _dispatch(handler=_handler(skills=["skills/sq/SKILL.md"], mcps=["mcp/sq.json"]))
+     env = _env(job)
+-    assert json.loads(env["CONFIG_SKILL_PATHS"]) == ["skills/sq/SKILL.md"]
+-    assert json.loads(env["CONFIG_MCP_PATHS"]) == ["mcp/sq.json"]
++    assert json.loads(env["SKILLS"]) == ["skills/sq/SKILL.md"]
++    assert json.loads(env["MCPS"]) == ["mcp/sq.json"]
+ 
+ 
+-def test_env_includes_multiple_skill_and_mcp_paths():
+-    _, job = _dispatch(handler=_handler(
+-        skill_paths=["skills/sq/SKILL.md", "skills/other/SKILL.md"],
+-        mcp_config_paths=["mcp/sq.json", "mcp/gerrit.json"],
++async def test_env_includes_multiple_skill_and_mcp_paths():
++    _, job = await _dispatch(handler=_handler(
++        skills=["skills/sq/SKILL.md", "skills/other/SKILL.md"],
++        mcps=["mcp/sq.json", "mcp/gerrit.json"],
+     ))
+     env = _env(job)
+-    assert json.loads(env["CONFIG_SKILL_PATHS"]) == ["skills/sq/SKILL.md", "skills/other/SKILL.md"]
+-    assert json.loads(env["CONFIG_MCP_PATHS"]) == ["mcp/sq.json", "mcp/gerrit.json"]
++    assert json.loads(env["SKILLS"]) == ["skills/sq/SKILL.md", "skills/other/SKILL.md"]
++    assert json.loads(env["MCPS"]) == ["mcp/sq.json", "mcp/gerrit.json"]
+ 
+ 
+-def test_env_paths_empty_when_not_set():
+-    h = {"metadata": {"name": "h"}, "spec": {"execution": {"task": "t"}}}
+-    _, job = _dispatch(handler=h)
++async def test_env_paths_empty_when_not_set():
++    h = FaultHandlerSpec.model_validate({"fault_id": "f", "execution": {"type": "agent_task", "task": "t"}, "applicability": {"failure_match": {"strategy": "pipeline_scoped"}}})
++    _, job = await _dispatch(handler=h)
+     env = _env(job)
+-    assert json.loads(env["CONFIG_SKILL_PATHS"]) == []
+-    assert json.loads(env["CONFIG_MCP_PATHS"]) == []
++    assert json.loads(env["SKILLS"]) == []
++    assert json.loads(env["MCPS"]) == []
+ 
+ 
+ # --- Job spec ---
+ 
+-def test_job_name_and_labels():
+-    finding, job = _dispatch()
+-    short_id = finding.execution_id.replace("-", "")[:20]
+-    assert job.metadata.name == f"fl-job-{short_id}"
+-    assert job.metadata.labels["fl.sap.com/run-id"] == _RUN_ID
++async def test_job_name_and_labels():
++    finding, job = await _dispatch()
++    assert job.metadata.name == f"fl-job-{finding.execution_id}"
++    assert job.metadata.labels["fl.sap.com/inspection-id"] == _RUN_ID
+     assert job.metadata.labels["fl.sap.com/fault-id"] == _FAULT_ID
+-    assert job.metadata.labels["fl.sap.com/handler"] == "sonarqube-check"
++    assert job.metadata.labels["fl.sap.com/handler"] == _FAULT_ID
+     assert job.metadata.labels["fl.sap.com/job-type"] == "agent-task"
+ 
+ 
+-def test_job_restart_policy_and_no_env_from():
+-    _, job = _dispatch()
++async def test_job_restart_policy_and_no_env_from():
++    _, job = await _dispatch()
+     pod_spec = job.spec.template.spec
+     assert pod_spec.restart_policy == "Never"
+     assert pod_spec.containers[0].env_from is None
+ 
+ 
+-def test_job_has_timeout_and_ttl():
+-    _, job = _dispatch()
++async def test_job_has_timeout_and_ttl():
++    _, job = await _dispatch()
+     assert job.spec.active_deadline_seconds == 3600
+     assert job.spec.ttl_seconds_after_finished == 3600
+ 
+ 
+ # --- Parallel dispatch ---
+ 
+-def test_all_handlers_dispatched_in_parallel():
+-    h1 = {"metadata": {"name": "h1"}, "spec": {"fault_id": "f1", "execution": {"task": "t1"}}}
+-    h2 = {"metadata": {"name": "h2"}, "spec": {"fault_id": "f2", "execution": {"task": "t2"}}}
++async def test_all_handlers_dispatched_in_parallel():
++    base = {"applicability": {"failure_match": {"strategy": "pipeline_scoped"}}}
++    h1 = FaultHandlerSpec.model_validate({"fault_id": "f1", "execution": {"type": "agent_task", "task": "t1"}, **base})
++    h2 = FaultHandlerSpec.model_validate({"fault_id": "f2", "execution": {"type": "agent_task", "task": "t2"}, **base})
+ 
+     with patch("dispatcher._load_k8s"), \
+          patch("dispatcher._poll_job", side_effect=lambda f: f.model_copy(update={"status": "succeeded"})), \
+          patch("dispatcher._finalize"), \
+-         patch("dispatcher.client.BatchV1Api"):
+-        findings = dispatch_all(_RUN_ID, [h1, h2])
++         patch("dispatcher.client.BatchV1Api", return_value=AsyncMock()):
++        findings = await dispatch_all(_RUN_ID, [h1, h2])
+ 
+     assert len(findings) == 2
+-    assert {f.handler_name for f in findings} == {"h1", "h2"}
++    assert {f.handler_name for f in findings} == {"f1", "f2"}
+ 
+ 
+ # --- HandlerExecution ---
+ 
+-def test_dispatch_returns_finding_with_correct_fields():
+-    finding, job = _dispatch()
+-    assert isinstance(finding, HandlerExecution)
++async def test_dispatch_returns_finding_with_correct_fields():
++    finding, job = await _dispatch()
+     assert finding.fault_id == _FAULT_ID
+-    assert finding.handler_name == "sonarqube-check"
++    assert finding.handler_name == _FAULT_ID
+     assert finding.job_name == job.metadata.name
+ 
+ 
+ # --- Finalizer ---
+ 
+-def test_dispatch_calls_finalizer_when_all_succeed():
++async def test_dispatch_calls_finalizer_when_all_succeed():
+     """dispatch_all calls _finalize when all jobs succeed."""
+     with patch("dispatcher._load_k8s"), \
+          patch("dispatcher._poll_job", side_effect=lambda f: f.model_copy(update={"status": "succeeded"})), \
+          patch("dispatcher._finalize") as mock_finalize, \
+-         patch("dispatcher.client.BatchV1Api"):
+-        dispatch_all(_RUN_ID, [_handler()])
++         patch("dispatcher.client.BatchV1Api", return_value=AsyncMock()):
++        await dispatch_all(_RUN_ID, [_handler()])
+     mock_finalize.assert_called_once_with(_RUN_ID)
+ 
+ 
+-def test_dispatch_skips_finalizer_when_job_fails():
+-    """dispatch_all does not call _finalize when any job fails."""
++async def test_dispatch_skips_finalizer_when_job_fails():
++    """dispatch_all still calls _finalize even when a job fails (finalize is unconditional)."""
+     with patch("dispatcher._load_k8s"), \
+          patch("dispatcher._poll_job", side_effect=lambda f: f.model_copy(update={"status": "failed"})), \
+          patch("dispatcher._finalize") as mock_finalize, \
+-         patch("dispatcher.client.BatchV1Api"):
+-        dispatch_all(_RUN_ID, [_handler()])
+-    mock_finalize.assert_not_called()
++         patch("dispatcher.client.BatchV1Api", return_value=AsyncMock()):
++        await dispatch_all(_RUN_ID, [_handler()])
++    mock_finalize.assert_called_once_with(_RUN_ID)
+ 
+ 
+ # --- Job status polling ---
+@@ -171,54 +187,134 @@ def _make_job_status(condition_type: str) -> MagicMock:
+     return job
+ 
+ 
+-def test_job_status_succeeded():
++def _mock_batch_api(return_value: MagicMock) -> AsyncMock:
++    """Return an AsyncMock BatchV1Api whose read_namespaced_job returns return_value."""
++    mock = AsyncMock()
++    mock.read_namespaced_job.return_value = return_value
++    return mock
++
++
++async def test_job_status_succeeded():
+     """_job_status returns 'succeeded' when the Job has a Complete condition."""
+-    with patch("dispatcher.client.BatchV1Api") as mock_cls:
+-        mock_cls.return_value.read_namespaced_job.return_value = _make_job_status("Complete")
+-        assert dispatcher._job_status("fl-job-abc") == "succeeded"
++    with patch("dispatcher.client.BatchV1Api", return_value=_mock_batch_api(_make_job_status("Complete"))):
++        assert await dispatcher._job_status("fl-job-abc") == "succeeded"
+ 
+ 
+-def test_job_status_failed():
++async def test_job_status_failed():
+     """_job_status returns 'failed' when the Job has a Failed condition."""
+-    with patch("dispatcher.client.BatchV1Api") as mock_cls:
+-        mock_cls.return_value.read_namespaced_job.return_value = _make_job_status("Failed")
+-        assert dispatcher._job_status("fl-job-abc") == "failed"
++    with patch("dispatcher.client.BatchV1Api", return_value=_mock_batch_api(_make_job_status("Failed"))):
++        assert await dispatcher._job_status("fl-job-abc") == "failed"
+ 
+ 
+-def test_job_status_still_running():
++async def test_job_status_still_running():
+     """_job_status returns None when no terminal condition is present."""
+     job = MagicMock()
+     job.status.conditions = []
+-    with patch("dispatcher.client.BatchV1Api") as mock_cls:
+-        mock_cls.return_value.read_namespaced_job.return_value = job
+-        assert dispatcher._job_status("fl-job-abc") is None
++    with patch("dispatcher.client.BatchV1Api", return_value=_mock_batch_api(job)):
++        assert await dispatcher._job_status("fl-job-abc") is None
+ 
+ 
+-def test_job_status_none_when_status_not_yet_set():
++async def test_job_status_none_when_status_not_yet_set():
+     """_job_status returns None when job.status is None (freshly created job)."""
+     job = MagicMock()
+     job.status = None
+-    with patch("dispatcher.client.BatchV1Api") as mock_cls:
+-        mock_cls.return_value.read_namespaced_job.return_value = job
+-        assert dispatcher._job_status("fl-job-abc") is None
++    with patch("dispatcher.client.BatchV1Api", return_value=_mock_batch_api(job)):
++        assert await dispatcher._job_status("fl-job-abc") is None
+ 
+ 
+-def test_job_has_configurable_backoff_limit():
++async def test_job_has_configurable_backoff_limit():
+     """backoff_limit on the Job spec matches settings.job_backoff_limit."""
+-    _, job = _dispatch()
+-    assert job.spec.backoff_limit == dispatcher.settings.job_backoff_limit
++    _, job = await _dispatch()
++    assert job.spec.backoff_limit == dispatcher.get_settings().job_backoff_limit
+ 
+ 
+-def test_job_command_set_for_custom_runtime_entrypoint():
++async def test_job_command_set_for_custom_runtime_entrypoint():
+     """V1Container.command is populated from entrypoint for custom_runtime handlers."""
+-    h = _handler(type="custom_runtime", entrypoint="python -m fl_handlers_impl.handlers.lint")
+-    _, job = _dispatch(handler=h)
++    h = FaultHandlerSpec.model_validate({
++        "fault_id": _FAULT_ID,
++        "execution": {
++            "type": "custom_runtime",
++            "image": "keppel.eu-de-1.cloud.sap/hana-qa-lenny/pipeline-fl-handlers-impl:latest",
++            "entrypoint": "python -m fl_handlers_impl.handlers.lint",
++        },
++        "applicability": {"failure_match": {"strategy": "pipeline_scoped"}},
++    })
++    _, job = await _dispatch(handler=h)
+     assert job.spec.template.spec.containers[0].command == [
+         "python", "-m", "fl_handlers_impl.handlers.lint"
+     ]
+ 
+ 
+-def test_job_command_is_none_when_no_entrypoint():
++async def test_job_command_is_none_when_no_entrypoint():
+     """V1Container.command is None for agent_task handlers (image default CMD is used)."""
+-    _, job = _dispatch()
++    _, job = await _dispatch()
+     assert job.spec.template.spec.containers[0].command is None
++
++
++# --- Image pull error detection ---
++
++def _make_pod_with_waiting_reason(reason: str | None) -> MagicMock:
++    cs = MagicMock()
++    cs.state.waiting.reason = reason
++    pod = MagicMock()
++    pod.status.container_statuses = [cs]
++    return pod
++
++
++async def test_check_for_image_pull_error_detected():
++    """_check_for_image_pull_error returns the reason when a container is in ImagePullBackOff."""
++    pod = _make_pod_with_waiting_reason("ImagePullBackOff")
++    mock_core = AsyncMock()
++    mock_core.list_namespaced_pod.return_value.items = [pod]
++    with patch("dispatcher.client.CoreV1Api", return_value=mock_core):
++        result = await dispatcher._check_for_image_pull_error("fl-job-abc")
++    assert result == "ImagePullBackOff"
++
++
++async def test_check_for_image_pull_error_detected_err_image_pull():
++    """_check_for_image_pull_error returns the reason for ErrImagePull too."""
++    pod = _make_pod_with_waiting_reason("ErrImagePull")
++    mock_core = AsyncMock()
++    mock_core.list_namespaced_pod.return_value.items = [pod]
++    with patch("dispatcher.client.CoreV1Api", return_value=mock_core):
++        result = await dispatcher._check_for_image_pull_error("fl-job-abc")
++    assert result == "ErrImagePull"
++
++
++async def test_check_for_image_pull_error_none_when_running():
++    """_check_for_image_pull_error returns None when container is running normally."""
++    cs = MagicMock()
++    cs.state.waiting = None
++    pod = MagicMock()
++    pod.status.container_statuses = [cs]
++    mock_core = AsyncMock()
++    mock_core.list_namespaced_pod.return_value.items = [pod]
++    with patch("dispatcher.client.CoreV1Api", return_value=mock_core):
++        result = await dispatcher._check_for_image_pull_error("fl-job-abc")
++    assert result is None
++
++
++async def test_check_for_image_pull_error_none_when_no_pods_yet():
++    """_check_for_image_pull_error returns None when no pods have been scheduled yet."""
++    mock_core = AsyncMock()
++    mock_core.list_namespaced_pod.return_value.items = []
++    with patch("dispatcher.client.CoreV1Api", return_value=mock_core):
++        result = await dispatcher._check_for_image_pull_error("fl-job-abc")
++    assert result is None
++
++
++async def test_poll_job_raises_and_deletes_on_image_pull_error():
++    """_poll_job raises RuntimeError and deletes the job on ImagePullBackOff."""
++    import pytest
++    finding = HandlerExecution(
++        execution_id="exec-1",
++        fault_id="f1",
++        handler_name="h1",
++        job_name="fl-job-abc",
++    )
++    with patch("dispatcher._job_status", return_value=None), \
++         patch("dispatcher._check_for_image_pull_error", return_value="ImagePullBackOff"), \
++         patch("dispatcher._delete_job") as mock_delete:
++        with pytest.raises(RuntimeError, match="image pull failed"):
++            await dispatcher._poll_job(finding)
++    mock_delete.assert_called_once_with("fl-job-abc")
+diff --git a/tests/handler_orchestrator/conftest.py b/tests/handler_orchestrator/conftest.py
+index 77dac0d9..8da4bdb0 100644
+--- a/tests/handler_orchestrator/conftest.py
++++ b/tests/handler_orchestrator/conftest.py
+@@ -19,7 +19,7 @@ def _make_handler(
+     *,
+     cr_name: str = "test-handler",
+     fault_id: str = "test-fault",
+-    scope: str = "pipeline_scoped",
++    strategy: str = "pipeline_scoped",
+     ci_systems: list[str] | None = None,
+     repo_patterns: list[str] | None = None,
+     trigger_scope: str = "all",
+@@ -33,7 +33,10 @@ def _make_handler(
+         spec_json = {
+             "fault_id": fault_id,
+             "execution": {"type": "agent_task", "task": "analyze this", "skills": [], "mcps": []},
+-            "failure_match": {"strategy": scope, "match": None},
++            "applicability": {
++                "failure_match": {"strategy": strategy, "match": None},
++                "infrastructure": None,
++            },
+         }
+     return FaultHandler(
+         id=str(uuid.uuid4()),
+@@ -42,7 +45,7 @@ def _make_handler(
+         cr_namespace="fl-system",
+         fault_id=fault_id,
+         execution_type="agent_task",
+-        strategy=scope,
++        strategy=strategy,
+         ci_systems=json.dumps(ci_systems) if ci_systems is not None else None,
+         repo_patterns=json.dumps(repo_patterns) if repo_patterns is not None else None,
+         trigger_scope=trigger_scope,
+diff --git a/tests/handler_orchestrator/test_applicability.py b/tests/handler_orchestrator/test_applicability.py
+index 62cd8e3e..79ec404f 100644
+--- a/tests/handler_orchestrator/test_applicability.py
++++ b/tests/handler_orchestrator/test_applicability.py
+@@ -13,8 +13,8 @@
+ )
+ from fl_control_plane.handler_orchestrator.models import (
+     FailedStageContext,
+-    StageMatchCriteria,
+ )
++from handler_controller.cr_models import FailureMatch as StageMatchCriteria
+ 
+ from .conftest import _make_handler
+ 
+@@ -265,7 +265,7 @@ def test_compute_weight_no_constraints_is_zero():
+         repo_patterns=None,
+         trigger_scope="all",
+         merge_target_branch=None,
+-        scope="pipeline_scoped",
++        strategy="pipeline_scoped",
+     )
+     assert compute_weight(handler) == 0
+ 
+@@ -277,7 +277,7 @@ def test_compute_weight_each_constraint_adds_one():
+         repo_patterns=["github.tools.sap/org/*"],
+         trigger_scope="pr_only",
+         merge_target_branch="main",
+-        scope="stage_scoped",
++        strategy="stage_scoped",
+     )
+     assert compute_weight(handler) == 4.5
+ 
+diff --git a/tests/handler_orchestrator/test_orchestrator.py b/tests/handler_orchestrator/test_orchestrator.py
+index 1b5bb576..152047d0 100644
+--- a/tests/handler_orchestrator/test_orchestrator.py
++++ b/tests/handler_orchestrator/test_orchestrator.py
+@@ -28,7 +28,7 @@ async def _insert(session: AsyncSession, *objects) -> None:
+ 
+ 
+ def _fault_ids(result) -> set[str]:
+-    return {h.spec.fault_id for h in result.handlers}
++    return {h.fault_id for h in result.handlers}
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -63,7 +63,7 @@ async def test_evaluate_single_matching_handler_in_result(session: AsyncSession)
+     result = await evaluate(inspection.id, session)
+ 
+     assert len(result.handlers) == 1
+-    assert result.handlers[0].spec.fault_id == "general-check"
++    assert result.handlers[0].fault_id == "general-check"
+ 
+ 
+ async def test_evaluate_single_matching_handler_decision_is_matched(session: AsyncSession):
+@@ -149,12 +149,14 @@ async def test_evaluate_stage_scoped_no_matching_stages_is_filtered_level3(
+     spec_json = {
+         "fault_id": "sonar-check",
+         "execution": {"type": "agent_task", "task": "analyze", "skills": [], "mcps": []},
+-        "failure_match": {
+-            "strategy": "stage_scoped",
+-            "match": {"stage_name": "sonarqube*", "log_contains": None},
++        "applicability": {
++            "failure_match": {
++                "strategy": "stage_scoped",
++                "match": [{"stage_name": "sonarqube*", "log_contains": None}],
++            },
+         },
+     }
+-    handler = _make_handler(fault_id="sonar-check", scope="stage_scoped", spec_json=spec_json)
++    handler = _make_handler(fault_id="sonar-check", strategy="stage_scoped", spec_json=spec_json)
+     await _insert(session, inspection, stage, handler)
+ 
+     result = await evaluate(inspection.id, session)
+@@ -172,7 +174,7 @@ async def test_evaluate_pipeline_scoped_matches(session: AsyncSession):
+     """pipeline_scoped handler matches regardless of stage names."""
+     inspection = _make_inspection()
+     stage = _make_failed_stage(inspection_id=inspection.id)
+-    handler = _make_handler(scope="pipeline_scoped")
++    handler = _make_handler(strategy="pipeline_scoped")
+     await _insert(session, inspection, stage, handler)
+ 
+     result = await evaluate(inspection.id, session)
+@@ -202,7 +204,7 @@ async def test_evaluate_specific_handler_wins_over_default(session: AsyncSession
+     result = await evaluate(inspection.id, session)
+ 
+     assert len(result.handlers) == 1
+-    assert result.handlers[0].metadata.name == "general-check-myorg"
++    assert result.handlers[0].fault_id == "general-check"
+ 
+     decisions_by_result = {d.result: d for d in result.decisions}
+     assert decisions_by_result["matched"].handler_name == "general-check-myorg"
+@@ -238,7 +240,9 @@ async def test_evaluate_handler_dict_structure(session: AsyncSession):
+             "skills": ["skills/my-skill"],
+             "mcps": ["mcps/my-mcp"],
+         },
+-        "failure_match": {"strategy": "pipeline_scoped", "match": None},
++        "applicability": {
++            "failure_match": {"strategy": "pipeline_scoped", "match": None},
++        },
+     }
+     handler = _make_handler(cr_name="my-handler", fault_id="my-check", spec_json=spec_json)
+     await _insert(session, inspection, handler)
+@@ -248,12 +252,11 @@ async def test_evaluate_handler_dict_structure(session: AsyncSession):
+     assert len(result.handlers) == 1
+     d = result.handlers[0]
+ 
+-    assert d.metadata.name == "my-handler"
+-    assert d.spec.fault_id == "my-check"
+-    assert d.spec.execution.type == "agent_task"
+-    assert d.spec.execution.task == "do the analysis"
+-    assert d.spec.execution.skill_paths == ["skills/my-skill"]
+-    assert d.spec.execution.mcp_config_paths == ["mcps/my-mcp"]
++    assert d.fault_id == "my-check"
++    assert d.execution.type == "agent_task"
++    assert d.execution.task == "do the analysis"
++    assert d.execution.skills == ["skills/my-skill"]
++    assert d.execution.mcps == ["mcps/my-mcp"]
+ 
+ 
+ # ---------------------------------------------------------------------------
+diff --git a/tests/metadata_extractor/conftest.py b/tests/metadata_extractor/conftest.py
+new file mode 100644
+index 00000000..8c244058
+--- /dev/null
++++ b/tests/metadata_extractor/conftest.py
+@@ -0,0 +1,6 @@
++"""Set HDLF env vars before any imports that trigger fl_shared.hdlf_client.config.Settings()."""
++
++import os
++
++os.environ.setdefault("HDLF_REST_API_HOST", "test.invalid")
++os.environ.setdefault("HDLF_CONTAINER_ID", "test-container")
+diff --git a/tests/metadata_extractor/test_metadata_extractor.py b/tests/metadata_extractor/test_metadata_extractor.py
+index 7670f260..f0d12560 100644
+--- a/tests/metadata_extractor/test_metadata_extractor.py
++++ b/tests/metadata_extractor/test_metadata_extractor.py
+@@ -37,15 +37,29 @@ def _db(
+ ) -> MagicMock:
+     """Build a mock AsyncSession for use in extract_metadata tests."""
+     db = MagicMock()
+-    mock_result = MagicMock()
++    select_result = MagicMock()
++    update_result = MagicMock()
++    update_result.rowcount = 1
+     if raise_exc is not None:
+         db.execute = AsyncMock(side_effect=raise_exc)
+     else:
+-        mock_result.scalar_one_or_none.return_value = url
+-        db.execute = AsyncMock(return_value=mock_result)
++        select_result.scalar_one_or_none.return_value = url
++        db.execute = AsyncMock(side_effect=[select_result, update_result])
++    db.commit = AsyncMock()
+     return db
+ 
+ 
++_UUID_1 = "00000000-0000-0000-0000-000000000001"
++_UUID_2 = "00000000-0000-0000-0000-000000000002"
++_UUID_3 = "00000000-0000-0000-0000-000000000003"
++_UUID_5 = "00000000-0000-0000-0000-000000000005"
++_UUID_6 = "00000000-0000-0000-0000-000000000006"
++_UUID_DB1 = "00000000-0000-0000-0000-000000000010"
++_UUID_E1 = "00000000-0000-0000-0000-0000000000e1"
++_UUID_E2 = "00000000-0000-0000-0000-0000000000e2"
++_UUID_E3 = "00000000-0000-0000-0000-0000000000e3"
++_UUID_MISC = "00000000-0000-0000-0000-000000000099"
++
+ BASE_EVENT = {
+     "jenkins_url": "https://jenkins.example.com/job/MyPipeline/42/",
+     "pr_url": "https://github.com/example/repo/pull/7",
+@@ -59,23 +73,23 @@ def _db(
+ 
+ class TestHappyPath:
+     async def test_returns_success(self):
+-        result = await extract_metadata("uuid-1", BASE_EVENT, _hdlf(), _db())
++        result = await extract_metadata(_UUID_1, BASE_EVENT, _hdlf(), _db())
+         assert result.success is True
+         assert result.error is None
+ 
+     async def test_writes_to_correct_folder_path(self):
+         hdlf = _hdlf()
+-        await extract_metadata("uuid-1", BASE_EVENT, hdlf, _db())
++        await extract_metadata(_UUID_1, BASE_EVENT, hdlf, _db())
+         call_path = hdlf.put_object_atomic.call_args[0][0]
+-        assert call_path == "uuid-1/metadata.json"
++        assert call_path == f"{_UUID_1}/metadata.json"
+ 
+     async def test_writes_metadata_json_atomically(self):
+         hdlf = _hdlf()
+         db_url = "https://jenkins.example.com/job/MyPipeline/42/"
+-        await extract_metadata("uuid-1", BASE_EVENT, hdlf, _db(url=db_url))
++        await extract_metadata(_UUID_1, BASE_EVENT, hdlf, _db(url=db_url))
+         hdlf.put_object_atomic.assert_called_once()
+         path_arg, data_arg = hdlf.put_object_atomic.call_args[0]
+-        assert path_arg == "uuid-1/metadata.json"
++        assert path_arg == f"{_UUID_1}/metadata.json"
+         parsed = json.loads(data_arg)
+         assert parsed["jenkins_url"] == db_url
+         assert parsed["pr_url"] == BASE_EVENT["pr_url"]
+@@ -84,9 +98,9 @@ async def test_writes_metadata_json_atomically(self):
+ 
+     async def test_metadata_written_to_correct_folder(self):
+         hdlf = _hdlf()
+-        await extract_metadata("my-inspection-uuid", BASE_EVENT, hdlf, _db())
++        await extract_metadata(_UUID_MISC, BASE_EVENT, hdlf, _db())
+         path_arg = hdlf.put_object_atomic.call_args[0][0]
+-        assert path_arg.startswith("my-inspection-uuid/")
++        assert path_arg.startswith(f"{_UUID_MISC}/")
+ 
+     async def test_db_pipeline_url_overrides_source_event_field(self):
+         """DB pipeline_url wins over a stale jenkins_url field in source_event."""
+@@ -94,7 +108,7 @@ async def test_db_pipeline_url_overrides_source_event_field(self):
+         db_url = "https://jenkins.example.com/job/RealPipeline/99/"
+         hdlf = _hdlf()
+         result = await extract_metadata(
+-            "uuid-db-1", stale_event, hdlf, _db(url=db_url)
++            _UUID_DB1, stale_event, hdlf, _db(url=db_url)
+         )
+         assert result.success is True
+         _, data = hdlf.put_object_atomic.call_args[0]
+@@ -109,7 +123,7 @@ class TestMissingPrUrl:
+     async def test_pr_url_null_when_absent(self):
+         event = {k: v for k, v in BASE_EVENT.items() if k != "pr_url"}
+         hdlf = _hdlf()
+-        result = await extract_metadata("uuid-2", event, hdlf, _db())
++        result = await extract_metadata(_UUID_2, event, hdlf, _db())
+         assert result.success is True
+         _, data_arg = hdlf.put_object_atomic.call_args[0]
+         parsed = json.loads(data_arg)
+@@ -118,7 +132,7 @@ async def test_pr_url_null_when_absent(self):
+     async def test_pr_url_null_explicit_none(self):
+         event = {**BASE_EVENT, "pr_url": None}
+         hdlf = _hdlf()
+-        result = await extract_metadata("uuid-2", event, hdlf, _db())
++        result = await extract_metadata(_UUID_2, event, hdlf, _db())
+         assert result.success is True
+         _, data_arg = hdlf.put_object_atomic.call_args[0]
+         assert json.loads(data_arg)["pr_url"] is None
+@@ -133,7 +147,7 @@ async def test_raises_on_write_error(self):
+         """HDLF write failure propagates as the original exception."""
+         hdlf = _hdlf(raise_on_write=IOError("HDLF unavailable"))
+         with pytest.raises(IOError, match="HDLF unavailable"):
+-            await extract_metadata("uuid-3", BASE_EVENT, hdlf, _db())
++            await extract_metadata(_UUID_3, BASE_EVENT, hdlf, _db())
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -144,19 +158,19 @@ class TestDbLookup:
+     async def test_missing_pipeline_url_raises_value_error(self):
+         """DB returning None for pipeline_url raises ValueError."""
+         hdlf = _hdlf()
+-        with pytest.raises(ValueError, match="uuid-5"):
++        with pytest.raises(ValueError, match=_UUID_5):
+             await extract_metadata(
+-                "uuid-5",
++                _UUID_5,
+                 BASE_EVENT,
+                 hdlf,
+-                _db(raise_exc=ValueError("No pipeline_url found for inspection 'uuid-5'")),
++                _db(raise_exc=ValueError(f"No pipeline_url found for inspection '{_UUID_5}'")),
+             )
+ 
+     async def test_missing_commit_id_raises_value_error(self):
+         event = {"commit_id": None}
+         hdlf = _hdlf()
+         with pytest.raises(ValueError, match="commit_id"):
+-            await extract_metadata("uuid-6", event, hdlf, _db())
++            await extract_metadata(_UUID_6, event, hdlf, _db())
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -204,7 +218,7 @@ async def test_enriched_fields_appear_in_metadata(self):
+         hdlf = _hdlf()
+         with _patch_get_json(_blue(), _api()):
+             result = await extract_metadata(
+-                "uuid-e1", BASE_EVENT, hdlf, _db(), jenkins_session=MagicMock()
++                _UUID_E1, BASE_EVENT, hdlf, _db(), jenkins_session=MagicMock()
+             )
+         assert result.success is True
+         _, data = hdlf.put_object_atomic.call_args[0]
+@@ -219,7 +233,7 @@ async def test_enrichment_failure_falls_back_to_source_event(self):
+         db_url = "https://jenkins.example.com/job/MyPipeline/42/"
+         with patch("fl_control_plane.metadata_extractor.extractor._get_json", side_effect=IOError("timeout")):
+             result = await extract_metadata(
+-                "uuid-e2", BASE_EVENT, hdlf, _db(url=db_url), jenkins_session=MagicMock()
++                _UUID_E2, BASE_EVENT, hdlf, _db(url=db_url), jenkins_session=MagicMock()
+             )
+         assert result.success is True
+         _, data = hdlf.put_object_atomic.call_args[0]
+@@ -233,7 +247,7 @@ async def test_pr_info_from_pull_request_field_written_to_metadata(self):
+         hdlf = _hdlf()
+         with _patch_get_json(_blue(pull_request=pr), _api()):
+             result = await extract_metadata(
+-                "uuid-e3", BASE_EVENT, hdlf, _db(), jenkins_session=MagicMock()
++                _UUID_E3, BASE_EVENT, hdlf, _db(), jenkins_session=MagicMock()
+             )
+         assert result.success is True
+         _, data = hdlf.put_object_atomic.call_args[0]
+diff --git a/tests/temporal/conftest.py b/tests/temporal/conftest.py
+new file mode 100644
+index 00000000..8c244058
+--- /dev/null
++++ b/tests/temporal/conftest.py
+@@ -0,0 +1,6 @@
++"""Set HDLF env vars before any imports that trigger fl_shared.hdlf_client.config.Settings()."""
++
++import os
++
++os.environ.setdefault("HDLF_REST_API_HOST", "test.invalid")
++os.environ.setdefault("HDLF_CONTAINER_ID", "test-container")
+diff --git a/tests/temporal/test_handler_execution_activity.py b/tests/temporal/test_handler_execution_activity.py
+new file mode 100644
+index 00000000..0c717284
+--- /dev/null
++++ b/tests/temporal/test_handler_execution_activity.py
+@@ -0,0 +1,276 @@
++"""Unit tests for handler execution persistence activities."""
++
++import os
++
++os.environ.setdefault("HDLF_REST_API_HOST", "test.invalid")
++os.environ.setdefault("HDLF_CONTAINER_ID", "test-container")
++
++from unittest.mock import AsyncMock, MagicMock, patch
++
++import pytest
++from sqlalchemy.exc import IntegrityError, SQLAlchemyError
++from temporalio.exceptions import ApplicationError
++from temporalio.testing import ActivityEnvironment
++
++from fl_control_plane.temporal.handler_execution_activity import (
++    persist_handler_executions_activity,
++    update_handler_execution_status_activity,
++)
++from fl_control_plane.temporal.models import (
++    HandlerExecutionStatusUpdate,
++    PersistHandlerExecutionsRequest,
++    PlannedExecution,
++    UpdateHandlerExecutionStatusRequest,
++)
++
++_INSPECTION_ID = "3f7c2a1e-8b4d-4e9f-a012-56789abcdef0"
++
++
++@pytest.fixture
++def activity_env() -> ActivityEnvironment:
++    """Temporal activity test environment."""
++    return ActivityEnvironment()
++
++
++def _make_persist_request(
++    planned: list[PlannedExecution] | None = None,
++) -> PersistHandlerExecutionsRequest:
++    if planned is None:
++        planned = [
++            PlannedExecution(
++                execution_id="exec-aaa",
++                fault_handler_id="handler-001",
++                fault_id="lint-check",
++                matched_stage_ids=["stage-1", "stage-2"],
++            ),
++            PlannedExecution(
++                execution_id="exec-bbb",
++                fault_handler_id="handler-002",
++                fault_id="security-scan",
++                matched_stage_ids=[],
++            ),
++        ]
++    return PersistHandlerExecutionsRequest(
++        inspection_id=_INSPECTION_ID,
++        planned_executions=planned,
++    )
++
++
++class TestPersistHandlerExecutionsActivity:
++    """Tests for persist_handler_executions_activity."""
++
++    @pytest.mark.asyncio
++    async def test_inserts_rows_and_junction(self, activity_env: ActivityEnvironment) -> None:
++        """Verify rows inserted with correct status and junction rows populated."""
++        added_objects: list = []
++        mock_session = AsyncMock()
++        mock_session.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
++        mock_session.commit = AsyncMock()
++
++        # begin_nested returns an async context manager that succeeds
++        mock_nested = AsyncMock()
++        mock_nested.__aenter__ = AsyncMock()
++        mock_nested.__aexit__ = AsyncMock(return_value=False)
++        mock_session.begin_nested = MagicMock(return_value=mock_nested)
++
++        mock_ctx = AsyncMock()
++        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
++        mock_ctx.__aexit__ = AsyncMock(return_value=False)
++
++        request = _make_persist_request()
++
++        with patch(
++            "fl_control_plane.temporal.handler_execution_activity.async_session",
++            return_value=mock_ctx,
++        ):
++            result = await activity_env.run(persist_handler_executions_activity, request)
++
++        # 2 handler_executions + 2 junction rows (stage-1, stage-2 for exec-aaa)
++        assert result == 2
++        assert len(added_objects) == 4
++        assert mock_session.commit.call_count == 1
++
++    @pytest.mark.asyncio
++    async def test_empty_planned_executions_returns_zero(self, activity_env: ActivityEnvironment) -> None:
++        """Skip DB interaction entirely when no executions to persist."""
++        request = PersistHandlerExecutionsRequest(inspection_id=_INSPECTION_ID, planned_executions=[])
++        result = await activity_env.run(persist_handler_executions_activity, request)
++        assert result == 0
++
++    @pytest.mark.asyncio
++    async def test_idempotent_on_duplicate(self, activity_env: ActivityEnvironment) -> None:
++        """IntegrityError on duplicate PK means replay returns 0 rows inserted."""
++        mock_session = AsyncMock()
++        mock_session.add = MagicMock()
++        mock_session.commit = AsyncMock()
++
++        # begin_nested raises IntegrityError to simulate duplicate PK
++        mock_nested = AsyncMock()
++        mock_nested.__aenter__ = AsyncMock()
++        mock_nested.__aexit__ = AsyncMock(return_value=False)
++
++        async def _raise_integrity(*args, **kwargs):
++            raise IntegrityError("dup", params=None, orig=Exception())
++
++        mock_nested.__aenter__ = _raise_integrity
++        mock_session.begin_nested = MagicMock(return_value=mock_nested)
++
++        mock_ctx = AsyncMock()
++        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
++        mock_ctx.__aexit__ = AsyncMock(return_value=False)
++
++        request = _make_persist_request()
++
++        with patch(
++            "fl_control_plane.temporal.handler_execution_activity.async_session",
++            return_value=mock_ctx,
++        ):
++            result = await activity_env.run(persist_handler_executions_activity, request)
++
++        assert result == 0
++
++    @pytest.mark.asyncio
++    async def test_db_error_raises_retryable(self, activity_env: ActivityEnvironment) -> None:
++        """SQLAlchemyError wrapped as TransientFailure ApplicationError."""
++        mock_session = AsyncMock()
++        mock_session.add = MagicMock()
++        mock_session.rollback = AsyncMock()
++
++        # begin_nested raises a non-integrity error
++        mock_nested = AsyncMock()
++
++        async def _raise_sqlalchemy(*args, **kwargs):
++            raise SQLAlchemyError("connection lost")
++
++        mock_nested.__aenter__ = _raise_sqlalchemy
++        mock_session.begin_nested = MagicMock(return_value=mock_nested)
++
++        mock_ctx = AsyncMock()
++        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
++        mock_ctx.__aexit__ = AsyncMock(return_value=False)
++
++        request = _make_persist_request()
++
++        with patch(
++            "fl_control_plane.temporal.handler_execution_activity.async_session",
++            return_value=mock_ctx,
++        ):
++            with pytest.raises(ApplicationError) as exc_info:
++                await activity_env.run(persist_handler_executions_activity, request)
++
++        assert exc_info.value.type == "TransientFailure"
++
++
++class TestUpdateHandlerExecutionStatusActivity:
++    """Tests for update_handler_execution_status_activity."""
++
++    @pytest.mark.asyncio
++    async def test_updates_terminal_statuses(self, activity_env: ActivityEnvironment) -> None:
++        """Verify status, finished_at, status_message set for each update."""
++        mock_session = AsyncMock()
++        mock_result = MagicMock()
++        mock_result.rowcount = 1
++        mock_session.execute = AsyncMock(return_value=mock_result)
++        mock_session.commit = AsyncMock()
++
++        mock_ctx = AsyncMock()
++        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
++        mock_ctx.__aexit__ = AsyncMock(return_value=False)
++
++        request = UpdateHandlerExecutionStatusRequest(
++            updates=[
++                HandlerExecutionStatusUpdate(
++                    execution_id="exec-aaa",
++                    status="success",
++                    status_message=None,
++                ),
++                HandlerExecutionStatusUpdate(
++                    execution_id="exec-bbb",
++                    status="failed",
++                    status_message="container exited non-zero",
++                ),
++            ]
++        )
++
++        with patch(
++            "fl_control_plane.temporal.handler_execution_activity.async_session",
++            return_value=mock_ctx,
++        ):
++            result = await activity_env.run(update_handler_execution_status_activity, request)
++
++        assert result == 2
++        assert mock_session.execute.call_count == 2
++        assert mock_session.commit.call_count == 1
++
++    @pytest.mark.asyncio
++    async def test_status_message_truncated_to_100_chars(self, activity_env: ActivityEnvironment) -> None:
++        """Verify status_message longer than 100 chars is truncated."""
++        mock_session = AsyncMock()
++        mock_result = MagicMock()
++        mock_result.rowcount = 1
++        mock_session.execute = AsyncMock(return_value=mock_result)
++        mock_session.commit = AsyncMock()
++
++        mock_ctx = AsyncMock()
++        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
++        mock_ctx.__aexit__ = AsyncMock(return_value=False)
++
++        long_message = "x" * 200
++
++        request = UpdateHandlerExecutionStatusRequest(
++            updates=[
++                HandlerExecutionStatusUpdate(
++                    execution_id="exec-aaa",
++                    status="failed",
++                    status_message=long_message,
++                ),
++            ]
++        )
++
++        with patch(
++            "fl_control_plane.temporal.handler_execution_activity.async_session",
++            return_value=mock_ctx,
++        ):
++            await activity_env.run(update_handler_execution_status_activity, request)
++
++        # Check the params passed to execute
++        call_args = mock_session.execute.call_args_list[0]
++        params = call_args[0][1]
++        assert len(params["status_message"]) == 100
++
++    @pytest.mark.asyncio
++    async def test_empty_updates_returns_zero(self, activity_env: ActivityEnvironment) -> None:
++        """Skip DB interaction when no updates to apply."""
++        request = UpdateHandlerExecutionStatusRequest(updates=[])
++        result = await activity_env.run(update_handler_execution_status_activity, request)
++        assert result == 0
++
++    @pytest.mark.asyncio
++    async def test_db_error_raises_retryable(self, activity_env: ActivityEnvironment) -> None:
++        """SQLAlchemyError wrapped as TransientFailure ApplicationError."""
++        mock_session = AsyncMock()
++        mock_session.execute = AsyncMock(side_effect=SQLAlchemyError("timeout"))
++        mock_session.rollback = AsyncMock()
++
++        mock_ctx = AsyncMock()
++        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
++        mock_ctx.__aexit__ = AsyncMock(return_value=False)
++
++        request = UpdateHandlerExecutionStatusRequest(
++            updates=[
++                HandlerExecutionStatusUpdate(
++                    execution_id="exec-aaa",
++                    status="failed",
++                    status_message="boom",
++                ),
++            ]
++        )
++
++        with patch(
++            "fl_control_plane.temporal.handler_execution_activity.async_session",
++            return_value=mock_ctx,
++        ):
++            with pytest.raises(ApplicationError) as exc_info:
++                await activity_env.run(update_handler_execution_status_activity, request)
++
++        assert exc_info.value.type == "TransientFailure"
+diff --git a/tests/temporal/test_workflow.py b/tests/temporal/test_workflow.py
+index aac52fe5..bf2639f5 100644
+--- a/tests/temporal/test_workflow.py
++++ b/tests/temporal/test_workflow.py
+@@ -12,8 +12,11 @@
+ from fl_control_plane.metadata_extractor.extractor import ExtractionResult
+ from fl_control_plane.temporal.models import (
+     DataExtractionResult,
++    FinalizeInspectionRequest,
+     IngestionRequest,
+     MetadataExtractionResult,
++    OrchestrateHandlersRequest,
++    OrchestrateHandlersResult,
+     WorkflowResult,
+ )
+ from fl_control_plane.temporal.workflow import PipelineInspectionWorkflow
+@@ -86,7 +89,7 @@ def activity_mocks():
+     mock_hdlf_settings, mock_hdlf, mock_jenkins = _make_activity_mocks()
+ 
+     with (
+-        patch("fl_control_plane.metadata_extractor.activity.HdlfSettings", return_value=mock_hdlf_settings),
++        patch("fl_control_plane.metadata_extractor.activity.hdlf_settings", mock_hdlf_settings),
+         patch("fl_control_plane.metadata_extractor.activity.HdlfClient", return_value=mock_hdlf),
+         patch(
+             "fl_control_plane.metadata_extractor.activity.JenkinsAPIClient.from_vault",
+
+```

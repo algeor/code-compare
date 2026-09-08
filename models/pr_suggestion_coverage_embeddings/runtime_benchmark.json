@@ -1,0 +1,20 @@
+{
+  "date": "2026-09-08",
+  "device": "cpu",
+  "architecture": "arm64",
+  "batch_size": 16,
+  "max_length": 512,
+  "warmup_chunks": 16,
+  "measured_chunks": 205,
+  "models": {
+    "unixcoder_encoder": {
+      "seconds": 7.322,
+      "chunks_per_second": 28.0
+    },
+    "codebert": {
+      "seconds": 7.44,
+      "chunks_per_second": 27.56
+    }
+  },
+  "scope": "encoder forward pass only; excludes model loading, diff parsing, candidate retrieval, cache I/O, and downstream regression"
+}

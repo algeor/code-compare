@@ -1,0 +1,945 @@
+# d1ae2ff7d6a770ce
+
+PR: https://github.tools.sap/Lenny/pipeline-fl-control-plane/pull/31
+Suggested label: 100%
+File overlap: 1.0
+Changed-line overlap: 1.0
+
+## Suggested diff
+```diff
+--- a/docs/design/FL_Architecture_Design.md
++++ b/docs/design/FL_Architecture_Design.md
+@@
++### 7.6 Result Reporting
+```
+
+## Landed PR diff
+```diff
+diff --git a/docs/design/FL_Architecture_Design.md b/docs/design/FL_Architecture_Design.md
+index 4cb4e8fc..7248e6c7 100644
+--- a/docs/design/FL_Architecture_Design.md
++++ b/docs/design/FL_Architecture_Design.md
+@@ -1,7 +1,7 @@
+ # Fault Localization Platform — Architecture Design Document
+ 
+ **Status:** Draft — Under Active Discussion
+-**Last Updated:** 2026-04-29
++**Last Updated:** 2026-06-18
+ **Companion:** [Mural Diagram](https://app.mural.co/t/sap10/m/sap10/1776760533295/6d9c902f2b9597e367eeff24be70f723ec1b888a)
+ 
+ ---
+@@ -90,10 +90,10 @@ The FL team owns and operates the platform itself — everything needed to recei
+ 
+ | Owned Component | Notes |
+ |---|---|
+-| FL Control Plane (Ingestion API, Pipeline Analyzer, Handler Orchestrator, Execution Engine, Result Collector, Feedback API, Admin UI, MCP Server) | The core application |
++| FL Control Plane (Ingestion API, Pipeline Analyzer, Handler Orchestrator, Execution Engine, Feedback API, Admin UI, MCP Server, FL SDK REST API) | The core application |
+ | Kyma runtime environment | Cluster configuration, namespaces, APIRules, Istio setup |
+ | FL Database | Schema, migrations, data lifecycle |
+-| Failure Checks Repo | The GitOps repository where check definitions are stored and managed |
++| Fault Handers Repo | The GitOps repository where check definitions are stored and managed |
+ | ArgoCD deployment pipeline | GitOps CD pipeline for FL itself and for deploying FaultHandler CRs |
+ | Common CI/CD Environment MCP | The shared MCP server that abstracts Jenkins, GHA, and Azure DevOps pipeline data access. **Note:** The `landscape-pipeline-mcp-server` (§3.3) is a dedicated MCP for the ADO landscape pipeline use case that demonstrates this pattern in practice, but it is not the Common CI/CD Environment MCP. The common MCP is a separate future component to be built by the FL team. |
+ | Observability | Logging, tracing, metrics infrastructure for the FL platform |
+@@ -110,14 +110,14 @@ Each team that contributes a FaultHandler owns everything specific to that handl
+ | Infrastructure MCP (optional) | A contributor may provide their own infrastructure MCP if the common CI/CD Environment MCP does not meet their handler's needs |
+ | Docker image (CustomRuntime handlers only) | Required only when the handler is not a pure AgentTask — contributor builds, pushes, and maintains the image |
+ 
+-#### Cline Central Team
++#### AI Central Team
+ 
+-The Cline Central team owns the coding agent execution runtime:
++The AI Central team owns the coding agent execution runtime:
+ 
+-| Owned Component | Notes |
+-|---|---|
+-| Coding agent execution (Cline) | Runs the coding agent for AgentTask handlers |
+-| Agent API | An API dedicated to the FL application through which FL schedules and manages agent runs |
++| Owned Component                                   | Notes |
++|---------------------------------------------------|---|
++| Coding agent execution (Cline, Claude Code, etc.) | Runs the coding agent for AgentTask handlers |
++| Agent API                                         | An API dedicated to the FL application through which FL schedules and manages agent runs |
+ 
+ The FL team consumes the Agent API; it does not operate the agent runtime itself.
+ 
+@@ -214,24 +214,34 @@ TODO: within the same pod (mostly) how do we orchestrate different modules (libr
+                   |           |             |
+                   |           v             |
+                   |  +-------------------+  |     FaultHandler CRs
+-                  |  | Handler           |<-------(from Failure Checks Repo)
++                  |  | Handler           |<-------(from Fault Handers Repo)
+                   |  | Orchestrator      |  |
+                   |  +-------------------+  |
+                   |           |             |
+                   |           v             |
+                   |  +-------------------+  |     k8s Jobs
+                   |  | Execution Engine  |------>(AgentTask / CustomRuntime)
+-                  |  +-------------------+  |       reads via SDK from HDLF
+-                  |           |             |
+-                  |           v             |
+-                  |  +-------------------+  |
+-                  |  | Result Collector  |  |
+-                  |  +-------------------+  |
++                  |  +-------------------+  |       uses FL SDK to report result
+                   +-------------------------+
+                               |
++                              | per-handler JSON outputs +
++                              | optional runtime artifacts
++                              | (diffs, patches, logs)
+                               v
+-                     Analysis Results
+-                     (to Developer / CI)
++                  +-------------------------+
++                  |       Finalizer         |   k8s Job (AgentTask)
++                  | (coding agent harness)  |
++                  |  - interprets handler   |
++                  |    outputs via MCP      |
++                  |  - combines results     |
++                  +-------------------------+
++                              |
++                    +---------+---------+
++                    |                   |
++                    v                   v
++             PR comment /        new remediation
++             code suggestion      PR / commit
++             on original PR
+ 
+    ADO landscape AgentTask handler — MCP execution path:
+ 
+@@ -255,8 +265,6 @@ TODO: within the same pod (mostly) how do we orchestrate different modules (libr
+ 
+ ### 4.1 FL Control Plane Components
+ 
+-TODO: missing is the API pod behind the SDK - it is the one fetching and saving data to hdlf for pipeline and for MCP
+-
+ | Component | Responsibility |
+ |---|---|
+ | **Ingestion API** | Receives failure events; generates the inspection UUID; persists initial inspection state (`ACCEPTED`) |
+@@ -265,9 +273,8 @@ TODO: missing is the API pod behind the SDK - it is the one fetching and saving
+ | **Data Extractor** | Synchronous bulk capture of pipeline data into the per-inspection HDLF folder; writes `manifest.json` last (see `data-to-hdlf` change) |
+ | **Handler Orchestrator** | Discovers registered FaultHandlers; evaluates applicability; schedules handler Jobs only after Data Extractor success |
+ | **Execution Engine** | Schedules k8s Jobs for applicable handlers; mounts secrets; manages lifecycle |
+-| **Result Collector** | Gathers findings from completed handlers; normalizes output |
+-| **Admin UI** | CI instance registration; handler management; configuration; log viewing (see §12.7); manual inspection preservation; manual inspection retry |
+-| **Pipeline Data API** | SDK/REST API for handlers to access pipeline data — reads exclusively from HDLF, no live-CI fallback (see §7) |
++| **FL SDK REST API** | REST API consumed by handler Jobs via the FL SDK client. Provides two groups of operations: (1) **pipeline data access** — read failed stages, stage logs, artifacts, and test reports from HDLF; (2) **result reporting** — handlers call this API to submit their findings back to FL. All reads are served from HDLF; no live-CI fallback. |
++| **Admin UI** | CI instance registration; handler management; configuration; log viewing (see §13.2.7); manual inspection preservation; manual inspection retry |
+ 
+ ### 4.2 Runtime Environment
+ 
+@@ -292,30 +299,30 @@ This design keeps FL decoupled from the caller's reliability strategy and preven
+ 
+ ### 5.1 Concept
+ 
+-A FaultHandler is a **declarative definition** of a failure analysis and remediation capability. It is contributed independently of the FL core and registered via GitOps (push to the Failure Checks Repo → CI/CD deploys CR to k8s → FL controller discovers and registers it).
++A FaultHandler is a **declarative definition** of a failure analysis and remediation capability. It is contributed independently of the FL core and registered via GitOps (push to the Fault Handers Repo → CI/CD deploys CR to k8s → FL controller discovers and registers it).
+ 
+ ### 5.2 Execution Models
+ 
+ **DECIDED:** Two execution models, both registered the same way.
+ 
+-| Model | What Contributor Provides | What FL Provides | Use Case |
+-|---|---|---|---|
+-| **AgentTask** (default) | Task description, skill descriptions, input declarations, secret references and agent (Cline, Claude Code, etc.) | Agent runtime (Cline, Claude Code or whatever agent is available), MCP integration, execution environment | Low-code/no-code handlers; most common path |
+-| **CustomRuntime** | Container image with `/analyze` entrypoint, fault-handler.yaml | Execution environment, Pipeline Data API access | Advanced checks needing custom logic, dependencies, or non-agent workflows |
++| Model | What Contributor Provides | What FL Provides | Use Case                                                                     |
++|---|---|---|------------------------------------------------------------------------------|
++| **AgentTask** (default) | Task description, skill descriptions, input declarations, secret references and agent (Cline, Claude Code, etc.) | Agent runtime (Cline, Claude Code or whatever agent is available), MCP integration, execution environment | Low-code/no-code handlers; most common path                                  |
++| **CustomRuntime** | Container image with `/analyze` entrypoint, fault-handler.yaml | Execution environment, FL SDK access | Advanced handlers needing custom logic, dependencies, or non-agent workflows |
+ 
+-In case of AgentTask, FL provides the container that calls the Cline Central APIs to execute a coding agent task. Currently only Cline is available as coding agent, but in future there will be other agents like Claude Code. 
+-The Cline Central API will schedule an Atom on Doit, which will execute the actual coding agent.
++In case of AgentTask, FL provides the container that calls the AI Central APIs to execute a coding agent task. Currently only Cline is available as coding agent, but in future there will be other agents like Claude Code. 
++The AI Central API will schedule an Atom on Doit, which will execute the actual coding agent.
+ This will bring some latency as the scheduling itself could take several minutes, but as the analysis are performed offline this shouldn't be a big problem.
+-Cline Central should be scalable enough for the purpose of FL as each coding agent execution happens in its own Atom and Doit has enough resources. 
+-In case of CustomRuntime the contributors provide their own container (image) that will be run as k8s job to perform the analysis. This custom analysis could do some pre-post processing and call Cline Central (via sdk from FL) to delegate some part of the analysis to coding agent or it could call SAP AI core directly. It is up to the contributor to decide. The exact interface is to be defined. 
++AI Central should be scalable enough for the purpose of FL as each coding agent execution happens in its own Atom and Doit has enough resources. 
++In case of CustomRuntime the contributors provide their own container (image) that will be run as k8s job to perform the analysis. This custom analysis could do some pre-post processing and call AI Central (via sdk from FL) to delegate some part of the analysis to coding agent or it could call SAP AI core directly. It is up to the contributor to decide. The exact interface is to be defined. 
+ 
+ Both models break down into four concrete sub-cases depending on who contributes the handler:
+ 
+-| Sub-Case | Model | Notes |
+-|---|---|---|
+-| FL team's own Cline run with MCPs + config | AgentTask | FL-maintained handlers using the shared Cline runtime |
+-| Contributor's Cline run with MCPs + config | AgentTask | Input contingent on Cline Central availability; contributor owns task prompt, skills, and MCP config |
+-| FL team's own container images | CustomRuntime | FL-maintained containers using FL's own agent logic |
++| Sub-Case | Model | Notes                                                                                                      |
++|---|---|------------------------------------------------------------------------------------------------------------|
++| FL team's own Cline run with MCPs + config | AgentTask | FL-maintained handlers using the shared coding agent runtime                                               |
++| Contributor's Cline run with MCPs + config | AgentTask | Input contingent on AI Central availability; contributor owns task prompt, skills, and MCP config          |
++| FL team's own container images | CustomRuntime | FL-maintained containers using FL's own agent logic                                                        |
+ | Contributor-defined container images | CustomRuntime | Contributor builds, pushes, and maintains the image; FL provides execution environment and SDK credentials |
+ 
+ **CustomRuntime interface:** A CustomRuntime container is invoked by FL via a **file path** (executable entry point) configured in the CR. Input context and SDK credentials are delivered via environment variables.
+@@ -359,16 +366,17 @@ spec:
+       trigger_scope: pr_only                         # optional enum: all (default), pr_only, non_pr_only
+     failure_match:
+       strategy: stage_scoped    # or: pipeline_scoped
+-      match:                    # only for stage_scoped
+-        #stage_name: "sonarqube*"
+-        #relevance: "SAPUI5 validation problem"
+-        log_contains: "piper sonarExecuteScan" # can match also pattern
++      match:                    # only for stage_scoped; list of criteria (OR semantics)
++        - log_contains: "piper sonarExecuteScan"  # regex pattern
++        #- relevance: "SAPUI5 validation problem"
+ 
+   # --- Secrets ---
+   secrets:
+     - name: SONAR_TOKEN
+       description: "SonarQube API token"
+       required: true
++      vault_config: fl_vault
++      secret_key: common/pipeline3_fl_sonar #secret, referenced from vault. Vault access data (vault_config) must be configured in FL vault in advance. 
+ 
+   # --- Output ---
+   output:
+@@ -376,7 +384,7 @@ spec:
+     output_description: |
+       This handler emits factual JSON describing findings, evidence, optional code-change artifacts,
+       and any additional structured data produced during analysis.
+-    # optional file reference in the Failure Checks Repo with a more detailed factual description
++    # optional file reference in the Fault Handers Repo with a more detailed factual description
+     output_description_ref: docs/handlers/sonarqube-analysis-output.md
+     # optional; default is json
+     format: json
+@@ -433,7 +441,7 @@ The `output` section intentionally stays minimal.
+ 
+ **Design direction for `output`:**
+ - `output.output_description` — optional inline markdown/text giving a factual description of what the handler JSON contains
+-- `output.output_description_ref` — optional file reference in the Failure Checks Repo pointing to a more detailed factual description
++- `output.output_description_ref` — optional file reference in the Fault Handers Repo pointing to a more detailed factual description
+ - `output.format` — optional, defaults to `json`, denoting that FL accepts any valid JSON output from the handler
+ 
+ FL does **not** impose a handler-specific JSON schema in the FaultHandler CR. Instead, the handler author may optionally document the factual contents of the emitted JSON so that different finalizers can use the same information to build their own end goal representation.
+@@ -577,17 +585,19 @@ Activation is resolved hierarchically (higher overrides lower):
+ 
+ ---
+ 
+-## 7. Pipeline Data SDK
++## 7. FL SDK
+ 
+ ### 7.1 Design Principle
+ 
+-**DECIDED:** FL provides an SDK/API that abstracts CI infrastructure from handlers. Handlers never interact directly with Jenkins, GHA, or Azure DevOps APIs.
++**DECIDED:** FL provides an SDK that handlers use to interact with the FL platform. The SDK is a **thin REST API client** — it wraps the FL SDK REST API (§4.1) and provides a typed Python interface. All business logic lives server-side in the FL SDK REST API; the client adds no local behaviour beyond transport, serialisation, and error mapping.
++
++Handlers never interact directly with Jenkins, GHA, or Azure DevOps APIs, and never write to or read from HDLF directly. All pipeline data access goes through the SDK.
+ 
+-**Rationale:** Without this, every handler that needs artifacts (e.g., unit test XML reports) would need to implement three different download methods for Jenkins, GHA, and Azure DevOps. The SDK centralizes infrastructure integration in FL.
++**Rationale:** Without this, every handler that needs artifacts (e.g., unit test XML reports) would need to implement three different download methods for Jenkins, GHA, and Azure DevOps. The FL SDK REST API centralises infrastructure integration in FL and provides a single stable interface to handlers regardless of CI system.
+ 
+-### 7.2 Tier 1 — Pipeline Data API
++### 7.2 Tier 1 — Pipeline Data Methods
+ 
+-Available to all handlers (AgentTask and CustomRuntime) via REST or SDK client. All methods read from HDLF (`fl-active` first, falling back to `fl-preserved`); none of them call CI APIs.
++Available to all handlers (AgentTask and CustomRuntime). All methods read from HDLF; none call CI APIs directly. The HDLF container is selected by the `FL_HDLF_CONTAINER` environment variable — production uses `fl-active`, integration test and eval environments use `fl-preserved` with curated inspection snapshots.
+ 
+ | Method | Returns | Notes |
+ |---|---|---|
+@@ -605,7 +615,7 @@ FL does not pre-clone repositories. Some handlers don't need source code at all
+ 
+ ### 7.4 Tier 2 — Coding Agent Invocation (AgentTask handlers only)
+ 
+-**DECIDED:** AgentTask handlers invoke the coding agent via the **Cline Central `EngineeringAgent` API**, provided by the Cline Central team. FL does not own or operate the agent runtime; it schedules tasks through this API and collects results.
++**DECIDED:** AgentTask handlers invoke the coding agent via the **AI Central `EngineeringAgent` API**, provided by the AI Central team. FL does not own or operate the agent runtime; it schedules tasks through this API and collects results.
+ 
+ #### Invocation model
+ 
+@@ -620,8 +630,8 @@ config = EngineeringAgentInput(
+     prompt=task_text,           # from check's task: field in FaultHandler CR
+     repository=repo_url,        # from FL pipeline metadata
+     commitish=repo_commitish,   # from FL pipeline metadata
+-    skills=skills_path,         # path in Failure Checks Repo
+-    mcp_config=mcp_config_json, # path in Failure Checks Repo
++    skills=skills_path,         # path in Fault Handers Repo
++    mcp_config=mcp_config_json, # path in Fault Handers Repo
+     environment_variables=injected_secrets,  # FL-resolved handler secrets
+ )
+ 
+@@ -629,15 +639,15 @@ agent = EngineeringAgent(config)
+ result = await agent.execute()   # blocks until Doit atom reaches terminal state
+ ```
+ 
+-The Cline Central API handles Doit scheduling, polling, and result retrieval internally. FL's k8s Job sees a single `await agent.execute()` call that returns a `TaskResult`.
++The AI Central API handles Doit scheduling, polling, and result retrieval internally. FL's k8s Job sees a single `await agent.execute()` call that returns a `TaskResult`.
+ 
+ #### Inputs from the FaultHandler CR
+ 
+ | CR field | Maps to | Notes |
+ |---|---|---|
+ | `execution.task` | `prompt` | Task description for the agent |
+-| `execution.skills` | `skills` | Path to skills directory in Failure Checks Repo |
+-| `execution.mcps` | `mcp_config` | Path to MCP config in Failure Checks Repo |
++| `execution.skills` | `skills` | Path to skills directory in Fault Handers Repo |
++| `execution.mcps` | `mcp_config` | Path to MCP config in Fault Handers Repo |
+ | `secrets` (resolved) | `environment_variables` | FL injects resolved secrets as env vars |
+ 
+ `repo_url` and `repo_commitish` come from FL pipeline metadata (§7.2), not from the CR.
+@@ -647,7 +657,7 @@ The Cline Central API handles Doit scheduling, polling, and result retrieval int
+ | Field | Type | Used by FL for |
+ |---|---|---|
+ | `status` | str (`"COMPLETE"` / `"ERROR"`) | Determine if handler succeeded |
+-| `trajectory["cline_state"]` | JSON str | Extract token usage (`tokensIn`, `tokensOut`) for metrics (§14.1) |
++| `trajectory["cline_state"]` | JSON str | Extract token usage (`tokensIn`, `tokensOut`) for metrics (§15.1) |
+ | `trajectory["cline_state"]` | JSON str | Extract `completion_result` message — the handler's structured finding |
+ | `diff` | str | Optional: agent-proposed code changes (not always present) |
+ 
+@@ -697,7 +707,7 @@ However, this is **encouragement, not a hard schema requirement**. Valid handler
+   depending on the factual output description and the selected finalizer's capabilities.
+ 
+ **CustomRuntime handlers**
+-- The handler may return JSON through `sdk.store_output()`.
++- The handler may return JSON through `sdk.report_result()`.
+ - If the handler wants FL/finalizers to consider code changes, it must provide the code-change artifact explicitly somehow as part of the json output, for example:
+   - a git diff,
+   - a patch file,
+@@ -705,14 +715,13 @@ However, this is **encouragement, not a hard schema requirement**. Valid handler
+   - commit history,
+   - or another documented format.
+ - Unlike AgentTask, FL cannot assume an implicit runtime-managed repo diff exists for CustomRuntime.
+-
+ #### Factual output description is the key contract
+ 
+ Because FL allows JSON, the important contract is not a rigid schema but a **factual description** of what the output contains.
+ 
+ Handler authors should provide this description either:
+ - inline in the FaultHandler CR (`output.output_description`), or
+-- by file reference in the Failure Checks Repo (`output.output_description_ref`).
++- by file reference in the Failure Handlers Repo (`output.output_description_ref`).
+ 
+ This description should focus on facts such as:
+ - what the JSON represents,
+@@ -743,15 +752,26 @@ FL should interpret handler outputs conservatively:
+ - If the handler is CustomRuntime and wants to influence code changes, it must provide the diff/patch/commit information explicitly.
+ - If interpretation is unclear, the finalizer should fall back to conservative behavior such as comments only, not aggressive automated patching.
+ 
+-**For AgentTask handlers:** The handler contributor instructs the agent to emit a factually described JSON as the `completion_result` message. AgentTask handlers use `sdk.store_output()` to persist the primary JSON output and may also use `sdk.store_output()` to persist the final diff/code-change artifact. FL may additionally preserve runtime diff artifacts separately.
++**For AgentTask handlers:** The handler contributor instructs the agent to emit a factually described JSON as the `completion_result` message. AgentTask handlers call `sdk.report_result()` to submit their primary JSON output to FL, and may also call `sdk.report_result()` to persist the final diff/code-change artifact. FL may additionally preserve runtime diff artifacts separately.
+ 
+-**For CustomRuntime handlers:** The handler emits a factually described JSON via `sdk.store_output()`. If the handler wants to provide code changes, `sdk.store_output()` may also persist the final diff/code-change artifact, or the runtime may include or reference it in another documented way.
++**For CustomRuntime handlers:** The handler emits a factually described JSON via `sdk.report_result()`. If the handler wants to provide code changes, `sdk.report_result()` may also persist the final diff/code-change artifact, or the runtime may include or reference it in another documented way.
+ 
+ **DECISION DIRECTION:** Allow any valid JSON output from the handler and rely on handler-provided factual output descriptions so different finalizers can interpret the same information according to their own goal model.
+ 
+-### 7.5 Infrastructure Abstraction
++### 7.6 Result Reporting
++
++Each handler reports its result back to FL by calling `sdk.report_result()`. There is no separate Result Collector component — the FL SDK REST API receives findings directly from each handler Job as it completes.
++
++`report_result()` accepts:
++- the primary JSON output (the handler's structured finding),
++- optional code-change artifacts (diff, patch, or structured file changes),
++- a status indicating success or failure of the handler run.
+ 
+-The Pipeline Data API hides the CI system implementation:
++FL persists each submitted result against the inspection record so that finalizers (§7.8) can consume all per-handler outputs once the full handler set has completed.
++
++### 7.7 Infrastructure Abstraction
++
++The FL SDK REST API hides the CI system implementation from all pipeline data reads:
+ 
+ | SDK Call | Jenkins | GitHub Actions | Azure DevOps |
+ |---|---|---|---|
+@@ -760,22 +780,22 @@ The Pipeline Data API hides the CI system implementation:
+ | `list_artifacts(pattern)` | Artifact download API | Artifacts API | Build artifacts API |
+ | `get_artifact(path)` | Artifact download | Artifact download | Artifact download |
+ 
+-### 7.6 Result Consolidation and Finalizers
++### 7.8 Result Consolidation and Finalizers
+ 
+-After all handlers for a pipeline run complete, FL should preserve each handler's JSON output and any associated raw runtime artifacts, then pass them to a **finalizer**.
++After all handlers for a pipeline run complete, FL passes the accumulated handler results to a **finalizer**.
+ 
+-A finalizer is the component that decides how to interpret, combine, and act on the outputs of different checks. Different repositories may choose different finalizers, but the repo-level selection model is out of scope for this section.
++A finalizer is the component that decides how to interpret, combine, and act on the outputs of different handlers. Different repositories may choose different finalizers, but the repo-level selection model is out of scope for this section.
+ 
+ #### Consolidation flow
+ 
+-1. All applicable handlers complete and store their JSON output.
++1. Each handler calls `sdk.report_result()` as it completes, submitting its JSON output.
+ 2. FL preserves every raw handler output as part of the inspection record.
+ 3. FL also preserves any additional raw runtime artifacts that may be relevant to finalization, such as:
+    - AgentTask runtime diffs,
+    - patch files,
+    - logs,
+    - or other execution artifacts.
+-4. FL invokes the selected finalizer with:
++4. FL invokes the selected finalizer with the following data, provided via MCP:
+    - all per-handler JSON outputs,
+    - available raw runtime artifacts,
+    - inspection metadata,
+@@ -788,7 +808,7 @@ A finalizer is the component that decides how to interpret, combine, and act on
+ A finalizer is responsible for:
+ - interpreting the JSON emitted by different handlers,
+ - consulting the handler-specific factual output description from the FaultHandler CR or referenced file,
+-- deciding how to merge outputs from multiple checks,
++- deciding how to merge outputs from multiple handlers,
+ - deciding what should become comment content, PR-body context, code suggestions, or PR changes,
+ - optionally combining handler JSON with raw runtime diff artifacts,
+ - optionally combining or selecting compatible code changes across multiple handlers,
+@@ -820,6 +840,24 @@ The finalizers do the actual comments / PRs / code suggestions in the end. Becau
+ 
+ **DECISION DIRECTION:** Use pluggable finalizers that consume the handler JSON plus optional runtime artifacts, guided by handler-provided factual output descriptions rather than a platform-mandated universal schema.
+ 
++#### Finalizer dispatcher
++
++The **finalizer dispatcher** is the control-plane component that decides whether to run a finalizer, which one to run, and records the outcome. It is invoked after all handler jobs for an inspection have completed.
++
++**Dispatch decision**
++
++Before selecting a finalizer, the dispatcher checks the pipeline analyzer gate verdicts. If any gate issued a STOP verdict and explicitly opted out of finalization, the dispatcher suppresses finalization entirely and moves the inspection directly to its terminal status. This acts as a kill switch: a gate that says "stop and do not notify" takes precedence over all other verdicts.
++
++**Finalizer selection**
++
++The dispatcher uses a priority hierarchy to select which finalizer to run: a repo-level override takes precedence, followed by an org-level override, with the platform default as the fallback. Only the default is currently implemented; repo- and org-level overrides are reserved for future use.
++
++**Execution**
++
++When a finalizer is selected, the dispatcher runs the finalizer agent, scoping its data access to the current inspection. Once the agent completes, the dispatcher records the finalization outcome and stamps the inspection with its terminal status.
++
++Finalization is designed to be idempotent — retrying a failed finalization attempt is safe and will not produce duplicate records.
++
+ ---
+ 
+ ## 8. Credential Model
+@@ -849,7 +887,7 @@ The finalizers do the actual comments / PRs / code suggestions in the end. Becau
+ 
+ ### 8.4 Handler-Specific Credentials
+ 
+-**DECIDED:** Checks declare required secrets in their FaultHandler CR. Resolution priority:
++**DECIDED:** Fault Handlers declare required secrets in their FaultHandler CR. Resolution priority:
+ 
+ 1. **Pipeline-provided** — Pipeline owner passes the secret when triggering FL (primary path for non-HANA Cloud projects)
+ 2. **Platform-managed** — Pre-configured at org/repo level in FL's secret store (primary path for HANA Cloud projects, available for any org that sets it up)
+@@ -869,13 +907,13 @@ The finalizers do the actual comments / PRs / code suggestions in the end. Becau
+ **DECIDED:** GitOps-based registration.
+ 
+ ```
+-Contributor pushes fault-handler.yaml to Failure Checks Repo
++Contributor pushes fault-handler.yaml to Fault Handers Repo
+     → CI/CD pipeline deploys FaultHandler CR to k8s
+     → FL k8s controller (Handler Orchestrator) detects new/updated CR
+     → FL registers/updates the handler in its internal registry
+ ```
+-The Handler Orchestrator will validate the FaultHandler CRs, create any resources if necessary, and register and activate them in its database. It should be possible to activate/deactivate checks from the Admin UI in case of emergency situations (problems with a given check).
+-The deregistraton of checks will happen by deleting the FaultHandler CR from the repo and thus the CI/CD will delete the resource from k8s. The Handler Orchestrator will deactivate the handler, wait for any running handlers of that type to finish and unregister it from its handler registry (database). 
++The Handler Orchestrator will validate the FaultHandler CRs, create any resources if necessary, and register and activate them in its database. It should be possible to activate/deactivate fault handlers from the Admin UI in case of emergency situations (problems with a given check).
++The deregistraton of fault handlers will happen by deleting the FaultHandler CR from the repo and thus the CI/CD will delete the resource from k8s. The Handler Orchestrator will deactivate the handler, wait for any running handlers of that type to finish and unregister it from its handler registry (database). 
+ 
+ ### 9.2 CustomRuntime Additional Steps
+ 
+@@ -884,7 +922,7 @@ For CustomRuntime handlers, the contributor also:
+ 2. Builds and pushes Docker image to Docker Registry
+ 3. References the image in `fault-handler.yaml`
+ 
+-The Failure Checks Repo stores check definitions. The Docker Registry stores container images.
++The Fault Handers Repo stores check definitions. The Docker Registry stores container images.
+ 
+ ### 9.3 Rollout and Testing
+ 
+@@ -953,7 +991,54 @@ Developer asks coding agent: "Why did my pipeline fail?"
+ 
+ ---
+ 
+-## 11. Governance and Policy
++## 11. MCP Servers
++
++FL exposes and relies on MCP servers at different points in the execution lifecycle. This section catalogues all MCP servers that are part of the FL platform, their communication model, trust boundary, and ownership. The list is non-exhaustive and will be extended as new use cases are onboarded.
++
++### 11.1 Pipeline Data MCP
++
++**Purpose:** Provides the engineering agent (running locally or in a Kyma job) with structured access to CI pipeline data for the inspection currently being analysed — failed stages, stage logs, artifacts, and pipeline metadata (repository, PR number, CI system, branch, commit, etc.).
++
++**Communication model:** `stdio` — the MCP server is launched as a subprocess by the agent runtime (Cline, Claude Code) and communicates over stdin/stdout. No network port is opened.
++
++**Deployment and packaging:** Implemented in this repository (`pipeline-fl-control-plane`) and published as a Docker image. The FL Execution Engine injects it into the AgentTask environment by including it in the agent's container spec. The agent runtime starts it in-process via `docker run` or a pre-pulled local binary.
++
++**Credentials and access scope:** FL passes an HDLF certificate to the MCP server via environment variables at startup. The certificate is scoped at issuance time to **read-only access for the single inspection directory** of the current run — it cannot be used to read data from other inspections or write anything. The MCP server never receives broad service credentials.
++
++**Tools exposed (initial set, to be extended):**
++
++| Tool | Description |
++|---|---|
++| `get_failed_stages` | Returns the list of stages that failed in the pipeline run, with status and duration |
++| `get_stage_log` | Returns the log output for a named stage (supports range/offset for large logs) |
++| `get_artifacts` | Lists artifacts attached to the pipeline run; optionally retrieves content for text artifacts |
++| `get_pipeline_metadata` | Returns structured metadata: CI system, repository URL, PR number, branch, commit SHA, trigger actor, run URL |
++
++**Security properties:**
++- The certificate's read-only, inspection-scoped permissions mean a compromised or misbehaving agent cannot exfiltrate data from other pipelines or write results.
++- `stdio` transport avoids any network exposure; there is no authentication handshake beyond the certificate already embedded in the environment.
++- The Docker image is built and published by the FL team and referenced by digest in the AgentTask spec to prevent image substitution.
++
++### 11.2 Handler Results MCP
++
++**Purpose:** Provides finalizers with read access to the findings produced by fault handlers for the current inspection — their conclusions, severity, matched evidence, and any structured output written to HDLF. Finalizers use this to aggregate handler results into a consolidated assessment without polling the FL database directly.
++
++**Communication model:** `stdio` — same as §11.1; launched as a subprocess by the agent runtime and communicates over stdin/stdout.
++
++**Deployment and packaging:** Implemented in this repository (`pipeline-fl-control-plane`) and published as a Docker image. Injected into the finalizer's AgentTask environment by the FL Execution Engine at the point the finalizer is invoked (i.e., after all handlers for the inspection have completed).
++
++**Credentials and access scope:** Reuses the same HDLF certificate mechanism as §11.1. The certificate is scoped at issuance time to **read-only access for the single inspection directory** of the current run — it grants access to handler result artifacts written under that directory and nothing else.
++
++**Tools exposed:** Not yet decided. As general guidance, each result will carry the fault handler ID, a human-readable description of the result's semantics, the failed stage (where the handler is stage-scoped), and a JSON payload whose specific properties are defined by the handler.
++
++**Security properties:**
++- The inspection-scoped certificate prevents a finalizer from reading results of other inspections, even if running concurrently.
++- `stdio` transport provides the same network isolation as §11.1.
++- The Docker image is pinned by digest in the AgentTask finalizer spec.
++
++---
++
++## 12. Governance and Policy
+ 
+ - Policy evaluation occurs before execution
+ - Controls include handler maturity, repository criticality, secret usage and auto-fix permissions
+@@ -961,15 +1046,15 @@ Developer asks coding agent: "Why did my pipeline fail?"
+ 
+ ---
+ 
+-## 12. Thinktank Dependency and Migration
++## 13. Thinktank Dependency and Migration
+ 
+-### 12.1 Context
++### 13.1 Context
+ 
+ The immediate trigger for this re-architecture is the need to **remove the dependency on Thinktank**. Today, FL is deployed as a Thinktank plugin and relies on the Thinktank platform for much more than its reasoning engine. The following subsections describe every capability that FL currently obtains from Thinktank and how the new architecture replaces each one.
+ 
+-### 12.2 Capabilities Provided by Thinktank Today
++### 13.2 Capabilities Provided by Thinktank Today
+ 
+-#### 12.2.1 Agent Execution Framework
++#### 13.2.1 Agent Execution Framework
+ 
+ FL is structured as a set of Thinktank agents (all inheriting from `thinktank.Agent`). The framework provides:
+ - **Agent lifecycle management** — discovery, instantiation, invocation of the `run()` method
+@@ -977,9 +1062,9 @@ FL is structured as a set of Thinktank agents (all inheriting from `thinktank.Ag
+ - **Fact propagation** — agents report results and status back to the orchestrator via `self.set_fact()`
+ - **Multi-agent orchestration** — Thinktank coordinates the FaultRouterAgent (entry point) with type-specific analysis agents and the AssessmentGatheringFinalizer
+ 
+-**New architecture replacement:** The FL Control Plane's **Handler Orchestrator** and **Execution Engine** take over these responsibilities. The orchestrator owns the execution plan and dispatches FaultHandlers. AgentTask handlers run on a managed agent runtime owned by FL; CustomRuntime handlers run as isolated containers. The Thinktank mission/task/fact model is replaced by FL's own execution context, passed as structured input to each handler.
++**New architecture replacement:** The FL Control Plane's **Handler Orchestrator** and **Execution Engine** take over these responsibilities. The orchestrator owns the execution plan and dispatches FaultHandlers. AgentTask handlers run on a managed agent runtime owned by FL; CustomRuntime handlers run as isolated containers. Each handler reports its result directly to FL via the FL SDK (§7.6) — there is no central result collector. The Thinktank mission/task/fact model is replaced by FL's own execution context, passed as structured input to each handler.
+ 
+-#### 12.2.2 API and Ingestion
++#### 13.2.2 API and Ingestion
+ 
+ Thinktank provides the **HTTP API layer** through which FL is triggered. Currently:
+ - The Thinktank REST API exposes mission endpoints (`POST /v1/missions`, `GET /v1/missions/{id}/status`)
+@@ -988,7 +1073,7 @@ Thinktank provides the **HTTP API layer** through which FL is triggered. Current
+ 
+ **New architecture replacement:** The **Ingestion API** (§4.1) becomes a standalone, FL-owned REST API. It receives failure events and context directly from CI/CD pipelines (e.g., via webhook or explicit invocation step). FL no longer requires a Thinktank intermediary for API exposure.
+ 
+-#### 12.2.3 Authentication and Authorization
++#### 13.2.3 Authentication and Authorization
+ 
+ Thinktank provides:
+ - **Service-to-service authentication** — OAuth2 with client certificates or client secrets (via XSUAA/UAA), used to authenticate callers invoking Thinktank missions
+@@ -997,7 +1082,7 @@ Thinktank provides:
+ 
+ **New architecture replacement:** FL integrates directly with **SAP Cloud Identity Services (IAS)** — see §10 for full details.
+ 
+-#### 12.2.4 Container Packaging and Deployment
++#### 13.2.4 Container Packaging and Deployment
+ 
+ Thinktank provides:
+ - **Plugin packaging** — FL registers as a Thinktank plugin via a Python entry point (`[tool.poetry.plugins."thinktank.plugins"]`), and Thinktank discovers and loads it at startup
+@@ -1029,7 +1114,7 @@ Thinktank provides:
+ 
+ - **Secrets on Kyma:** BTP Operator-managed ServiceBindings handle SAP service credentials automatically. For application-specific secrets (API keys, external service tokens), the External Secrets Operator syncs credentials from SAP Credential Store (or a cloud-provider secret manager) into Kubernetes Secrets. No secrets are stored in Helm values files or Git.
+ 
+-#### 12.2.5 Scheduling and Doit Integration
++#### 13.2.5 Scheduling and Doit Integration
+ 
+ Thinktank provides:
+ - **Scheduled execution** — FL analyses can be triggered on a schedule via Thinktank's integration with Doit (SAP's internal job scheduling platform)
+@@ -1037,7 +1122,7 @@ Thinktank provides:
+ 
+ **New architecture replacement:** FL will run as k8s application and doesn't need to be scheduled on Doit anymore.
+ 
+-#### 12.2.6 Plugin Management and Discovery
++#### 13.2.6 Plugin Management and Discovery
+ 
+ Thinktank provides:
+ - **Plugin registry** — automatic discovery of FL agents via Python entry points
+@@ -1046,7 +1131,7 @@ Thinktank provides:
+ 
+ **New architecture replacement:** The plugin concept is replaced by **FaultHandler registration via GitOps** (§9). FL core is a single deployable service; extensibility happens through FaultHandler definitions, not plugins. Version tracking is handled by FL's own execution metadata (check version, Git SHA of the check definition).
+ 
+-#### 12.2.7 Admin UI and Log Viewer
++#### 13.2.7 Admin UI and Log Viewer
+ 
+ Thinktank provides:
+ - **Admin dashboard** — a web UI for platform operators to inspect missions, view agent execution status, and browse logs
+@@ -1061,7 +1146,7 @@ Thinktank provides:
+ 
+ The Admin UI authenticates users via **IAS OAuth2** (see §10.3) and enforces role-based access using IAS-managed roles and profiles.
+ 
+-#### 12.2.8 Reasoning Engine
++#### 13.2.8 Reasoning Engine
+ 
+ Thinktank provides:
+ - **LLM orchestration** — integration with SAP AI Hub for model inference (OpenAI-compatible API, AWS Bedrock backend)
+@@ -1071,7 +1156,7 @@ In practice, FL uses the reasoning engine sparingly. The actual LLM integration
+ 
+ **New architecture replacement:** FL retains the **gen_ai_hub SDK** for LLM inference. The AgentTask execution model (§5.2) provides FL's own managed agent runtime with MCP integration. The Thinktank reasoning/fact-setting model is replaced by structured input/output contracts between the orchestrator and handlers.
+ 
+-#### 12.2.9 Database Management
++#### 13.2.9 Database Management
+ 
+ Thinktank provides:
+ - **HANA-compatible ORM utilities** — `HANACompatibleJSON`, `native_uuid()`, `utc_now()` for SQLAlchemy models that work on both SQLite (dev) and SAP HANA (prod)
+@@ -1079,7 +1164,7 @@ Thinktank provides:
+ 
+ **New architecture replacement:** FL internalizes these utilities. The HANA-compatible types are thin wrappers that can be copied into FL's own codebase or extracted into a shared library. Alembic migrations run as a standard `alembic upgrade head` step in FL's own deployment pipeline. If FL migrates away from HANA (e.g., to PostgreSQL on Kyma), the compatibility layer simplifies further.
+ 
+-#### 12.2.10 Credential and Secret Management
++#### 13.2.10 Credential and Secret Management
+ 
+ Thinktank provides:
+ - **Credential requirement declarations** — `CredentialRequirement` decorator lets agents declare which credentials they need. This is currently utilized only as feature toggle mechanism.
+@@ -1094,24 +1179,24 @@ FL currently manages **11 credential types** through this mechanism (Vault AppRo
+ - The `CredentialRequirement`/`get_credentials()` pattern is replaced by the FaultHandler's declarative `secrets:` block and runtime secret injection
+ 
+ 
+-### 12.3 Migration Coverage Summary
++### 13.3 Migration Coverage Summary
+ 
+ | Thinktank Capability | New Architecture Coverage | Status |
+ |---|---|---|
+ | Agent execution framework | Handler Orchestrator + Execution Engine (§4.1) | **Covered** |
+ | API / HTTP endpoints | Ingestion API (§4.1) | **Covered** |
+ | Authentication & authorization | IAS OAuth2 — client credentials for services, Authorization Code for users (§10) | **Covered** |
+-| Container packaging & deployment | Helm charts, ArgoCD/GitOps, Kyma-native resources (§12.2.4) | **Covered** |
++| Container packaging & deployment | Helm charts, ArgoCD/GitOps, Kyma-native resources (§13.2.4) | **Covered** |
+ | Scheduling (Doit) | Kyma CronJobs + event-driven triggers | **Covered** |
+ | Plugin management & discovery | GitOps-based FaultHandler registration (§9) | **Covered** |
+-| Admin UI & log viewer | FL Admin UI with IAS-based user authentication (§12.2.7) | **Covered** |
++| Admin UI & log viewer | FL Admin UI with IAS-based user authentication (§13.2.7) | **Covered** |
+ | Reasoning engine (LLM) | gen_ai_hub SDK + AgentTask runtime (§5.2) | **Covered** |
+ | Database management | FL-owned ORM + Alembic migrations via Helm hook Jobs | **Covered** |
+ | Credential management | Declarative secrets model (§8) + BTP Operator + External Secrets Operator | **Covered** |
+ 
+ All Thinktank capabilities have a defined replacement in the new architecture. No open gaps remain at the conceptual level.
+ 
+-### 12.4 Remaining Detail Work
++### 13.4 Remaining Detail Work
+ 
+ The following areas require further **implementation-level design** during detailed design:
+ 
+@@ -1123,11 +1208,11 @@ The following areas require further **implementation-level design** during detai
+ 
+ ---
+ 
+-## 13. Feedback Collection
++## 14. Feedback Collection
+ 
+ FL collects developer feedback on analysis results through multiple channels. Feedback is associated with a specific pipeline run and its FL analysis, and is used to improve handler quality over time.
+ 
+-### 13.1 Feedback API
++### 14.1 Feedback API
+ 
+ CI/CD integrations and GitHub Apps (e.g., Photon) can collect developer feedback from their own UI surfaces and forward it to FL via a dedicated **Feedback API** endpoint. This allows feedback to be captured where developers already interact with pipeline results — without requiring them to navigate to a separate FL UI.
+ 
+@@ -1138,7 +1223,7 @@ The Feedback API accepts:
+ 
+ Authentication follows the same service-to-service model as the Ingestion API (§10.2): the caller authenticates with OAuth2 client credentials.
+ 
+-### 13.2 Feedback UI
++### 14.2 Feedback UI
+ 
+ FL analysis results include a **link to the FL Feedback UI**, where developers can provide richer feedback directly. This link is embedded in the analysis output delivered to CI/PR surfaces.
+ 
+@@ -1149,19 +1234,19 @@ The Feedback UI allows developers to:
+ 
+ Authentication uses IAS OAuth2 Authorization Code flow (SSO) — same as the Admin UI (§10.3).
+ 
+-### 13.3 MCP Feedback Tool
++### 14.3 MCP Feedback Tool
+ 
+ The FL MCP server (§10.5) exposes a **feedback tool** that coding agents can call on behalf of the developer. When a developer comments on an analysis result in their coding agent session (e.g., "this was wrong" or "the fix suggestion worked"), the agent can invoke the tool to submit structured feedback to FL without the developer navigating elsewhere.
+ 
+ The MCP feedback tool reuses the same CI token-based authorization model as the MCP results retrieval tool (§10.5.1): FL validates the token against the CI system to confirm the developer has access to the relevant pipeline before accepting feedback.
+ 
+-### 13.4 Monitoring PR comments
++### 14.4 Monitoring PR comments
+ 
+ In case the FL app posts comments on a PR, it can include checkboxes, like the current ones in the comment and monitor these checkboxes - either via GH repo webhook or just by polling let's say once a day the comment. It could also collect the replies to the comments and store them in its database for subsequent interpretation.
+ 
+ ---
+ 
+-## 14. Observability and Auditability
++## 15. Observability and Auditability
+ 
+ FL provides:
+ - Traceability of executed handlers
+@@ -1169,7 +1254,7 @@ FL provides:
+ - Audit trail of secret usage (names only)
+ - Structured findings and outputs
+ 
+-### 14.1 Prometheus Metrics
++### 15.1 Prometheus Metrics
+ 
+ FL exposes a Prometheus metrics endpoint. Metrics cover both FL platform operations and per-handler execution telemetry.
+ 
+@@ -1193,7 +1278,7 @@ AI token consumption is reported per handler run and exposed as Prometheus metri
+ 
+ **Reporting path by execution model:**
+ 
+-- **AgentTask handlers:** FL collects token usage directly from the Cline Agent API response — no action required from the handler contributor.
++- **AgentTask handlers:** FL collects token usage directly from the Engineering Agent API response — no action required from the handler contributor.
+ - **CustomRuntime handlers:** The handler is responsible for reporting its token usage back to FL as part of its output. FL then records and exposes the values. If a CustomRuntime handler does not report token usage, the metrics for that handler will be absent.
+ 
+ #### FL Platform Metrics
+@@ -1205,7 +1290,7 @@ AI token consumption is reported per handler run and exposed as Prometheus metri
+ | `fl_ingestion_requests_total` | Counter | `ci_system`, `status` |
+ | `fl_applicability_handlers_total` | Counter | `fault_id`, `result` (`matched`/`filtered`/`gated`) |
+ 
+-### 14.2 Health Monitoring and Alerting
++### 15.2 Health Monitoring and Alerting
+ 
+ FL uses the Prometheus metrics above as the basis for health monitoring. Alerts fire when key indicators cross defined thresholds, notifying the responsible team.
+ 
+@@ -1229,7 +1314,7 @@ Alerts are routed based on the affected component:
+ 
+ Concrete threshold values are defined during operational setup and may be tuned per environment (dev/staging/prod).
+ 
+-### 14.3 Kubernetes Health Checks
++### 15.3 Kubernetes Health Checks
+ 
+ FL implements standard Kubernetes health probes to enable automated recovery without operator intervention:
+ 
+@@ -1241,17 +1326,17 @@ These probes ensure that transient failures (e.g., a crashed worker, a lost data
+ 
+ ---
+ 
+-## 15. Data Management and Retention
++## 16. Data Management and Retention
+ 
+ FL data lives in two places with separate lifecycles: the FL Database (HANA Cloud) for **structured analysis records**, and HDLF for **raw pipeline data**.
+ 
+-### 15.1 FL Database — inspection records (HANA Cloud)
++### 16.1 FL Database — inspection records (HANA Cloud)
+ 
+ Analysis results, handler execution records, inspection state, and related metadata are stored in the FL Database (HANA Cloud). This is the primary store queried by the MCP server, Feedback UI, Admin UI, and alerting.
+ 
+ The inspection lifecycle is tracked by a `status` column on the inspection row, with values `ACCEPTED → IN_PROGRESS → COMPLETED`, plus the terminal `FAILED` (see the `data-to-hdlf` change for the full state machine).
+ 
+-### 15.2 HDLF — raw pipeline data per inspection
++### 16.2 HDLF — raw pipeline data per inspection
+ 
+ Each inspection's raw pipeline data (build metadata, stage logs, artifacts, test reports, WFAPI graph) is captured into a per-inspection folder named after the inspection UUID. The capture is performed by the Metadata Extractor (small structured fields up front) and the Data Extractor (everything else), as described in §4.1 and the `data-to-hdlf` change.
+ 
+@@ -1268,16 +1353,16 @@ Two HDLF containers, with different retention policies:
+ 
+ | Container | Retention | Purpose |
+ |---|---|---|
+-| `fl-active` | Container-level auto-deletion at 6 months | Default for every inspection |
+-| `fl-preserved` | No auto-deletion | Manual save-from-active for inspections worth keeping indefinitely |
++| `fl-active` | Container-level auto-deletion at 6 months | Default for every production inspection |
++| `fl-preserved` | No auto-deletion | Curated snapshots used for integration testing and evals; also used for inspections an operator wants to keep indefinitely |
+ 
+-**Read order for any FL component or external reader (SDK, MCP, future tooling):** check `fl-active` first; if not present, fall back to `fl-preserved`; if not in either, surface "data not available."
++**Container selection:** the active HDLF container is controlled by the `FL_HDLF_CONTAINER` environment variable. Production deployments set it to `fl-active`; integration test and eval environments set it to `fl-preserved`. There is no runtime fallback between containers — if an inspection is not found in the configured container, FL surfaces "data not available."
+ 
+ **Preservation:** an operator (or a future Admin UI button) runs the preservation script with an `inspection_uuid`. The script recursively copies `fl-active/<uuid>/` into `fl-preserved/<uuid>/`. The original copy in `fl-active` is left to expire at the 6-month TTL; the preserved copy survives.
+ 
+ **HDLF authentication:** all FL pods that talk to HDLF mount the same `fl-hdlf-tls` k8s Secret as a folder containing `client.crt`, `client.key`, `ca.crt`. A single client identity is used across the platform.
+ 
+-### 15.3 Data Lifecycle Summary
++### 16.3 Data Lifecycle Summary
+ 
+ | Store | Contains | Retention |
+ |---|---|---|
+@@ -1287,38 +1372,38 @@ Two HDLF containers, with different retention policies:
+ 
+ ---
+ 
+-## 16. Open Topics
++## 17. Open Topics
+ 
+-### 16.1 High Priority (Needed for Implementation)
++### 17.1 High Priority (Needed for Implementation)
+ 
+ | Topic | Status | Notes                                                                                                                                                                  |
+ |---|---|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+ | FaultHandler CR full schema | OPEN | Draft in Section 5.3; needs validation                                                                                                                                 |
+ | Output contract | LEANING | JSON output plus optional factual output description; see §7.5.                                                                                                        |
+-| Coding Agent integration | DECIDED | AgentTask handlers invoke Cline Central via `EngineeringAgent` API. Defined in §7.4.                                                                                   |
++| Coding Agent integration | DECIDED | AgentTask handlers invoke AI Central via `EngineeringAgent` API. Defined in §7.4.                                                                                   |
+ | k8s Job lifecycle | OPEN | Timeouts, retries, resource limits, cleanup                                                                                                                            |
+-| Result aggregation / finalization | LEANING | Pluggable finalizers consume the handler JSON plus optional runtime artifacts, using factual output descriptions to build their own end-state representation; see §7.6 |
++| Result aggregation / finalization | LEANING | Pluggable finalizers consume the handler JSON plus optional runtime artifacts, using factual output descriptions to build their own end-state representation; see §7.8 |
+ 
+-### 16.2 Medium Priority
++### 17.2 Medium Priority
+ 
+ | Topic | Status | Notes |
+ |---|---|---|
+ | Admin UI scope | OPEN | CI instance registration, handler management, log viewing — detailed UX design pending |
+ | Pipeline trigger mechanisms | LEANING | GH App event, pipeline step call, manual trigger |
+-| Observability | LEANING | Metrics defined in §14.1; logging and tracing approach TBD |
+-| Policy engine implementation | OPEN | Concrete mechanism for governance rules in §11 |
++| Observability | LEANING | Metrics defined in §15.1; logging and tracing approach TBD |
++| Policy engine implementation | OPEN | Concrete mechanism for governance rules in §12 |
+ 
+-### 16.3 Migration
++### 17.3 Migration
+ 
+-| Topic | Status | Notes |
+-|---|---|---|
+-| Existing checks migration | OPEN | 16 existing fault types need to become FaultHandlers |
+-| ThinkTank dependency removal | COVERED | Migration path fully mapped in §12; all capabilities have replacements |
+-| Database migration | OPEN | Current SQLite/Alembic → HANA Cloud; schema changes for new model; data lifecycle defined in §15 |
++| Topic                        | Status | Notes |
++|------------------------------|---|---|
++| Existing agents migration    | OPEN | 16 existing fault types need to become FaultHandlers |
++| ThinkTank dependency removal | COVERED | Migration path fully mapped in §13; all capabilities have replacements |
++| Database migration           | OPEN | Current SQLite/Alembic → HANA Cloud; schema changes for new model; data lifecycle defined in §16 |
+ 
+ ---
+ 
+-## 17. Glossary
++## 18. Glossary
+ 
+ | Term | Description |
+ |----|----|
+@@ -1333,6 +1418,8 @@ Two HDLF containers, with different retention policies:
+ | APIRule | Kyma CRD for exposing services externally via Istio Ingress Gateway |
+ | ArgoCD | GitOps continuous delivery tool for Kubernetes |
+ | BTP Operator | Kyma module for provisioning and binding SAP BTP services via CRDs |
++| FL SDK | Thin REST API client library used by handler Jobs to access pipeline data and report results to FL via the FL SDK REST API |
++| FL SDK REST API | Server-side REST API that backs the FL SDK client; provides pipeline data access (failed stages, logs, artifacts, metadata) and result reporting |
+ | MCP | Model Context Protocol — interface for agent tool integration |
+ | HDLF | SAP HANA Data Lake Files — primary store for pipeline artifacts and stage logs (pre-staged before handler execution); also used for archiving FL analysis data beyond 14 days |
+ 
+diff --git a/openspec/changes/fl-control-plane-rearchitecture/design.md b/openspec/changes/fl-control-plane-rearchitecture/design.md
+index 413fbe95..81a6de86 100644
+--- a/openspec/changes/fl-control-plane-rearchitecture/design.md
++++ b/openspec/changes/fl-control-plane-rearchitecture/design.md
+@@ -8,10 +8,10 @@ The re-architecture makes FL a standalone Kyma/Kubernetes application with a dec
+ - Must run on BTP Kyma runtime (SAP internal)
+ - Auth must integrate with SAP Cloud Identity Services (IAS) — XSUAA/UAA is being phased out
+ - Secret management must not centralize external credentials in FL (security policy)
+-- Agent execution is outsourced to Cline Central; FL does not own an agent runtime
++- Agent execution is outsourced to AI Central; FL does not own an agent runtime
+ - HANA Cloud is the primary DB; HDLF for cold archival
+ 
+-**Stakeholders:** FL team (owns control plane), Cline Central team (owns agent API), handler contributors (own FaultHandler CRs + any custom images/MCPs), Pipeline owners (configure opt-in and provide secrets), Developers (consume results via MCP or CI surfaces).
++**Stakeholders:** FL team (owns control plane), AI Central team (owns agent API), handler contributors (own FaultHandler CRs + any custom images/MCPs), Pipeline owners (configure opt-in and provide secrets), Developers (consume results via MCP or CI surfaces).
+ 
+ ## Goals / Non-Goals
+ 
+@@ -25,7 +25,7 @@ The re-architecture makes FL a standalone Kyma/Kubernetes application with a dec
+ - Provide Prometheus metrics, health probes, and alert routing for platform and per-handler health
+ 
+ **Non-Goals:**
+-- FL does not own or operate agent runtimes (Cline Central owns this)
++- FL does not own or operate agent runtimes (AI Central owns this)
+ - FL does not pre-clone source repositories
+ - FL does not provide a general-purpose CI/CD platform; it only processes failure events
+ - FL does not store or discover handler-specific secrets; it only resolves and injects them
+@@ -46,7 +46,7 @@ The re-architecture makes FL a standalone Kyma/Kubernetes application with a dec
+ 
+ ### D2: FaultHandler CRs as the extensibility model
+ 
+-**Decision:** Handlers are registered as Kubernetes Custom Resources. FL's Handler Orchestrator runs as a k8s controller watching FaultHandler CRs. Registration, updates, and deregistration flow through GitOps (push to Failure Checks Repo → ArgoCD deploys CR → controller reconciles).
++**Decision:** Handlers are registered as Kubernetes Custom Resources. FL's Handler Orchestrator runs as a k8s controller watching FaultHandler CRs. Registration, updates, and deregistration flow through GitOps (push to Fault Handers Repo → ArgoCD deploys CR → controller reconciles).
+ 
+ **Rationale:** CRs provide schema validation, version tracking, and native k8s lifecycle management. GitOps makes contributions auditable, reviewable, and testable before production.
+ 
+@@ -56,7 +56,7 @@ The re-architecture makes FL a standalone Kyma/Kubernetes application with a dec
+ 
+ ### D3: Two execution models — AgentTask and CustomRuntime
+ 
+-**Decision:** AgentTask (default) delegates to Cline Central `EngineeringAgent` API. CustomRuntime runs a contributor-provided container image. Both execute as isolated k8s Jobs.
++**Decision:** AgentTask (default) delegates to AI Central `EngineeringAgent` API. CustomRuntime runs a contributor-provided container image. Both execute as isolated k8s Jobs.
+ 
+ **Rationale:** Most checks can be expressed as a task prompt + skills + MCP config — no code needed. CustomRuntime preserves escape hatch for advanced cases without breaking the declarative default. k8s Jobs provide execution isolation and native lifecycle management (retries, TTL).
+ 
+@@ -86,7 +86,7 @@ The re-architecture makes FL a standalone Kyma/Kubernetes application with a dec
+ 
+ **Decision:** The Ingestion API is a scheduling endpoint. It accepts and acknowledges, never blocks for results. The caller decides polling/async/callback strategy.
+ 
+-**Rationale:** Keeps CI pipeline steps short and decouples FL availability from CI pipeline reliability. Analysis can take minutes (Cline Central scheduling latency included).
++**Rationale:** Keeps CI pipeline steps short and decouples FL availability from CI pipeline reliability. Analysis can take minutes (AI Central scheduling latency included).
+ 
+ ### D7: IAS OAuth2 for all authentication
+ 
+@@ -126,9 +126,9 @@ The re-architecture makes FL a standalone Kyma/Kubernetes application with a dec
+ 
+ ## Risks / Trade-offs
+ 
+-**[Cline Central scheduling latency]** → AgentTask executions may take several minutes to start (Doit atom scheduling). Mitigation: Fire-and-forget design (§D6) means CI pipelines don't block. FL must set appropriate k8s Job timeouts that account for scheduling latency.
++**[AI Central scheduling latency]** → AgentTask executions may take several minutes to start (Doit atom scheduling). Mitigation: Fire-and-forget design (§D6) means CI pipelines don't block. FL must set appropriate k8s Job timeouts that account for scheduling latency.
+ 
+-**[Handler contributor adoption friction]** → GitOps + CR model requires contributors to learn new patterns. Mitigation: Provide clear CR schema documentation, example handlers, and a test repo where CRs can be validated before submitting to the shared Failure Checks Repo.
++**[Handler contributor adoption friction]** → GitOps + CR model requires contributors to learn new patterns. Mitigation: Provide clear CR schema documentation, example handlers, and a test repo where CRs can be validated before submitting to the shared Fault Handers Repo.
+ 
+ **[Multiple handlers per `fault_id` conflict]** → Accidental duplicate `fault_id` values across teams could cause unexpected selection. Mitigation: CR admission webhook validates that new CRs with an existing `fault_id` must have explicit `repo_patterns` narrower than any existing CR with the same `fault_id`.
+ 
+@@ -136,7 +136,7 @@ The re-architecture makes FL a standalone Kyma/Kubernetes application with a dec
+ 
+ **[IAS service registration coordination]** → Each CI/CD caller (Photon, Jenkins integration, etc.) needs IAS client credential provisioning. Mitigation: Define the onboarding checklist early; automate client registration where possible via BTP CLI.
+ 
+-**[CustomRuntime image maintenance]** → Contributors who provide container images must maintain them (base image updates, CVE patches). Mitigation: Provide a recommended base image; enforce image scanning in the Failure Checks Repo CI pipeline.
++**[CustomRuntime image maintenance]** → Contributors who provide container images must maintain them (base image updates, CVE patches). Mitigation: Provide a recommended base image; enforce image scanning in the Fault Handers Repo CI pipeline.
+ 
+ **[Data migration from current SQLite/Alembic schema]** → Current schema is coupled to Thinktank models. Mitigation: Write a migration script that maps current fact/mission records to the new analysis/handler-execution schema. Accept data loss for historical records if mapping is too complex.
+ 
+diff --git a/openspec/changes/fl-control-plane-rearchitecture/proposal.md b/openspec/changes/fl-control-plane-rearchitecture/proposal.md
+index 69825247..75b1e715 100644
+--- a/openspec/changes/fl-control-plane-rearchitecture/proposal.md
++++ b/openspec/changes/fl-control-plane-rearchitecture/proposal.md
+@@ -15,7 +15,7 @@ The FL (Fault Localization) platform currently runs as a Thinktank plugin, coupl
+ - **NEW** FL MCP Server — read-only developer interface for querying analysis results and pipeline data via coding agents
+ - **NEW** Feedback API and UI — multi-channel developer feedback collection on analysis results
+ - **BREAKING** Thinktank API replaced: callers now invoke the FL Ingestion API directly (OAuth2 client credentials via IAS)
+-- **BREAKING** Agent execution no longer goes through Thinktank; AgentTask handlers invoke Cline Central `EngineeringAgent` API
++- **BREAKING** Agent execution no longer goes through Thinktank; AgentTask handlers invoke AI Central `EngineeringAgent` API
+ - **BREAKING** All 11 existing credential types migrate out of Thinktank's credential store to the new declarative secrets model
+ - Existing 16 fault type implementations must be migrated to FaultHandler CRs
+ 
+@@ -28,7 +28,7 @@ The FL (Fault Localization) platform currently runs as a Thinktank plugin, coupl
+ - `handler-orchestrator`: Discover registered FaultHandlers via k8s controller; evaluate three-level applicability; produce execution plans; manage handler lifecycle via GitOps
+ - `execution-engine`: Schedule isolated k8s Jobs for applicable handlers; inject secrets; manage Job lifecycle (timeouts, retries, cleanup)
+ - `pipeline-data-sdk`: Unified SDK/API abstracting Jenkins, GitHub Actions, and Azure DevOps for pipeline metadata, stage logs, and artifact access
+-- `agent-task-runtime`: Execute AgentTask handlers via Cline Central EngineeringAgent API; collect token usage and completion results
++- `agent-task-runtime`: Execute AgentTask handlers via AI Central EngineeringAgent API; collect token usage and completion results
+ - `result-collector`: Gather and normalize four-field findings (`critical_error`, `explanation`, `fix_suggestion`, `diff`) from completed handlers; aggregate into analysis report
+ - `credential-model`: Declarative handler secrets; resolution priority (pipeline-provided → platform-managed → degraded); k8s-native secret injection
+ - `auth-ias`: IAS OAuth2 integration — client credentials for service-to-service (Ingestion API), Authorization Code + SSO for Admin UI
+@@ -45,7 +45,7 @@ The FL (Fault Localization) platform currently runs as a Thinktank plugin, coupl
+ - **Thinktank**: Full dependency removal — API, auth, packaging, scheduling, plugin discovery, admin UI, reasoning engine, DB utilities, and credential management all replaced
+ - **CI/CD callers** (Photon, Jenkins integrations): Must switch from Thinktank mission API to FL Ingestion API; re-authenticate using IAS client credentials
+ - **Existing fault type agents**: 16 existing implementations must be rewritten as FaultHandler CRs (AgentTask or CustomRuntime)
+-- **Cline Central**: New dependency — FL delegates AgentTask execution to the EngineeringAgent API; FL team must coordinate with Cline Central team
++- **AI Central**: New dependency — FL delegates AgentTask execution to the EngineeringAgent API; FL team must coordinate with AI Central team
+ - **SAP AI Core / gen_ai_hub SDK**: Retained as direct dependency; no longer accessed through Thinktank's reasoning engine abstraction
+ - **Infrastructure**: Kyma/Kubernetes cluster required; HANA Cloud for primary DB; HDLF for archival; IAS for auth; ArgoCD or direct Helm for CD
+-- **Handler contributors**: New GitOps workflow for contributing FaultHandler CRs to the Failure Checks Repo; secrets declared in CR, not managed centrally
++- **Handler contributors**: New GitOps workflow for contributing FaultHandler CRs to the Fault Handers Repo; secrets declared in CR, not managed centrally
+diff --git a/openspec/changes/fl-control-plane-rearchitecture/specs/agent-task-runtime/spec.md b/openspec/changes/fl-control-plane-rearchitecture/specs/agent-task-runtime/spec.md
+index 74cba88c..ac3986c5 100644
+--- a/openspec/changes/fl-control-plane-rearchitecture/specs/agent-task-runtime/spec.md
++++ b/openspec/changes/fl-control-plane-rearchitecture/specs/agent-task-runtime/spec.md
+@@ -1,14 +1,14 @@
+ ## ADDED Requirements
+ 
+-### Requirement: Invoke Cline Central EngineeringAgent API for AgentTask handlers
+-The AgentTask runtime SHALL invoke the Cline Central `EngineeringAgent` API to execute coding agent tasks. The FL k8s Job for an AgentTask handler SHALL call `await agent.execute()` and block until the Doit atom reaches a terminal state.
++### Requirement: Invoke AI Central EngineeringAgent API for AgentTask handlers
++The AgentTask runtime SHALL invoke the AI Central `EngineeringAgent` API to execute coding agent tasks. The FL k8s Job for an AgentTask handler SHALL call `await agent.execute()` and block until the Doit atom reaches a terminal state.
+ 
+ #### Scenario: AgentTask executes successfully
+ - **WHEN** an AgentTask Job is created with a valid task prompt, skills path, MCP config, and secrets
+ - **THEN** the runtime calls `EngineeringAgent(config).execute()`, receives a `TaskResult` with `status: "COMPLETE"`, and extracts the `completion_result` from `trajectory["cline_state"]`
+ 
+ #### Scenario: AgentTask execution fails
+-- **WHEN** the Cline Central API returns `status: "ERROR"` in the TaskResult
++- **WHEN** the AI Central API returns `status: "ERROR"` in the TaskResult
+ - **THEN** the handler execution is recorded as `failed` with the error details logged
+ 
+ ### Requirement: Map FaultHandler CR fields to EngineeringAgentInput
+
+```

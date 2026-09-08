@@ -1,0 +1,31 @@
+{
+  "model_id": "microsoft/codebert-base",
+  "revision": "3b0952feddeffad0063f274080e3c23d75e7eb39",
+  "alias": "codebert",
+  "feature_prefix": "emb_codebert",
+  "max_length": 512,
+  "max_candidates": 8,
+  "max_suggestion_chunks": 8,
+  "max_chunks_per_candidate": 4,
+  "chunk_overlap": 32,
+  "trust_remote_code": false,
+  "attention_implementation": null,
+  "rows": 2779,
+  "unique_text_chunks": 6610,
+  "feature_columns": [
+    "emb_codebert_best_cosine",
+    "emb_codebert_mean_top3_cosine",
+    "emb_codebert_best_second_margin",
+    "emb_codebert_candidate_mean_cosine",
+    "emb_codebert_landed_centroid_cosine",
+    "emb_codebert_same_file_best_cosine",
+    "emb_codebert_cross_file_best_cosine",
+    "emb_codebert_suggestion_raw_norm",
+    "emb_codebert_candidate_raw_norm",
+    "emb_codebert_suggestion_chunk_count",
+    "emb_codebert_candidate_chunk_count",
+    "emb_codebert_fraction_above_60",
+    "emb_codebert_fraction_above_70",
+    "emb_codebert_fraction_above_80"
+  ]
+}

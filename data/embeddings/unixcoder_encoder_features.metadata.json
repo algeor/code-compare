@@ -1,0 +1,32 @@
+{
+  "model_id": "microsoft/unixcoder-base",
+  "revision": "5604afdc964f6c53782a6813140ade5216b99006",
+  "alias": "unixcoder_encoder",
+  "feature_prefix": "emb_unixcoder_encoder",
+  "max_length": 512,
+  "max_candidates": 8,
+  "max_suggestion_chunks": 8,
+  "max_chunks_per_candidate": 4,
+  "chunk_overlap": 32,
+  "trust_remote_code": false,
+  "attention_implementation": null,
+  "input_prefix": "<encoder-only> </s> ",
+  "rows": 2779,
+  "unique_text_chunks": 6547,
+  "feature_columns": [
+    "emb_unixcoder_encoder_best_cosine",
+    "emb_unixcoder_encoder_mean_top3_cosine",
+    "emb_unixcoder_encoder_best_second_margin",
+    "emb_unixcoder_encoder_candidate_mean_cosine",
+    "emb_unixcoder_encoder_landed_centroid_cosine",
+    "emb_unixcoder_encoder_same_file_best_cosine",
+    "emb_unixcoder_encoder_cross_file_best_cosine",
+    "emb_unixcoder_encoder_suggestion_raw_norm",
+    "emb_unixcoder_encoder_candidate_raw_norm",
+    "emb_unixcoder_encoder_suggestion_chunk_count",
+    "emb_unixcoder_encoder_candidate_chunk_count",
+    "emb_unixcoder_encoder_fraction_above_60",
+    "emb_unixcoder_encoder_fraction_above_70",
+    "emb_unixcoder_encoder_fraction_above_80"
+  ]
+}

@@ -1,0 +1,894 @@
+{
+  "generated_from": {
+    "model": "models/pr_suggestion_coverage_regression/model.joblib",
+    "schema": "models/pr_suggestion_coverage_regression/feature_schema.json",
+    "comparison": "models/pr_suggestion_coverage_regression/advanced_model_comparison.json",
+    "repository_held_out_embedding_report": "models/pr_suggestion_coverage_embeddings/repository_held_out/evaluation_report.json"
+  },
+  "datasets": {
+    "internal": {
+      "rows": 279,
+      "repositories": 1,
+      "pull_requests": 73,
+      "mean_percentage": 62.92831541218638,
+      "median_percentage": 80.0,
+      "zero_rows": 70,
+      "intermediate_rows": 105,
+      "hundred_rows": 104,
+      "coarse_labels": {
+        "100%": 104,
+        "mostly": 70,
+        "0%": 70,
+        "partial": 35
+      },
+      "label_confidence": {
+        "high": 178,
+        "medium": 99,
+        "low": 2
+      }
+    },
+    "external_hf": {
+      "rows": 2500,
+      "repositories": 29,
+      "pull_requests": 1196,
+      "mean_percentage": 77.5456,
+      "median_percentage": 90.0,
+      "zero_rows": 250,
+      "intermediate_rows": 1225,
+      "hundred_rows": 1025,
+      "coarse_labels": {
+        "100%": 1353,
+        "mostly": 587,
+        "partial": 310,
+        "0%": 250
+      },
+      "label_confidence": {
+        "high": 1236,
+        "medium": 822,
+        "low": 442
+      }
+    }
+  },
+  "external_label_audit": {
+    "confidence": {
+      "high": 1236,
+      "medium": 822,
+      "low": 442
+    },
+    "audit_status": {
+      "accepted_high_confidence": 1216,
+      "accepted_medium_confidence": 614,
+      "uncertain_metric_disagreement": 311,
+      "accepted_mixed_evidence": 208,
+      "uncertain_fuzzy_only": 131,
+      "manually_verified": 20
+    },
+    "mean_training_weight": 0.63608
+  },
+  "holdout": {
+    "rows": 70,
+    "pull_request_groups": 19,
+    "baseline": {
+      "percentage_mae": 10.157142857142857,
+      "percentage_rmse": 19.135979574762153,
+      "r2": 0.7349978031066656,
+      "within_5_points": 0.5571428571428572,
+      "within_10_points": 0.6857142857142857,
+      "dangerous_error_rate": 0.014285714285714285
+    },
+    "ensemble": {
+      "percentage_mae": 9.742857142857142,
+      "percentage_rmse": 19.309509130403672,
+      "r2": 0.7301698069318446,
+      "within_5_points": 0.6142857142857143,
+      "within_10_points": 0.7428571428571429,
+      "dangerous_error_rate": 0.014285714285714285
+    },
+    "grouped_bootstrap": {
+      "mae_reduction": {
+        "estimate": 0.4142857142857146,
+        "ci_95_low": -0.09375,
+        "ci_95_high": 0.8961038961038952,
+        "probability_positive": 0.944
+      },
+      "rmse_reduction": {
+        "estimate": -0.17352955564151884,
+        "ci_95_low": -0.5925865683197616,
+        "ci_95_high": 0.3274725280117456,
+        "probability_positive": 0.237
+      },
+      "within_5_gain": {
+        "estimate": 0.05714285714285716,
+        "ci_95_low": -0.03449788263762861,
+        "ci_95_high": 0.16176470588235298,
+        "probability_positive": 0.8354
+      },
+      "within_10_gain": {
+        "estimate": 0.05714285714285716,
+        "ci_95_low": 0.013157894736842146,
+        "ci_95_high": 0.11667207792207787,
+        "probability_positive": 0.9889
+      },
+      "dangerous_error_reduction": {
+        "estimate": 0.0,
+        "ci_95_low": 0.0,
+        "ci_95_high": 0.0,
+        "probability_positive": 0.0
+      }
+    },
+    "subgroups": {
+      "zero": {
+        "rows": 12,
+        "baseline": {
+          "percentage_mae": 12.416666666666666,
+          "percentage_rmse": 24.780704859493675,
+          "r2": 0.0,
+          "within_5_points": 0.6666666666666666,
+          "within_10_points": 0.75,
+          "dangerous_error_rate": 0.0
+        },
+        "ensemble": {
+          "percentage_mae": 11.333333333333334,
+          "percentage_rmse": 24.819347291981714,
+          "r2": 0.0,
+          "within_5_points": 0.6666666666666666,
+          "within_10_points": 0.75,
+          "dangerous_error_rate": 0.0
+        }
+      },
+      "intermediate": {
+        "rows": 31,
+        "baseline": {
+          "percentage_mae": 11.483870967741936,
+          "percentage_rmse": 16.299614086070832,
+          "r2": 0.39456972801214096,
+          "within_5_points": 0.3870967741935484,
+          "within_10_points": 0.6129032258064516,
+          "dangerous_error_rate": 0.0
+        },
+        "ensemble": {
+          "percentage_mae": 11.096774193548388,
+          "percentage_rmse": 16.589930875432028,
+          "r2": 0.3728106992957245,
+          "within_5_points": 0.5161290322580645,
+          "within_10_points": 0.7096774193548387,
+          "dangerous_error_rate": 0.0
+        }
+      },
+      "hundred": {
+        "rows": 27,
+        "baseline": {
+          "percentage_mae": 7.62962962962963,
+          "percentage_rmse": 19.27193315179895,
+          "r2": 0.0,
+          "within_5_points": 0.7037037037037037,
+          "within_10_points": 0.7407407407407407,
+          "dangerous_error_rate": 0.037037037037037035
+        },
+        "ensemble": {
+          "percentage_mae": 7.481481481481482,
+          "percentage_rmse": 19.413626371414715,
+          "r2": 0.0,
+          "within_5_points": 0.7037037037037037,
+          "within_10_points": 0.7777777777777778,
+          "dangerous_error_rate": 0.037037037037037035
+        }
+      },
+      "languages_with_at_least_five_rows": {
+        "markdown": {
+          "rows": 9,
+          "baseline": {
+            "percentage_mae": 0.1111111111111111,
+            "percentage_rmse": 0.3333333333333333,
+            "r2": 0.9968836565096952,
+            "within_5_points": 1.0,
+            "within_10_points": 1.0,
+            "dangerous_error_rate": 0.0
+          },
+          "ensemble": {
+            "percentage_mae": 0.2222222222222222,
+            "percentage_rmse": 0.4714045207910317,
+            "r2": 0.9937673130193906,
+            "within_5_points": 1.0,
+            "within_10_points": 1.0,
+            "dangerous_error_rate": 0.0
+          }
+        },
+        "python": {
+          "rows": 46,
+          "baseline": {
+            "percentage_mae": 11.565217391304348,
+            "percentage_rmse": 21.430372595109432,
+            "r2": 0.6697793887529483,
+            "within_5_points": 0.5,
+            "within_10_points": 0.6521739130434783,
+            "dangerous_error_rate": 0.021739130434782608
+          },
+          "ensemble": {
+            "percentage_mae": 11.23913043478261,
+            "percentage_rmse": 21.68800509999459,
+            "r2": 0.6617919452072112,
+            "within_5_points": 0.5652173913043478,
+            "within_10_points": 0.717391304347826,
+            "dangerous_error_rate": 0.021739130434782608
+          }
+        },
+        "text": {
+          "rows": 6,
+          "baseline": {
+            "percentage_mae": 18.833333333333332,
+            "percentage_rmse": 25.149552679918582,
+            "r2": 0.715375,
+            "within_5_points": 0.5,
+            "within_10_points": 0.5,
+            "dangerous_error_rate": 0.0
+          },
+          "ensemble": {
+            "percentage_mae": 17.166666666666668,
+            "percentage_rmse": 24.23152216982389,
+            "r2": 0.735775,
+            "within_5_points": 0.5,
+            "within_10_points": 0.5,
+            "dangerous_error_rate": 0.0
+          }
+        },
+        "yaml": {
+          "rows": 8,
+          "baseline": {
+            "percentage_mae": 8.125,
+            "percentage_rmse": 9.427353817482402,
+            "r2": 0.6626934709126491,
+            "within_5_points": 0.375,
+            "within_10_points": 0.625,
+            "dangerous_error_rate": 0.0
+          },
+          "ensemble": {
+            "percentage_mae": 7.5,
+            "percentage_rmse": 10.828203913853857,
+            "r2": 0.5550020755500207,
+            "within_5_points": 0.5,
+            "within_10_points": 0.75,
+            "dangerous_error_rate": 0.0
+          }
+        }
+      }
+    }
+  },
+  "bootstrap": {
+    "iterations": 10000,
+    "seed": 20260907,
+    "sampling_unit": "pull request group"
+  },
+  "embedding_experiment": {
+    "candidate_oof_metrics": {
+      "unixcoder_random_forest": {
+        "percentage_mae": 12.263157894736842,
+        "percentage_rmse": 21.34575246566302,
+        "r2": 0.736760625558361,
+        "within_5_points": 0.5502392344497608,
+        "within_10_points": 0.5933014354066986,
+        "dangerous_error_rate": 0.009569377990430622
+      },
+      "unixcoder_catboost_mae": {
+        "percentage_mae": 11.430622009569378,
+        "percentage_rmse": 20.804972721735375,
+        "r2": 0.7499296431878641,
+        "within_5_points": 0.5980861244019139,
+        "within_10_points": 0.6889952153110048,
+        "dangerous_error_rate": 0.004784688995215311
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 11.043062200956937,
+        "percentage_rmse": 21.007175807487748,
+        "r2": 0.745045164986493,
+        "within_5_points": 0.6267942583732058,
+        "within_10_points": 0.6746411483253588,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_random_forest": {
+        "percentage_mae": 12.382775119617225,
+        "percentage_rmse": 21.535327602064235,
+        "r2": 0.7320641182215586,
+        "within_5_points": 0.5550239234449761,
+        "within_10_points": 0.6124401913875598,
+        "dangerous_error_rate": 0.009569377990430622
+      },
+      "unixcoder_encoder_catboost_mae": {
+        "percentage_mae": 11.444976076555024,
+        "percentage_rmse": 21.11621975738331,
+        "r2": 0.7423914586631675,
+        "within_5_points": 0.6267942583732058,
+        "within_10_points": 0.6985645933014354,
+        "dangerous_error_rate": 0.004784688995215311
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 11.076555023923445,
+        "percentage_rmse": 21.179004679976106,
+        "r2": 0.7408572846949948,
+        "within_5_points": 0.6076555023923444,
+        "within_10_points": 0.6794258373205742,
+        "dangerous_error_rate": 0.004784688995215311
+      },
+      "codebert_random_forest": {
+        "percentage_mae": 12.444976076555024,
+        "percentage_rmse": 21.272553469211882,
+        "r2": 0.7385629344362862,
+        "within_5_points": 0.4784688995215311,
+        "within_10_points": 0.6411483253588517,
+        "dangerous_error_rate": 0.009569377990430622
+      },
+      "codebert_catboost_mae": {
+        "percentage_mae": 11.727272727272727,
+        "percentage_rmse": 21.873166361973396,
+        "r2": 0.7235916079288576,
+        "within_5_points": 0.6076555023923444,
+        "within_10_points": 0.6842105263157895,
+        "dangerous_error_rate": 0.009569377990430622
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 10.818181818181818,
+        "percentage_rmse": 20.82772811357988,
+        "r2": 0.7493823162586783,
+        "within_5_points": 0.6172248803827751,
+        "within_10_points": 0.6698564593301436,
+        "dangerous_error_rate": 0.009569377990430622
+      },
+      "combined_random_forest": {
+        "percentage_mae": 12.808612440191387,
+        "percentage_rmse": 21.59157641879823,
+        "r2": 0.7306626295695523,
+        "within_5_points": 0.4688995215311005,
+        "within_10_points": 0.6172248803827751,
+        "dangerous_error_rate": 0.009569377990430622
+      },
+      "combined_catboost_mae": {
+        "percentage_mae": 11.564593301435407,
+        "percentage_rmse": 20.939763231959578,
+        "r2": 0.7466788529417903,
+        "within_5_points": 0.6028708133971292,
+        "within_10_points": 0.6794258373205742,
+        "dangerous_error_rate": 0.004784688995215311
+      },
+      "combined_two_stage": {
+        "percentage_mae": 10.880382775119617,
+        "percentage_rmse": 20.998518972610004,
+        "r2": 0.7452552500704229,
+        "within_5_points": 0.6172248803827751,
+        "within_10_points": 0.6842105263157895,
+        "dangerous_error_rate": 0.009569377990430622
+      },
+      "current_ensemble": {
+        "percentage_mae": 11.110047846889952,
+        "percentage_rmse": 21.041994920616116,
+        "r2": 0.7441992960959329,
+        "within_5_points": 0.631578947368421,
+        "within_10_points": 0.6794258373205742,
+        "dangerous_error_rate": 0.014354066985645933
+      }
+    },
+    "selected_blend": {
+      "weights": {
+        "current_ensemble": 0.5,
+        "unixcoder_two_stage": 0.1,
+        "unixcoder_encoder_two_stage": 0.4,
+        "codebert_two_stage": 0.0,
+        "combined_two_stage": 0.0
+      },
+      "disagreement_threshold": 10.0,
+      "percentage_mae": 10.76555023923445,
+      "percentage_rmse": 20.386692347715034,
+      "r2": 0.7598838061777553,
+      "within_5_points": 0.6220095693779905,
+      "within_10_points": 0.6842105263157895,
+      "dangerous_error_rate": 0.004784688995215311
+    },
+    "current_holdout": {
+      "percentage_mae": 9.742857142857142,
+      "percentage_rmse": 19.309509130403672,
+      "r2": 0.7301698069318446,
+      "within_5_points": 0.6142857142857143,
+      "within_10_points": 0.7428571428571429,
+      "dangerous_error_rate": 0.014285714285714285
+    },
+    "embedding_holdout": {
+      "percentage_mae": 10.128571428571428,
+      "percentage_rmse": 20.21208973432909,
+      "r2": 0.7043550179628337,
+      "within_5_points": 0.6285714285714286,
+      "within_10_points": 0.7285714285714285,
+      "dangerous_error_rate": 0.014285714285714285
+    },
+    "deployment_checks": {
+      "oof_selection_eligible": true,
+      "holdout_mae_improved": false,
+      "holdout_rmse_improved": false,
+      "holdout_within_10_not_worse": false,
+      "holdout_dangerous_error_not_worse": true
+    },
+    "recommended_for_deployment": false
+  },
+  "repository_held_out_embedding_experiment": {
+    "objective": "estimate cross-repository transfer using leave-one-external-repository-out retraining",
+    "interpretation_scope": "exploratory because external semantic labels are confidence-weighted LLM-assisted references",
+    "training_policy": "all internal rows plus all external repositories except the held-out repository",
+    "external_rows": 2500,
+    "external_repositories": 29,
+    "external_pull_requests": 1196,
+    "overall_micro_metrics": {
+      "current_ensemble": {
+        "percentage_mae": 4.1064,
+        "percentage_rmse": 8.82142845575477,
+        "r2": 0.9184569184535103,
+        "within_5_points": 0.7664,
+        "within_10_points": 0.8916,
+        "dangerous_error_rate": 0.0016
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.3196,
+        "percentage_rmse": 9.846806588940396,
+        "r2": 0.8983985040721504,
+        "within_5_points": 0.7668,
+        "within_10_points": 0.874,
+        "dangerous_error_rate": 0.0016
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 4.3008,
+        "percentage_rmse": 9.783128334024859,
+        "r2": 0.8997083472430155,
+        "within_5_points": 0.7748,
+        "within_10_points": 0.8692,
+        "dangerous_error_rate": 0.0016
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.2516,
+        "percentage_rmse": 9.651590542496091,
+        "r2": 0.9023871337086151,
+        "within_5_points": 0.7752,
+        "within_10_points": 0.88,
+        "dangerous_error_rate": 0.0016
+      },
+      "combined_two_stage": {
+        "percentage_mae": 4.4876,
+        "percentage_rmse": 10.039860556800578,
+        "r2": 0.8943755041508822,
+        "within_5_points": 0.7572,
+        "within_10_points": 0.862,
+        "dangerous_error_rate": 0.0016
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 4.0844,
+        "percentage_rmse": 8.996465972813992,
+        "r2": 0.915188807348475,
+        "within_5_points": 0.7792,
+        "within_10_points": 0.884,
+        "dangerous_error_rate": 0.0016
+      }
+    },
+    "macro_repository_metrics_minimum_10_rows": {
+      "current_ensemble": {
+        "percentage_mae": 3.9426932348519044,
+        "percentage_rmse": 8.552223043709374,
+        "within_5_points": 0.7891936717776499,
+        "within_10_points": 0.9001227397680459,
+        "dangerous_error_rate": 0.0019751373722526303
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.0224640503679545,
+        "percentage_rmse": 9.113968989461206,
+        "within_5_points": 0.7862622561237406,
+        "within_10_points": 0.8870442148198396,
+        "dangerous_error_rate": 0.0019751373722526303
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 4.030023022081953,
+        "percentage_rmse": 9.102960779885489,
+        "within_5_points": 0.7911310443082648,
+        "within_10_points": 0.8847336995542391,
+        "dangerous_error_rate": 0.0019751373722526303
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.06861272402,
+        "percentage_rmse": 9.086757087756949,
+        "within_5_points": 0.7902721741801472,
+        "within_10_points": 0.888736160217385,
+        "dangerous_error_rate": 0.0019751373722526303
+      },
+      "combined_two_stage": {
+        "percentage_mae": 4.143205630324405,
+        "percentage_rmse": 9.251612368743478,
+        "within_5_points": 0.7769420751032385,
+        "within_10_points": 0.8828329286250995,
+        "dangerous_error_rate": 0.0019751373722526303
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.9120765253553103,
+        "percentage_rmse": 8.633468409879605,
+        "within_5_points": 0.798434346825852,
+        "within_10_points": 0.8918454896049834,
+        "dangerous_error_rate": 0.0019751373722526303
+      }
+    },
+    "confidence_metrics": {
+      "high": {
+        "rows": 1236,
+        "current_ensemble": {
+          "percentage_mae": 1.0145631067961165,
+          "percentage_rmse": 4.329659881856384,
+          "r2": 0.9884061566365122,
+          "within_5_points": 0.9506472491909385,
+          "within_10_points": 0.9749190938511327,
+          "dangerous_error_rate": 0.0
+        },
+        "unixcoder_two_stage": {
+          "percentage_mae": 0.6674757281553398,
+          "percentage_rmse": 4.794397350522019,
+          "r2": 0.9857836562883017,
+          "within_5_points": 0.9773462783171522,
+          "within_10_points": 0.9797734627831716,
+          "dangerous_error_rate": 0.0
+        },
+        "unixcoder_encoder_two_stage": {
+          "percentage_mae": 0.686084142394822,
+          "percentage_rmse": 4.769950438365793,
+          "r2": 0.9859282665917997,
+          "within_5_points": 0.9757281553398058,
+          "within_10_points": 0.9781553398058253,
+          "dangerous_error_rate": 0.0
+        },
+        "codebert_two_stage": {
+          "percentage_mae": 0.6877022653721683,
+          "percentage_rmse": 4.816537047113163,
+          "r2": 0.9856520559083017,
+          "within_5_points": 0.9765372168284789,
+          "within_10_points": 0.9789644012944984,
+          "dangerous_error_rate": 0.0
+        },
+        "combined_two_stage": {
+          "percentage_mae": 0.7799352750809061,
+          "percentage_rmse": 5.221470486875076,
+          "r2": 0.9831381383831329,
+          "within_5_points": 0.9741100323624595,
+          "within_10_points": 0.9765372168284789,
+          "dangerous_error_rate": 0.0
+        },
+        "selected_embedding_blend": {
+          "percentage_mae": 0.8260517799352751,
+          "percentage_rmse": 4.312152617217387,
+          "r2": 0.9884997280093639,
+          "within_5_points": 0.970873786407767,
+          "within_10_points": 0.9781553398058253,
+          "dangerous_error_rate": 0.0
+        }
+      },
+      "low": {
+        "rows": 442,
+        "current_ensemble": {
+          "percentage_mae": 8.823529411764707,
+          "percentage_rmse": 15.370536544478803,
+          "r2": -0.1332943745095363,
+          "within_5_points": 0.5248868778280543,
+          "within_10_points": 0.7647058823529411,
+          "dangerous_error_rate": 0.00904977375565611
+        },
+        "unixcoder_two_stage": {
+          "percentage_mae": 10.538461538461538,
+          "percentage_rmse": 17.616323158620794,
+          "r2": -0.4886589554386356,
+          "within_5_points": 0.47737556561085975,
+          "within_10_points": 0.6968325791855203,
+          "dangerous_error_rate": 0.00904977375565611
+        },
+        "unixcoder_encoder_two_stage": {
+          "percentage_mae": 10.638009049773755,
+          "percentage_rmse": 17.510694857404726,
+          "r2": -0.47086033850961906,
+          "within_5_points": 0.4751131221719457,
+          "within_10_points": 0.6719457013574661,
+          "dangerous_error_rate": 0.00904977375565611
+        },
+        "codebert_two_stage": {
+          "percentage_mae": 10.223981900452488,
+          "percentage_rmse": 16.962228467101124,
+          "r2": -0.38016336187803823,
+          "within_5_points": 0.48642533936651583,
+          "within_10_points": 0.7104072398190046,
+          "dangerous_error_rate": 0.00904977375565611
+        },
+        "combined_two_stage": {
+          "percentage_mae": 10.95475113122172,
+          "percentage_rmse": 17.78745808592029,
+          "r2": -0.5177227945458958,
+          "within_5_points": 0.43665158371040724,
+          "within_10_points": 0.6583710407239819,
+          "dangerous_error_rate": 0.00904977375565611
+        },
+        "selected_embedding_blend": {
+          "percentage_mae": 9.33710407239819,
+          "percentage_rmse": 15.867879277338261,
+          "r2": -0.2078206564921936,
+          "within_5_points": 0.5248868778280543,
+          "within_10_points": 0.7239819004524887,
+          "dangerous_error_rate": 0.00904977375565611
+        }
+      },
+      "medium": {
+        "rows": 822,
+        "current_ensemble": {
+          "percentage_mae": 6.218978102189781,
+          "percentage_rmse": 9.024837315125236,
+          "r2": 0.7383877024379346,
+          "within_5_points": 0.6192214111922141,
+          "within_10_points": 0.8345498783454988,
+          "dangerous_error_rate": 0.0
+        },
+        "unixcoder_two_stage": {
+          "percentage_mae": 6.467153284671533,
+          "percentage_rmse": 9.667211999048634,
+          "r2": 0.6998199148809878,
+          "within_5_points": 0.6058394160583942,
+          "within_10_points": 0.8102189781021898,
+          "dangerous_error_rate": 0.0
+        },
+        "unixcoder_encoder_two_stage": {
+          "percentage_mae": 6.328467153284672,
+          "percentage_rmse": 9.591663046625438,
+          "r2": 0.7044933772840383,
+          "within_5_points": 0.6338199513381995,
+          "within_10_points": 0.8114355231143552,
+          "dangerous_error_rate": 0.0
+        },
+        "codebert_two_stage": {
+          "percentage_mae": 6.399026763990268,
+          "percentage_rmse": 9.680919101366458,
+          "r2": 0.6989680630382913,
+          "within_5_points": 0.6277372262773723,
+          "within_10_points": 0.8223844282238443,
+          "dangerous_error_rate": 0.0
+        },
+        "combined_two_stage": {
+          "percentage_mae": 6.585158150851582,
+          "percentage_rmse": 9.769421980824458,
+          "r2": 0.6934388412152843,
+          "within_5_points": 0.6034063260340633,
+          "within_10_points": 0.7992700729927007,
+          "dangerous_error_rate": 0.0
+        },
+        "selected_embedding_blend": {
+          "percentage_mae": 6.159367396593674,
+          "percentage_rmse": 9.099811500413933,
+          "r2": 0.73402293863843,
+          "within_5_points": 0.6277372262773723,
+          "within_10_points": 0.8284671532846716,
+          "dangerous_error_rate": 0.0
+        }
+      }
+    },
+    "paired_comparisons_vs_current": {
+      "unixcoder_two_stage": {
+        "bootstrap": {
+          "mae_reduction": {
+            "estimate": -0.2132000000000005,
+            "ci_95_low": -0.3411599220086447,
+            "ci_95_high": -0.08127514808650381,
+            "probability_positive": 0.0006
+          },
+          "rmse_reduction": {
+            "estimate": -1.025378133185626,
+            "ci_95_low": -1.6184516765302752,
+            "ci_95_high": -0.5321089409653866,
+            "probability_positive": 0.0
+          },
+          "within_5_gain": {
+            "estimate": 0.00040000000000006697,
+            "ci_95_low": -0.013492329478793365,
+            "ci_95_high": 0.010309553509190368,
+            "probability_positive": 0.5088
+          },
+          "within_10_gain": {
+            "estimate": -0.01759999999999995,
+            "ci_95_low": -0.02672382424224094,
+            "ci_95_high": -0.00856239621080705,
+            "probability_positive": 0.0001
+          },
+          "dangerous_error_reduction": {
+            "estimate": 0.0,
+            "ci_95_low": 0.0,
+            "ci_95_high": 0.0,
+            "probability_positive": 0.0
+          }
+        },
+        "repository_wins_all": {
+          "wins": 9,
+          "ties": 2,
+          "losses": 18
+        },
+        "repository_wins_minimum_10_rows": {
+          "wins": 8,
+          "ties": 1,
+          "losses": 13
+        }
+      },
+      "unixcoder_encoder_two_stage": {
+        "bootstrap": {
+          "mae_reduction": {
+            "estimate": -0.1943999999999999,
+            "ci_95_low": -0.29276748614958437,
+            "ci_95_high": -0.08807155963302755,
+            "probability_positive": 0.0006
+          },
+          "rmse_reduction": {
+            "estimate": -0.961699878270089,
+            "ci_95_low": -1.2334929438101452,
+            "ci_95_high": -0.6240996145694517,
+            "probability_positive": 0.0
+          },
+          "within_5_gain": {
+            "estimate": 0.008400000000000074,
+            "ci_95_low": -0.0057845679486031995,
+            "ci_95_high": 0.019239370061453407,
+            "probability_positive": 0.8774
+          },
+          "within_10_gain": {
+            "estimate": -0.022399999999999975,
+            "ci_95_low": -0.034087990714861315,
+            "ci_95_high": -0.009239293628901598,
+            "probability_positive": 0.0004
+          },
+          "dangerous_error_reduction": {
+            "estimate": 0.0,
+            "ci_95_low": 0.0,
+            "ci_95_high": 0.0,
+            "probability_positive": 0.0
+          }
+        },
+        "repository_wins_all": {
+          "wins": 8,
+          "ties": 2,
+          "losses": 19
+        },
+        "repository_wins_minimum_10_rows": {
+          "wins": 7,
+          "ties": 0,
+          "losses": 15
+        }
+      },
+      "codebert_two_stage": {
+        "bootstrap": {
+          "mae_reduction": {
+            "estimate": -0.1452,
+            "ci_95_low": -0.26669623422945204,
+            "ci_95_high": -0.046458384976053035,
+            "probability_positive": 0.0008
+          },
+          "rmse_reduction": {
+            "estimate": -0.8301620867413213,
+            "ci_95_low": -1.0763538976121148,
+            "ci_95_high": -0.5685929835071004,
+            "probability_positive": 0.0
+          },
+          "within_5_gain": {
+            "estimate": 0.00880000000000003,
+            "ci_95_low": -0.0027297009295999845,
+            "ci_95_high": 0.01857860667193967,
+            "probability_positive": 0.9288
+          },
+          "within_10_gain": {
+            "estimate": -0.011599999999999944,
+            "ci_95_low": -0.022634015266108493,
+            "ci_95_high": -0.00045257530281133323,
+            "probability_positive": 0.0181
+          },
+          "dangerous_error_reduction": {
+            "estimate": 0.0,
+            "ci_95_low": 0.0,
+            "ci_95_high": 0.0,
+            "probability_positive": 0.0
+          }
+        },
+        "repository_wins_all": {
+          "wins": 10,
+          "ties": 2,
+          "losses": 17
+        },
+        "repository_wins_minimum_10_rows": {
+          "wins": 9,
+          "ties": 0,
+          "losses": 13
+        }
+      },
+      "combined_two_stage": {
+        "bootstrap": {
+          "mae_reduction": {
+            "estimate": -0.38119999999999976,
+            "ci_95_low": -0.5137433002248881,
+            "ci_95_high": -0.22848498785831,
+            "probability_positive": 0.0
+          },
+          "rmse_reduction": {
+            "estimate": -1.2184321010458081,
+            "ci_95_low": -1.6089220345227082,
+            "ci_95_high": -0.7830123584689753,
+            "probability_positive": 0.0
+          },
+          "within_5_gain": {
+            "estimate": -0.009199999999999986,
+            "ci_95_low": -0.021824530879251684,
+            "ci_95_high": 0.0,
+            "probability_positive": 0.0223
+          },
+          "within_10_gain": {
+            "estimate": -0.02959999999999996,
+            "ci_95_low": -0.0385403995127357,
+            "ci_95_high": -0.01975166678958767,
+            "probability_positive": 0.0
+          },
+          "dangerous_error_reduction": {
+            "estimate": 0.0,
+            "ci_95_low": 0.0,
+            "ci_95_high": 0.0,
+            "probability_positive": 0.0
+          }
+        },
+        "repository_wins_all": {
+          "wins": 4,
+          "ties": 2,
+          "losses": 23
+        },
+        "repository_wins_minimum_10_rows": {
+          "wins": 4,
+          "ties": 0,
+          "losses": 18
+        }
+      },
+      "selected_embedding_blend": {
+        "bootstrap": {
+          "mae_reduction": {
+            "estimate": 0.02200000000000024,
+            "ci_95_low": -0.0430945399403699,
+            "ci_95_high": 0.08253075722573586,
+            "probability_positive": 0.7164
+          },
+          "rmse_reduction": {
+            "estimate": -0.17503751705922177,
+            "ci_95_low": -0.26679099062369077,
+            "ci_95_high": -0.06911931861701065,
+            "probability_positive": 0.0005
+          },
+          "within_5_gain": {
+            "estimate": 0.012800000000000034,
+            "ci_95_low": 0.004255228687219573,
+            "ci_95_high": 0.01941747572815533,
+            "probability_positive": 0.997
+          },
+          "within_10_gain": {
+            "estimate": -0.00759999999999994,
+            "ci_95_low": -0.015709758551307892,
+            "ci_95_high": 0.0011579100778081129,
+            "probability_positive": 0.0398
+          },
+          "dangerous_error_reduction": {
+            "estimate": 0.0,
+            "ci_95_low": 0.0,
+            "ci_95_high": 0.0,
+            "probability_positive": 0.0
+          }
+        },
+        "repository_wins_all": {
+          "wins": 14,
+          "ties": 3,
+          "losses": 12
+        },
+        "repository_wins_minimum_10_rows": {
+          "wins": 14,
+          "ties": 0,
+          "losses": 8
+        }
+      }
+    },
+    "bootstrap": {
+      "iterations": 10000,
+      "seed": 20260908,
+      "sampling_unit": "repository"
+    }
+  }
+}

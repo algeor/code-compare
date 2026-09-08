@@ -1,0 +1,2313 @@
+# 5d96cdeffe1a29d1
+
+PR: https://github.tools.sap/Lenny/pipeline-fl-control-plane/pull/114
+Suggested label: 100%
+File overlap: 1.0
+Changed-line overlap: 1.0
+
+## Suggested diff
+```diff
+--- a/fl_control_plane/temporal/workflow.py
++++ b/fl_control_plane/temporal/workflow.py
+@@
++inspection_certs = await execute_activity(
++                provision_inspection_access_activity,
++                request.inspection_id,
++                start_to_close_timeout=inspection_access_start_to_close_timeout,
++                heartbeat_timeout=timedelta(seconds=30),
++                retry_policy=_activity_retry_policy,
++            )
++            inspection_access_provisioning_started = True
+```
+
+## Landed PR diff
+```diff
+diff --git a/.github/workflows/pipeline-fl-lcm.yaml b/.github/workflows/pipeline-fl-lcm.yaml
+index b0f64846..b4c5c98b 100644
+--- a/.github/workflows/pipeline-fl-lcm.yaml
++++ b/.github/workflows/pipeline-fl-lcm.yaml
+@@ -391,7 +391,8 @@ jobs:
+             )
+           fi
+ 
+-          helm upgrade --install "${{ env.RELEASE }}" "${{ env.CHART_DIR }}" \
++          helm --kubeconfig "$HOME/.kube/test-cluster.yaml" \
++            upgrade --install "${{ env.RELEASE }}" "${{ env.CHART_DIR }}" \
+             --dependency-update \
+             --namespace "$NS" \
+             --skip-crds \
+@@ -530,8 +531,10 @@ jobs:
+       - name: Uninstall Helm release
+         run: |
+           NS="${{ steps.vars.outputs.namespace }}"
+-          if helm status "${{ env.RELEASE }}" -n "$NS" &>/dev/null; then
+-            helm uninstall "${{ env.RELEASE }}" -n "$NS" --wait=false
++          if helm --kubeconfig "$HOME/.kube/test-cluster.yaml" \
++            status "${{ env.RELEASE }}" -n "$NS" &>/dev/null; then
++            helm --kubeconfig "$HOME/.kube/test-cluster.yaml" \
++              uninstall "${{ env.RELEASE }}" -n "$NS" --wait=false
+             echo "Release uninstalled."
+           else
+             echo "Release not found in namespace '$NS' — skipping uninstall."
+diff --git a/chart/templates/deployment.yaml b/chart/templates/deployment.yaml
+index ff3e854a..79428f96 100644
+--- a/chart/templates/deployment.yaml
++++ b/chart/templates/deployment.yaml
+@@ -182,6 +182,10 @@ spec:
+               value: {{ .Values.executionEngine.hdlfAccessPollTimeoutSeconds | default 60 | quote }}
+             - name: EE_HDLF_ACCESS_POLL_INTERVAL_SECONDS
+               value: {{ .Values.executionEngine.hdlfAccessPollIntervalSeconds | default 2 | quote }}
++            - name: EE_HDLF_POLICY_QUOTA_WAIT_TIMEOUT_SECONDS
++              value: {{ .Values.executionEngine.hdlfPolicyQuotaWaitTimeoutSeconds | default 3600 | quote }}
++            - name: EE_HDLF_POLICY_QUOTA_WAIT_INTERVAL_SECONDS
++              value: {{ .Values.executionEngine.hdlfPolicyQuotaWaitIntervalSeconds | default 30 | quote }}
+             - name: EE_CONFIG_REPO_URL
+               value: {{ required "handlerConfigRepository.repoURL must be set" .Values.handlerConfigRepository.repoURL | quote }}
+             - name: EE_CONFIG_REPO_COMMITISH
+diff --git a/chart/templates/dispatcher-rbac.yaml b/chart/templates/dispatcher-rbac.yaml
+index 56bdd257..65654e89 100644
+--- a/chart/templates/dispatcher-rbac.yaml
++++ b/chart/templates/dispatcher-rbac.yaml
+@@ -25,14 +25,14 @@ rules:
+   - apiGroups: [""]
+     resources: ["pods/log"]
+     verbs: ["get"]
+-  # Per-inspection cert Secrets are named from execution IDs, so Kubernetes RBAC
++  # Per-inspection cert Secrets are named from inspection IDs, so Kubernetes RBAC
+   # cannot resourceName-scope this with a wildcard.
+   - apiGroups: [""]
+     resources: ["secrets"]
+-    verbs: ["get"]
++    verbs: ["get", "delete"]
+   - apiGroups: ["cert-manager.io"]
+     resources: ["certificates"]
+-    verbs: ["create", "get", "watch", "patch"]
++    verbs: ["create", "get", "watch", "delete"]
+ ---
+ apiVersion: rbac.authorization.k8s.io/v1
+ kind: RoleBinding
+diff --git a/chart/values.yaml b/chart/values.yaml
+index d3389953..25699a57 100644
+--- a/chart/values.yaml
++++ b/chart/values.yaml
+@@ -70,6 +70,8 @@ executionEngine:
+   jobPollIntervalSeconds: 10
+   hdlfAccessPollTimeoutSeconds: 180
+   hdlfAccessPollIntervalSeconds: 5
++  hdlfPolicyQuotaWaitTimeoutSeconds: 3600
++  hdlfPolicyQuotaWaitIntervalSeconds: 30
+   # Lifetime of per-inspection HDLF client certificates issued for handler jobs.
+   hdlfInspectionCertDurationHours: 6
+   # ClusterSecretStore name used to sync handler-declared secrets from Vault.
+diff --git a/fl_control_plane/config.py b/fl_control_plane/config.py
+index 21a8c9b3..30a29f80 100644
+--- a/fl_control_plane/config.py
++++ b/fl_control_plane/config.py
+@@ -53,6 +53,14 @@ class ServerSettings(SharedSettings):
+         default=120,
+         validation_alias="EE_JOB_POLL_CLEANUP_GRACE_SECONDS",
+     )
++    execution_engine_hdlf_access_poll_timeout_seconds: int = Field(
++        default=60,
++        validation_alias="EE_HDLF_ACCESS_POLL_TIMEOUT_SECONDS",
++    )
++    execution_engine_hdlf_policy_quota_wait_timeout_seconds: int = Field(
++        default=3600,
++        validation_alias="EE_HDLF_POLICY_QUOTA_WAIT_TIMEOUT_SECONDS",
++    )
+ 
+     # GitHub tokens for WIP detection — WDF for internal GitHub, TOOL for github.tools.sap
+     github_wdf_token: SecretStr | None = None
+diff --git a/fl_control_plane/execution_engine/config.py b/fl_control_plane/execution_engine/config.py
+index 12c4e131..310897a7 100644
+--- a/fl_control_plane/execution_engine/config.py
++++ b/fl_control_plane/execution_engine/config.py
+@@ -59,6 +59,11 @@ class Settings(BaseSettings):
+             and certificate propagation before submitting a handler Job.
+         hdlf_access_poll_interval_seconds: Delay between HDLF access probes while
+             waiting for propagation.
++        hdlf_policy_quota_wait_timeout_seconds: Maximum time to keep retrying
++            HDLF static policy creation when the service reports that the static
++            policy quota is full.
++        hdlf_policy_quota_wait_interval_seconds: Delay between static policy
++            quota retries.
+     """
+ 
+     namespace: str = "default"
+@@ -80,6 +85,8 @@ class Settings(BaseSettings):
+     hdlf_inspection_cert_duration_hours: int = 6
+     hdlf_access_poll_timeout_seconds: int = 60
+     hdlf_access_poll_interval_seconds: float = 2.0
++    hdlf_policy_quota_wait_timeout_seconds: int = 3600
++    hdlf_policy_quota_wait_interval_seconds: float = 30.0
+ 
+     model_config = {"env_prefix": "EE_"}
+ 
+diff --git a/fl_control_plane/execution_engine/dispatcher.py b/fl_control_plane/execution_engine/dispatcher.py
+index 2392378f..6cb4caff 100644
+--- a/fl_control_plane/execution_engine/dispatcher.py
++++ b/fl_control_plane/execution_engine/dispatcher.py
+@@ -11,8 +11,7 @@
+ from kubernetes_asyncio import client
+ 
+ from fl_control_plane.execution_engine.config import get_settings
+-from fl_control_plane.execution_engine.hdlf_cert_provisioner import InspectionCertificates
+-from fl_control_plane.execution_engine.models import HandlerExecution
++from fl_control_plane.execution_engine.models import HandlerExecution, InspectionCertificates
+ from fl_shared.cr_models import ExecutionSpec, FaultHandlerSpec, SecretRef
+ from fl_shared.git_utils import normalize_repo_url
+ from fl_shared.handler_secrets import handler_vault_resource_name
+@@ -110,6 +109,9 @@ def _build_env(js: _JobSpec) -> list[client.V1EnvVar]:
+     if js.stage_error:
+         task_text += f"\n\nFailure context:\n{js.stage_error}"
+ 
++    if js.inspection_certs and (js.inspection_certs.certificate_pem is None or js.inspection_certs.key_pem is None):
++        raise ValueError("inspection_certs must include PEM values before building job env vars")
++
+     return [
+         client.V1EnvVar(name="TASK_ID", value=js.execution_id),
+         client.V1EnvVar(name="FAULT_ID", value=js.fault_id),
+diff --git a/fl_control_plane/execution_engine/hdlf_cert_provisioner.py b/fl_control_plane/execution_engine/hdlf_cert_provisioner.py
+index 94702812..5fdd0019 100644
+--- a/fl_control_plane/execution_engine/hdlf_cert_provisioner.py
++++ b/fl_control_plane/execution_engine/hdlf_cert_provisioner.py
+@@ -5,48 +5,69 @@
+ import asyncio
+ import base64
+ import binascii
++import re
+ 
++import aiohttp
+ import structlog
+ from kubernetes_asyncio import client
+-from pydantic import BaseModel, SecretStr
++from pydantic import SecretStr
++from tenacity import RetryCallState, retry, retry_if_exception, stop_after_delay
+ from temporalio.exceptions import ApplicationError
+ 
+ from fl_control_plane.execution_engine.config import get_settings
++from fl_control_plane.execution_engine.models import InspectionCertificates
+ from fl_shared.hdlf_client import HdlfClient
+ from fl_shared.hdlf_client.config import settings as hdlf_settings
+ 
+ log = structlog.get_logger(__name__)
+ 
+ 
+-class InspectionCertificates(BaseModel):
+-    """Provisioned HDLF inspection certificates for job env-var injection.
++_CERT_POLL_INTERVAL_SECONDS = 2
++_CERT_POLL_TIMEOUT_SECONDS = 60
++_CERT_TERMINAL_READY_FALSE_REASONS = {"Denied", "Failed"}
++_HDLF_STATIC_POLICY_QUOTA_MESSAGE = "Cannot create policy, maximum number of static policies reached"
++_HTTP_STATUS_RE = re.compile(r"HTTP (?P<status>\d{3})")
++_INSPECTION_POLICY_PRIVILEGES = ["browse", "open", "create", "append", "rename", "delete"]
++_POLICY_CREATE_RETRY_HTTP_STATUSES = {408, 409, 425, 429}
++_POLICY_CREATE_RETRY_TIMEOUT_TYPE = "HDLFPolicyCreateRetryTimeout"
++_POLICY_QUOTA_MIN_RETRY_INTERVAL_SECONDS = 0.1
++_POLICY_QUOTA_TIMEOUT_TYPE = "HDLFPolicyQuotaTimeout"
+ 
+-    Carries the PEM cert/key so the dispatcher can JSON-escape them into the MCP
+-    config; secret_name is still used for the ``secret_key_ref`` env vars and for
+-    ownerReference patching after the Job is created.
+ 
+-    certificate_pem/key_pem are SecretStr to keep the raw PEM out of repr(),
+-    model_dump(), and tracebacks; call .get_secret_value() at the point of use.
+-    """
++def _inspection_cert_name(inspection_id: str) -> str:
++    return f"fl-inspection-{inspection_id}-hdlf-cert"
+ 
+-    secret_name: str
+-    certificate_pem: SecretStr
+-    key_pem: SecretStr
+ 
++def _inspection_policy_name(inspection_id: str) -> str:
++    return f"fl-inspection-{inspection_id}"
+ 
+-_CERT_POLL_INTERVAL_SECONDS = 2
+-_CERT_POLL_TIMEOUT_SECONDS = 60
+-_CERT_TERMINAL_READY_FALSE_REASONS = {"Denied", "Failed"}
+-_INSPECTION_POLICY_PRIVILEGES = ["browse", "open", "create", "append", "rename", "delete"]
++
++def _is_static_policy_quota_error(exc: BaseException) -> bool:
++    return isinstance(exc, OSError) and _HDLF_STATIC_POLICY_QUOTA_MESSAGE in str(exc)
+ 
+ 
+-def _cert_name(execution_id: str) -> str:
+-    return f"fl-job-{execution_id}-hdlf-cert"
++def _http_status_from_exception(exc: BaseException) -> int | None:
++    match = _HTTP_STATUS_RE.search(str(exc))
++    if match is None:
++        return None
++    return int(match.group("status"))
++
++
++def _is_retryable_policy_create_error(exc: BaseException) -> bool:
++    if _is_static_policy_quota_error(exc):
++        return True
++    if isinstance(exc, aiohttp.ClientError):
++        return True
++    if isinstance(exc, OSError):
++        status = _http_status_from_exception(exc)
++        if status is None:
++            return True
++        return status >= 500 or status in _POLICY_CREATE_RETRY_HTTP_STATUSES
++    return False
+ 
+ 
+ async def issue_inspection_cert(
+     inspection_id: str,
+-    execution_id: str,
+     issuer_name: str,
+     namespace: str,
+     duration_hours: int = 6,
+@@ -55,8 +76,8 @@ async def issue_inspection_cert(
+ 
+     cert-manager generates the RSA key pair itself, signs the certificate with the
+     per-namespace CA-backed Issuer, and writes both ``tls.crt`` and ``tls.key`` into
+-    the Secret named ``fl-job-<execution_id>-hdlf-cert``. No Python crypto operations
+-    are needed — all key material is managed by cert-manager.
++    the inspection-scoped Secret. No Python crypto operations are needed — all key
++    material is managed by cert-manager.
+ 
+     The certificate CN is set to ``inspection_id`` so the HDLF policy subject
+     ``x509:CN=<inspection_id>`` matches.
+@@ -64,8 +85,6 @@ async def issue_inspection_cert(
+     Args:
+         inspection_id: Inspection UUID. Becomes the certificate CN and the HDLF
+             policy subject.
+-        execution_id: Handler execution UUID. Gives the Certificate CR and Secret
+-            a name unique per job attempt.
+         issuer_name: Name of the cert-manager Issuer in the same namespace, e.g.
+             ``pipeline-fl-hdlf-ca-issuer``.
+         namespace: Kubernetes namespace where the Certificate CR is created.
+@@ -80,7 +99,7 @@ async def issue_inspection_cert(
+             ``_CERT_POLL_TIMEOUT_SECONDS`` seconds.
+         IOError: If cert-manager marks the Certificate as failed.
+     """
+-    cert_name = _cert_name(execution_id)
++    cert_name = _inspection_cert_name(inspection_id)
+     secret_name = cert_name
+ 
+     cert_body = {
+@@ -91,7 +110,7 @@ async def issue_inspection_cert(
+             "namespace": namespace,
+             "labels": {
+                 "fl.sap.com/inspection-id": inspection_id,
+-                "fl.sap.com/execution-id": execution_id,
++                "fl.sap.com/cert-scope": "inspection",
+             },
+         },
+         "spec": {
+@@ -228,7 +247,115 @@ async def _read_tls_secret(secret_name: str, namespace: str) -> tuple[SecretStr,
+     return SecretStr(cert), SecretStr(key)
+ 
+ 
+-async def _wait_for_policy_active(
++async def read_inspection_certificates(secret_name: str) -> InspectionCertificates:
++    """Read decoded PEM values from a provisioned per-inspection TLS Secret.
++
++    Args:
++        secret_name: Secret containing cert-manager's ``tls.crt`` and ``tls.key``.
++
++    Returns:
++        InspectionCertificates with the Secret name plus decoded PEM values for
++        dispatcher env-var injection.
++    """
++    cert, key = await _read_tls_secret(secret_name, get_settings().namespace)
++    return InspectionCertificates(secret_name=secret_name, certificate_pem=cert, key_pem=key)
++
++
++async def _create_policy_waiting_for_quota(
++    hdlf_client: HdlfClient,
++    policy_name: str,
++    path: str,
++    subject_cn: str,
++    privileges: list[str],
++    inspection_id: str,
++) -> str:
++    """Create a policy, retrying while HDLF policy creation is transiently unavailable.
++
++    HDLF returns HTTP 403 for a full static-policy pool. That is transient for
++    our workload because terminal inspections delete their policies, freeing a
++    slot. The same local wait budget also covers transient HTTP/server/network
++    failures surfaced after the shared HDLF client's short retry policy is
++    exhausted. Permanent HDLF policy creation failures still propagate
++    immediately.
++
++    Args:
++        hdlf_client: Open HDLF client (namespace-admin credentials).
++        policy_name: Name of the policy to create.
++        path: HDLF path the policy applies to.
++        subject_cn: Certificate CN granted by the policy.
++        privileges: HDLF privileges granted by the policy.
++        inspection_id: Inspection UUID used as structured logging context.
++
++    Returns:
++        The ``operationSequenceId`` from the successful policy PUT.
++
++    Raises:
++        ApplicationError: Non-retryable timeout after the local policy-create
++            wait budget is exhausted.
++        OSError: For permanent HDLF policy creation failures.
++    """
++    settings = get_settings()
++    timeout_seconds = settings.hdlf_policy_quota_wait_timeout_seconds
++    interval_seconds = max(
++        settings.hdlf_policy_quota_wait_interval_seconds,
++        _POLICY_QUOTA_MIN_RETRY_INTERVAL_SECONDS,
++    )
++    loop = asyncio.get_running_loop()
++    deadline = loop.time() + timeout_seconds
++
++    with structlog.contextvars.bound_contextvars(inspection_id=inspection_id):
++
++        def _policy_create_retry_wait(_retry_state: RetryCallState) -> float:
++            return min(interval_seconds, max(0.0, deadline - loop.time()))
++
++        def _log_policy_create_retry(retry_state: RetryCallState) -> None:
++            exception = retry_state.outcome.exception() if retry_state.outcome else None
++            sleep_seconds = retry_state.next_action.sleep if retry_state.next_action else 0.0
++            log.warning(
++                f"HDLF policy creation for policy {policy_name!r} failed with a retryable error; waiting.",
++                policy_name=policy_name,
++                policy_create_attempts=retry_state.attempt_number,
++                retry_in_seconds=sleep_seconds,
++                remaining_seconds=max(0.0, deadline - loop.time()),
++                quota_wait_timeout_seconds=timeout_seconds,
++                last_error=str(exception) if exception else None,
++            )
++
++        @retry(
++            retry=retry_if_exception(_is_retryable_policy_create_error),
++            stop=stop_after_delay(timeout_seconds),
++            wait=_policy_create_retry_wait,
++            before_sleep=_log_policy_create_retry,
++            reraise=True,
++            sleep=asyncio.sleep,
++        )
++        async def _create_policy() -> str:
++            return await hdlf_client.create_policy(
++                policy_name=policy_name,
++                path=path,
++                subject_cn=subject_cn,
++                privileges=privileges,
++            )
++
++        try:
++            return await _create_policy()
++        except (OSError, aiohttp.ClientError) as exc:
++            if _is_retryable_policy_create_error(exc):
++                error_type = (
++                    _POLICY_QUOTA_TIMEOUT_TYPE
++                    if _is_static_policy_quota_error(exc)
++                    else _POLICY_CREATE_RETRY_TIMEOUT_TYPE
++                )
++                raise ApplicationError(
++                    f"HDLF policy creation kept failing with retryable errors for {timeout_seconds}s while creating "
++                    f"policy {policy_name!r}; last error: {exc}",
++                    type=error_type,
++                    non_retryable=True,
++                ) from exc
++            raise
++
++
++async def _wait_for_policy_operation_processed(
+     hdlf_client: HdlfClient,
+     policy_name: str,
+     operation_sequence_id: str,
+@@ -239,16 +366,16 @@ async def _wait_for_policy_active(
+     HDLF saves policy changes immediately but propagates them asynchronously.
+     The status endpoint exposes the ID of the last processed operation; once
+     ``operation_sequence_id <= last_processed_operation_sequence_id`` (UUIDv7
+-    lexicographic order), the policy is guaranteed to be active.
++    lexicographic order), the policy change is guaranteed to be applied.
+ 
+     Args:
+         hdlf_client: Open HDLF client (namespace-admin credentials).
+         policy_name: Name of the policy to poll.
+-        operation_sequence_id: The UUIDv7 returned by the policy PUT.
++        operation_sequence_id: The UUIDv7 returned by the policy write.
+         inspection_id: Inspection UUID used as structured logging context.
+ 
+     Raises:
+-        TimeoutError: If the policy is not active within the deadline.
++        TimeoutError: If the policy operation is not processed within the deadline.
+     """
+     settings = get_settings()
+     timeout_seconds = settings.hdlf_access_poll_timeout_seconds
+@@ -265,7 +392,7 @@ async def _wait_for_policy_active(
+                 last_error = None
+                 if last_processed is not None and operation_sequence_id <= last_processed:
+                     log.info(
+-                        f"HDLF policy {policy_name!r} active.",
++                        f"HDLF policy operation {operation_sequence_id!r} for policy {policy_name!r} processed.",
+                         operation_sequence_id=operation_sequence_id,
+                         last_processed_operation_sequence_id=last_processed,
+                     )
+@@ -286,13 +413,23 @@ async def _wait_for_policy_active(
+                 )
+ 
+             log.debug(
+-                f"Waiting for HDLF policy {policy_name!r} to become active.",
++                f"Waiting for HDLF policy operation {operation_sequence_id!r} for policy {policy_name!r} to process.",
+                 operation_sequence_id=operation_sequence_id,
+                 last_error=str(last_error) if last_error else None,
+             )
+             await asyncio.sleep(interval_seconds)
+ 
+ 
++async def _wait_for_policy_active(
++    hdlf_client: HdlfClient,
++    policy_name: str,
++    operation_sequence_id: str,
++    inspection_id: str,
++) -> None:
++    """Poll until a policy create/update operation has been processed."""
++    await _wait_for_policy_operation_processed(hdlf_client, policy_name, operation_sequence_id, inspection_id)
++
++
+ async def _wait_for_cert_trusted(
+     hdlf_client: HdlfClient,
+     inspection_id: str,
+@@ -341,74 +478,90 @@ async def _wait_for_cert_trusted(
+             await asyncio.sleep(interval_seconds)
+ 
+ 
+-async def patch_certificate_owner(
+-    execution_id: str,
+-    inspection_id: str,
+-    namespace: str,
+-    job_uid: str,
+-) -> None:
+-    """Set the Job as owner of the Certificate CR so k8s GC cleans it up.
++async def cleanup_inspection_policy(inspection_id: str) -> None:
++    """Delete the per-inspection HDLF policy after inspection finalization.
++
++    Args:
++        inspection_id: Inspection UUID used to derive the static HDLF policy name.
++
++    Raises:
++        ApplicationError: Non-retryable ``ConfigError`` when HDLF admin settings
++            are missing.
++        OSError: If HDLF rejects the policy deletion.
++        TimeoutError: If HDLF accepts the deletion but does not process it before
++            the configured access-poll deadline.
++    """
++    with structlog.contextvars.bound_contextvars(inspection_id=inspection_id):
++        if not hdlf_settings.hdlf_rest_api_host or not hdlf_settings.hdlf_container_id:
++            raise ApplicationError(
++                "HDLF_REST_API_HOST and HDLF_CONTAINER_ID must be configured",
++                type="ConfigError",
++                non_retryable=True,
++            )
++
++        policy_name = _inspection_policy_name(inspection_id)
++        async with HdlfClient(
++            hdlf_settings.hdlf_rest_api_host,
++            hdlf_settings.hdlf_container_id,
++            cert_dir=hdlf_settings.hdlf_cert_dir,
++        ) as admin_client:
++            operation_sequence_id = await admin_client.delete_policy(policy_name)
++            if operation_sequence_id is None:
++                return
++            await _wait_for_policy_operation_processed(admin_client, policy_name, operation_sequence_id, inspection_id)
++
++        log.info(f"HDLF inspection policy {policy_name!r} cleaned up.")
+ 
+-    Called after the Job is created and its UID is known. When the Job is
+-    garbage-collected (via ttlSecondsAfterFinished), Kubernetes cascades
+-    deletion to the Certificate. If cert-manager is configured with
+-    ``--enable-certificate-owner-ref``, it will also delete the Secret.
+ 
+-    Failure is logged but not re-raised — the job runs correctly without the
+-    ownerReference; the Certificate (and its Secret) will linger until
+-    manual cleanup.
++async def cleanup_inspection_certificate(inspection_id: str) -> None:
++    """Delete the per-inspection cert-manager Certificate and Secret.
+ 
+     Args:
+-        execution_id: Handler execution UUID — used to locate the Certificate CR.
+-        inspection_id: Inspection UUID used as structured logging context.
+-        namespace: Kubernetes namespace.
+-        job_uid: UID of the created Job.
++        inspection_id: Inspection UUID used to derive the certificate and Secret name.
+     """
++    settings = get_settings()
++    cert_name = _inspection_cert_name(inspection_id)
+     with structlog.contextvars.bound_contextvars(inspection_id=inspection_id):
+-        cert_name = _cert_name(execution_id)
+-        owner_ref = [
+-            {
+-                "apiVersion": "batch/v1",
+-                "kind": "Job",
+-                "name": f"fl-job-{execution_id}",
+-                "uid": job_uid,
+-                "blockOwnerDeletion": True,
+-                "controller": True,
+-            }
+-        ]
+-        try:
+-            async with client.ApiClient() as api_client:
+-                await client.CustomObjectsApi(api_client).patch_namespaced_custom_object(
++        async with client.ApiClient() as api_client:
++            custom = client.CustomObjectsApi(api_client)
++            core = client.CoreV1Api(api_client)
++            try:
++                await custom.delete_namespaced_custom_object(
+                     group="cert-manager.io",
+                     version="v1",
+-                    namespace=namespace,
++                    namespace=settings.namespace,
+                     plural="certificates",
+                     name=cert_name,
+-                    body={"metadata": {"ownerReferences": owner_ref}},
+                 )
+-            log.info("Certificate owner patched", cert_name=cert_name, job_uid=job_uid)
+-        except Exception:  # pylint: disable=broad-exception-caught
+-            log.warning(
+-                "Failed to patch ownerReferences on Certificate — it will linger after Job GC",
+-                cert_name=cert_name,
+-                exc_info=True,
+-            )
++                log.info(f"Certificate CR {cert_name!r} deleted.")
++            except client.ApiException as exc:
++                if exc.status != 404:
++                    raise
++                log.info(f"Certificate CR {cert_name!r} already absent.")
++
++            try:
++                await core.delete_namespaced_secret(name=cert_name, namespace=settings.namespace)
++                log.info(f"Certificate Secret {cert_name!r} deleted.")
++            except client.ApiException as exc:
++                if exc.status != 404:
++                    raise
++                log.info(f"Certificate Secret {cert_name!r} already absent.")
+ 
+ 
+-async def provision_inspection_access(inspection_id: str, execution_id: str) -> InspectionCertificates:
+-    """Grant HDLF folder policy and issue a per-inspection client cert for a job.
++async def provision_inspection_access(inspection_id: str) -> InspectionCertificates:
++    """Grant HDLF folder policy and issue a workflow-scoped inspection client cert.
+ 
+-    Shared by both handler and finalizer job submission. ``EE_HDLF_CA_ISSUER_NAME``
+-    must be set because handler and finalizer jobs need a per-inspection HDLF
+-    identity to read inputs and write results.
++    ``EE_HDLF_CA_ISSUER_NAME`` must be set because handler and finalizer jobs
++    need a per-inspection HDLF identity to read inputs and write results. When
++    this function returns, the policy operation has been processed and HDLF has
++    accepted the issued cert in a trust probe.
+ 
+     Args:
+         inspection_id: Inspection UUID. Becomes the policy subject and cert CN.
+-        execution_id: Job execution UUID. Names the Certificate CR and Secret.
+ 
+     Returns:
+-        InspectionCertificates with the cert Secret name and PEM cert/key for
+-        env-var injection into the job pod.
++        InspectionCertificates with only the Kubernetes Secret name. PEM values
++        stay inside Kubernetes Secret data and are not returned to Temporal.
+ 
+     Raises:
+         ApplicationError: Non-retryable ``ConfigError`` when the HDLF CA issuer
+@@ -435,18 +588,19 @@ async def provision_inspection_access(inspection_id: str, execution_id: str) ->
+             hdlf_settings.hdlf_container_id,
+             cert_dir=hdlf_settings.hdlf_cert_dir,
+         ) as admin_client:
+-            policy_name = f"fl-inspection-{inspection_id}"
+-            operation_sequence_id = await admin_client.create_policy(
++            policy_name = _inspection_policy_name(inspection_id)
++            operation_sequence_id = await _create_policy_waiting_for_quota(
++                admin_client,
+                 policy_name=policy_name,
+                 path=f"/{inspection_id}/",
+                 subject_cn=inspection_id,
+                 privileges=_INSPECTION_POLICY_PRIVILEGES,
++                inspection_id=inspection_id,
+             )
+             await _wait_for_policy_active(admin_client, policy_name, operation_sequence_id, inspection_id)
+ 
+         secret_name = await issue_inspection_cert(
+             inspection_id=inspection_id,
+-            execution_id=execution_id,
+             issuer_name=settings.hdlf_ca_issuer_name,
+             namespace=settings.namespace,
+             duration_hours=settings.hdlf_inspection_cert_duration_hours,
+@@ -462,6 +616,4 @@ async def provision_inspection_access(inspection_id: str, execution_id: str) ->
+ 
+         return InspectionCertificates(
+             secret_name=secret_name,
+-            certificate_pem=cert,
+-            key_pem=key,
+         )
+diff --git a/fl_control_plane/execution_engine/job_activity.py b/fl_control_plane/execution_engine/job_activity.py
+index 30d69d64..8973008b 100644
+--- a/fl_control_plane/execution_engine/job_activity.py
++++ b/fl_control_plane/execution_engine/job_activity.py
+@@ -8,15 +8,11 @@
+ from temporalio import activity
+ from temporalio.exceptions import ApplicationError
+ 
+-from fl_control_plane.execution_engine.config import get_settings
+ from fl_control_plane.execution_engine.dispatcher import (
+     _make_job_spec,
+     _submit_job,
+ )
+-from fl_control_plane.execution_engine.hdlf_cert_provisioner import (
+-    patch_certificate_owner,
+-    provision_inspection_access,
+-)
++from fl_control_plane.execution_engine.hdlf_cert_provisioner import read_inspection_certificates
+ from fl_control_plane.execution_engine.k8s_jobs import load_k8s
+ from fl_control_plane.execution_engine.models import (
+     HandlerExecutionResult,
+@@ -52,8 +48,16 @@ async def submit_handler_job_activity(
+         ApplicationError: Retryable for 5xx k8s API errors and network failures —
+             Temporal will retry with exponential backoff.
+     """
++    if request.inspection_certs is None:
++        raise ApplicationError(
++            "Inspection HDLF access must be provisioned before submitting a handler job",
++            type="InvalidInput",
++            non_retryable=True,
++        )
++
+     async with run_with_heartbeat():
+         await load_k8s()
++        inspection_certs = await read_inspection_certificates(request.inspection_certs.secret_name)
+ 
+         job_spec = _make_job_spec(
+             request.handler,
+@@ -64,11 +68,7 @@ async def submit_handler_job_activity(
+             match_scope=request.match_scope,
+             matched_stages=request.matched_stages,
+         )
+-
+-        job_spec.inspection_certs = await provision_inspection_access(
+-            inspection_id=request.inspection_id,
+-            execution_id=job_spec.execution_id,
+-        )
++        job_spec.inspection_certs = inspection_certs
+ 
+         try:
+             finding = await _submit_job(job_spec)
+@@ -107,14 +107,6 @@ async def submit_handler_job_activity(
+         execution_id=job_spec.execution_id,
+     )
+ 
+-    if job_spec.inspection_certs and finding.job_uid:
+-        await patch_certificate_owner(
+-            execution_id=job_spec.execution_id,
+-            inspection_id=request.inspection_id,
+-            namespace=get_settings().namespace,
+-            job_uid=finding.job_uid,
+-        )
+-
+     return HandlerJobSubmission(
+         execution_id=finding.execution_id,
+         job_name=finding.job_name,
+diff --git a/fl_control_plane/execution_engine/models.py b/fl_control_plane/execution_engine/models.py
+index 146e4ff7..d15efecd 100644
+--- a/fl_control_plane/execution_engine/models.py
++++ b/fl_control_plane/execution_engine/models.py
+@@ -4,12 +4,34 @@
+ 
+ from typing import Literal, Self
+ 
+-from pydantic import BaseModel, Field, model_validator
++from pydantic import BaseModel, Field, SecretStr, model_validator
+ 
+ from fl_shared.cr_models import FaultHandlerSpec
+ from fl_shared.match_context import MatchedStageRef, MatchScope
+ 
+ 
++class InspectionCertificates(BaseModel):
++    """Provisioned HDLF inspection certificate material for job env-var injection.
++
++    Provenance: returned by ``provision_inspection_access_activity`` after the
++    workflow has created the per-inspection HDLF policy, issued the cert-manager
++    Certificate, and verified HDLF trusts the cert. The workflow only carries
++    ``secret_name``. Submit activities read the Secret immediately before job
++    creation and populate ``certificate_pem``/``key_pem`` for dispatcher env vars.
++
++    Attributes:
++        secret_name: Kubernetes Secret containing ``tls.crt`` and ``tls.key``.
++        certificate_pem: Decoded certificate PEM. ``None`` on workflow payloads;
++            set only inside submit activities before building the k8s Job.
++        key_pem: Decoded private key PEM. ``None`` on workflow payloads; set only
++            inside submit activities before building the k8s Job.
++    """
++
++    secret_name: str
++    certificate_pem: SecretStr | None = None
++    key_pem: SecretStr | None = None
++
++
+ class PipelineRun(BaseModel):
+     """Describes a failed pipeline run that the execution engine should analyze.
+ 
+@@ -90,6 +112,9 @@ class SubmitHandlerJobRequest(BaseModel):
+             to the failed stages that selected this handler.
+         matched_stages: Failed-stage DB IDs plus CI display names matched by
+             the orchestrator. Empty for pipeline-scoped handlers.
++        inspection_certs: Already-provisioned HDLF certificate Secret reference.
++            Job submission consumes this to build env var references; it does
++            not create or mutate HDLF policies or cert-manager resources.
+     """
+ 
+     inspection_id: str
+@@ -99,6 +124,7 @@ class SubmitHandlerJobRequest(BaseModel):
+     commitish: str = "HEAD"
+     match_scope: MatchScope = "pipeline"
+     matched_stages: list[MatchedStageRef] = Field(default_factory=list)
++    inspection_certs: InspectionCertificates | None = None
+ 
+     @model_validator(mode="after")
+     def _validate_match_scope(self) -> Self:
+diff --git a/fl_control_plane/ingestion_api/router.py b/fl_control_plane/ingestion_api/router.py
+index c941d94a..9b93bcb7 100644
+--- a/fl_control_plane/ingestion_api/router.py
++++ b/fl_control_plane/ingestion_api/router.py
+@@ -140,6 +140,8 @@ async def create_inspection(
+         replay_inspection_id=replay_inspection_id,
+         job_poll_timeout_seconds=settings.execution_engine_job_poll_timeout_seconds,
+         job_poll_cleanup_grace_seconds=settings.execution_engine_job_poll_cleanup_grace_seconds,
++        hdlf_access_poll_timeout_seconds=settings.execution_engine_hdlf_access_poll_timeout_seconds,
++        hdlf_policy_quota_wait_timeout_seconds=settings.execution_engine_hdlf_policy_quota_wait_timeout_seconds,
+     )
+ 
+     workflow_id = f"pipeline-inspection-{settings.tenant_id}-{source_system}-{inspection.id}"
+diff --git a/fl_control_plane/temporal/finalize_activity.py b/fl_control_plane/temporal/finalize_activity.py
+index b6384933..32d539f3 100644
+--- a/fl_control_plane/temporal/finalize_activity.py
++++ b/fl_control_plane/temporal/finalize_activity.py
+@@ -11,15 +11,11 @@
+ from temporalio.exceptions import ApplicationError
+ 
+ from fl_control_plane.database import Inspection, async_session
+-from fl_control_plane.execution_engine.config import get_settings
+ from fl_control_plane.execution_engine.dispatcher import (
+     _submit_job,
+     build_finalizer_job_spec,
+ )
+-from fl_control_plane.execution_engine.hdlf_cert_provisioner import (
+-    patch_certificate_owner,
+-    provision_inspection_access,
+-)
++from fl_control_plane.execution_engine.hdlf_cert_provisioner import read_inspection_certificates
+ from fl_control_plane.execution_engine.k8s_jobs import load_k8s
+ from fl_control_plane.finalizer_dispatcher.activity import write_finalizer_execution
+ from fl_control_plane.finalizer_dispatcher.selector import pick_finalizer, should_dispatch
+@@ -144,14 +140,17 @@ async def submit_finalizer_job_activity(
+         repo_url=repo_url,
+         commitish=commitish,
+     )
++    if request.inspection_certs is None:
++        raise ApplicationError(
++            "Inspection HDLF access must be provisioned before submitting a finalizer job",
++            type="InvalidInput",
++            non_retryable=True,
++        )
+ 
+     started_at = datetime.now(UTC).isoformat()
+     async with run_with_heartbeat():
+         await load_k8s()
+-        job_spec.inspection_certs = await provision_inspection_access(
+-            inspection_id=request.inspection_id,
+-            execution_id=execution_id,
+-        )
++        job_spec.inspection_certs = await read_inspection_certificates(request.inspection_certs.secret_name)
+         try:
+             finding = await _submit_job(job_spec)
+         except ApiException as exc:
+@@ -186,14 +185,6 @@ async def submit_finalizer_job_activity(
+         job_name=finding.job_name,
+     )
+ 
+-    if job_spec.inspection_certs and finding.job_uid:
+-        await patch_certificate_owner(
+-            execution_id=execution_id,
+-            inspection_id=request.inspection_id,
+-            namespace=get_settings().namespace,
+-            job_uid=finding.job_uid,
+-        )
+-
+     return FinalizerJobSubmission(
+         inspection_id=request.inspection_id,
+         execution_id=execution_id,
+diff --git a/fl_control_plane/temporal/hdlf_access_activity.py b/fl_control_plane/temporal/hdlf_access_activity.py
+new file mode 100644
+index 00000000..b4528211
+--- /dev/null
++++ b/fl_control_plane/temporal/hdlf_access_activity.py
+@@ -0,0 +1,42 @@
++"""Temporal activities for workflow-scoped HDLF access provisioning and cleanup."""
++
++from temporalio import activity
++
++from fl_control_plane.execution_engine.hdlf_cert_provisioner import (
++    cleanup_inspection_certificate,
++    cleanup_inspection_policy,
++    provision_inspection_access,
++)
++from fl_control_plane.execution_engine.k8s_jobs import load_k8s
++from fl_control_plane.execution_engine.models import InspectionCertificates
++from fl_control_plane.temporal.base_activity import run_with_heartbeat
++
++
++@activity.defn
++async def provision_inspection_access_activity(inspection_id: str) -> InspectionCertificates:
++    """Provision workflow-scoped HDLF policy and certificate access.
++
++    Args:
++        inspection_id: Inspection UUID used as the HDLF policy subject and cert CN.
++
++    Returns:
++        Secret reference for already-provisioned inspection HDLF access.
++    """
++    async with run_with_heartbeat():
++        await load_k8s()
++        return await provision_inspection_access(inspection_id)
++
++
++@activity.defn
++async def cleanup_inspection_access_activity(inspection_id: str) -> None:
++    """Delete workflow-scoped HDLF policy and certificate resources.
++
++    Args:
++        inspection_id: Inspection UUID used to derive the policy and certificate names.
++    """
++    async with run_with_heartbeat():
++        await load_k8s()
++        try:
++            await cleanup_inspection_policy(inspection_id)
++        finally:
++            await cleanup_inspection_certificate(inspection_id)
+diff --git a/fl_control_plane/temporal/models.py b/fl_control_plane/temporal/models.py
+index 814851b6..eb222e16 100644
+--- a/fl_control_plane/temporal/models.py
++++ b/fl_control_plane/temporal/models.py
+@@ -4,7 +4,7 @@
+ 
+ from pydantic import BaseModel, ConfigDict, Field
+ 
+-from fl_control_plane.execution_engine.models import HandlerExecutionResult
++from fl_control_plane.execution_engine.models import HandlerExecutionResult, InspectionCertificates
+ from fl_control_plane.handler_orchestrator.models import ApplicabilityDecision
+ from fl_shared.cr_models import FaultHandlerSpec
+ 
+@@ -64,6 +64,13 @@ class IngestionRequest(BaseModel):
+         job_poll_cleanup_grace_seconds: Additional Temporal activity runtime
+             reserved after ``job_poll_timeout_seconds`` for pod log collection and
+             Job suspension. Defaults to the execution-engine cleanup grace.
++        hdlf_access_poll_timeout_seconds: Captured HDLF policy/certificate
++            propagation timeout. The workflow uses it only for deterministic
++            Temporal activity timeout sizing; activities read their live config.
++        hdlf_policy_quota_wait_timeout_seconds: Captured local wait budget for
++            HDLF static-policy quota exhaustion during job submission. The
++            workflow uses it only for deterministic Temporal activity timeout
++            sizing; activities read their live config.
+     """
+ 
+     model_config = ConfigDict(extra="forbid")
+@@ -77,6 +84,8 @@ class IngestionRequest(BaseModel):
+     replay_inspection_id: str | None = None
+     job_poll_timeout_seconds: int = Field(default=4500, ge=1)
+     job_poll_cleanup_grace_seconds: int = Field(default=120, ge=0)
++    hdlf_access_poll_timeout_seconds: int = Field(default=60, ge=1)
++    hdlf_policy_quota_wait_timeout_seconds: int = Field(default=3600, ge=0)
+ 
+ 
+ class MetadataExtractionResult(BaseModel):
+@@ -414,11 +423,15 @@ class FinalizeInspectionRequest(BaseModel):
+         status: Terminal status to write — ``"COMPLETED"`` on success,
+             ``"FAILED"`` when the workflow encountered an unrecoverable error
+             or stopped without writing a finalizer result.
++        inspection_certs: Already-provisioned HDLF certificate Secret reference.
++            Required when ``submit_finalizer_job_activity`` dispatches a finalizer
++            Job; ignored by ``mark_inspection_terminal_activity``.
+     """
+ 
+     inspection_id: str
+     execution_id: str
+     status: Literal["COMPLETED", "FAILED"]
++    inspection_certs: InspectionCertificates | None = None
+ 
+ 
+ class FinalizerJobSubmission(BaseModel):
+diff --git a/fl_control_plane/temporal/worker.py b/fl_control_plane/temporal/worker.py
+index fb751fba..b89f8b17 100644
+--- a/fl_control_plane/temporal/worker.py
++++ b/fl_control_plane/temporal/worker.py
+@@ -31,6 +31,10 @@
+     poll_finalizer_job_activity,
+     submit_finalizer_job_activity,
+ )
++from fl_control_plane.temporal.hdlf_access_activity import (
++    cleanup_inspection_access_activity,
++    provision_inspection_access_activity,
++)
+ from fl_control_plane.temporal.handler_execution_activity import (
+     persist_handler_executions_activity,
+     update_handler_execution_status_activity,
+@@ -72,9 +76,11 @@ def create_worker(client: Client) -> Worker:
+             poll_handler_job_activity,
+             persist_handler_executions_activity,
+             update_handler_execution_status_activity,
++            provision_inspection_access_activity,
+             submit_finalizer_job_activity,
+             poll_finalizer_job_activity,
+             mark_inspection_terminal_activity,
++            cleanup_inspection_access_activity,
+         ],
+         interceptors=[LoggingInterceptor()],
+     )
+diff --git a/fl_control_plane/temporal/workflow.py b/fl_control_plane/temporal/workflow.py
+index 538660a9..62301ca8 100644
+--- a/fl_control_plane/temporal/workflow.py
++++ b/fl_control_plane/temporal/workflow.py
+@@ -56,6 +56,7 @@
+     from fl_control_plane.execution_engine.models import (
+         HandlerExecutionResult,
+         HandlerJobSubmission,
++        InspectionCertificates,
+         SubmitHandlerJobRequest,
+     )
+     from fl_control_plane.handler_orchestrator.activity import orchestrate_handlers_activity
+@@ -67,6 +68,10 @@
+         poll_finalizer_job_activity,
+         submit_finalizer_job_activity,
+     )
++    from fl_control_plane.temporal.hdlf_access_activity import (
++        cleanup_inspection_access_activity,
++        provision_inspection_access_activity,
++    )
+     from fl_control_plane.temporal.handler_execution_activity import (
+         persist_handler_executions_activity,
+         update_handler_execution_status_activity,
+@@ -96,6 +101,8 @@
+ 
+ 
+ _JOB_POLL_ACTIVITY_SCHEDULE_TO_CLOSE_MULTIPLIER = 3
++_INSPECTION_ACCESS_ACTIVITY_BUFFER_SECONDS = 120
++_JOB_SUBMIT_CERTIFICATE_READY_TIMEOUT_SECONDS = 60
+ 
+ 
+ def _job_poll_activity_timeouts(request: IngestionRequest) -> tuple[timedelta, timedelta]:
+@@ -120,6 +127,39 @@ def _job_poll_activity_timeouts(request: IngestionRequest) -> tuple[timedelta, t
+     return schedule_to_close_timeout, start_to_close_timeout
+ 
+ 
++def _job_submit_activity_start_to_close_timeout(request: IngestionRequest) -> timedelta:
++    """Return the start-to-close timeout for handler/finalizer job submission."""
++    return timedelta(minutes=2)
++
++
++def _inspection_access_activity_start_to_close_timeout(request: IngestionRequest) -> timedelta:
++    """Return the start-to-close timeout for workflow-scoped HDLF access provisioning.
++
++    Provisioning can legitimately spend most of its time inside HDLF access
++    setup: waiting for a static policy slot, waiting for the policy
++    operation to process, waiting for cert-manager to issue the certificate,
++    and probing until HDLF trusts that certificate.
++    """
++    return timedelta(
++        seconds=(
++            request.hdlf_policy_quota_wait_timeout_seconds
++            + (request.hdlf_access_poll_timeout_seconds * 2)
++            + _JOB_SUBMIT_CERTIFICATE_READY_TIMEOUT_SECONDS
++            + _INSPECTION_ACCESS_ACTIVITY_BUFFER_SECONDS
++        )
++    )
++
++
++def _inspection_terminal_activity_start_to_close_timeout(request: IngestionRequest) -> timedelta:
++    """Return the start-to-close timeout for the terminal DB write."""
++    return timedelta(minutes=2)
++
++
++def _inspection_cleanup_activity_start_to_close_timeout(request: IngestionRequest) -> timedelta:
++    """Return the start-to-close timeout for final HDLF access cleanup."""
++    return timedelta(seconds=request.hdlf_access_poll_timeout_seconds + _INSPECTION_ACCESS_ACTIVITY_BUFFER_SECONDS)
++
++
+ def _handler_execution_db_status(
+     result: HandlerExecutionResult,
+ ) -> Literal["success", "failed", "timed_out"]:
+@@ -171,6 +211,35 @@ async def run(self, request: IngestionRequest) -> WorkflowResult:
+             non_retryable_error_types=["ConfigError", "InvalidInput", "PollTimeout"],
+         )
+         job_poll_schedule_to_close_timeout, job_poll_start_to_close_timeout = _job_poll_activity_timeouts(request)
++        job_submit_start_to_close_timeout = _job_submit_activity_start_to_close_timeout(request)
++        inspection_access_start_to_close_timeout = _inspection_access_activity_start_to_close_timeout(request)
++        inspection_terminal_start_to_close_timeout = _inspection_terminal_activity_start_to_close_timeout(request)
++        inspection_cleanup_start_to_close_timeout = _inspection_cleanup_activity_start_to_close_timeout(request)
++        inspection_certs: InspectionCertificates | None = None
++        inspection_access_provisioning_started = False
++
++        async def _provision_inspection_access() -> InspectionCertificates:
++            nonlocal inspection_access_provisioning_started, inspection_certs
++            if inspection_certs is not None:
++                return inspection_certs
++            inspection_access_provisioning_started = True
++            inspection_certs = await execute_activity(
++                provision_inspection_access_activity,
++                request.inspection_id,
++                start_to_close_timeout=inspection_access_start_to_close_timeout,
++                heartbeat_timeout=timedelta(seconds=30),
++                retry_policy=_activity_retry_policy,
++            )
++            return inspection_certs
++
++        async def _cleanup_inspection_access() -> None:
++            await execute_activity(
++                cleanup_inspection_access_activity,
++                request.inspection_id,
++                start_to_close_timeout=inspection_cleanup_start_to_close_timeout,
++                heartbeat_timeout=timedelta(seconds=30),
++                retry_policy=_activity_retry_policy,
++            )
+ 
+         async def _finalize_inspection(
+             finalize_status: Literal["COMPLETED", "FAILED"],
+@@ -185,10 +254,11 @@ async def _finalize_inspection(
+             )
+ 
+             if dispatch_finalizer:
++                finalize_request.inspection_certs = await _provision_inspection_access()
+                 finalizer_submission: FinalizerJobSubmission = await execute_activity(
+                     submit_finalizer_job_activity,
+                     finalize_request,
+-                    start_to_close_timeout=timedelta(minutes=2),
++                    start_to_close_timeout=job_submit_start_to_close_timeout,
+                     heartbeat_timeout=timedelta(seconds=30),
+                     retry_policy=_activity_retry_policy,
+                 )
+@@ -210,7 +280,7 @@ async def _finalize_inspection(
+                     finalize_request=finalize_request,
+                     job_result=finalizer_job_result,
+                 ),
+-                start_to_close_timeout=timedelta(minutes=2),
++                start_to_close_timeout=inspection_terminal_start_to_close_timeout,
+                 heartbeat_timeout=timedelta(seconds=30),
+                 retry_policy=_activity_retry_policy,
+             )
+@@ -327,6 +397,7 @@ async def _finalize_inspection(
+                         heartbeat_timeout=timedelta(seconds=30),
+                         retry_policy=_activity_retry_policy,
+                     )
++                inspection_certs = await _provision_inspection_access()
+ 
+                 async def _run_handler(handler: FaultHandlerSpec) -> HandlerExecutionResult:
+                     decision = matched_decisions.get(handler.fault_id)
+@@ -354,8 +425,9 @@ async def _run_handler(handler: FaultHandlerSpec) -> HandlerExecutionResult:
+                                 commitish=orchestration_result.commit_id or "HEAD",
+                                 match_scope=match_scope,
+                                 matched_stages=matched_stage_refs,
++                                inspection_certs=inspection_certs,
+                             ),
+-                            start_to_close_timeout=timedelta(minutes=2),
++                            start_to_close_timeout=job_submit_start_to_close_timeout,
+                             heartbeat_timeout=timedelta(seconds=30),
+                             retry_policy=_activity_retry_policy,
+                         )
+@@ -401,10 +473,14 @@ async def _run_handler(handler: FaultHandlerSpec) -> HandlerExecutionResult:
+ 
+                 _finalize_status = "COMPLETED"
+         finally:
+-            finalize_result = await _finalize_inspection(
+-                _finalize_status,
+-                dispatch_finalizer=_should_dispatch_finalizer,
+-            )
++            try:
++                finalize_result = await _finalize_inspection(
++                    _finalize_status,
++                    dispatch_finalizer=_should_dispatch_finalizer,
++                )
++            finally:
++                if inspection_access_provisioning_started:
++                    await _cleanup_inspection_access()
+ 
+         return WorkflowResult(
+             inspection_id=request.inspection_id,
+diff --git a/fl_shared/hdlf_client/client.py b/fl_shared/hdlf_client/client.py
+index d2c9dcb7..c38b0a51 100644
+--- a/fl_shared/hdlf_client/client.py
++++ b/fl_shared/hdlf_client/client.py
+@@ -812,6 +812,46 @@ async def create_policy(
+         )
+         return operation_sequence_id
+ 
++    async def delete_policy(self, policy_name: str) -> str | None:
++        """Delete an HDLF policy via the Policies API.
++
++        The DELETE is idempotent from the caller's perspective: a missing policy
++        returns ``None`` and is treated as already cleaned up. When HDLF accepts
++        the delete asynchronously, the response contains ``operationSequenceId``;
++        callers can pass that ID to ``get_policy_operations_status`` and wait for
++        it to be processed before assuming the static policy slot is released.
++
++        Args:
++            policy_name: Unique policy identifier, e.g. "fl-inspection-<inspection_id>".
++
++        Returns:
++            The ``operationSequenceId`` assigned to this DELETE, or ``None`` when
++            the policy is already absent or HDLF returns an empty successful body.
++        """
++        if self._session is None:
++            raise RuntimeError("HdlfClient must be used as an async context manager")
++        url = f"/policies/v1/{policy_name}"
++        status, _, response_body = await self._request("DELETE", url)
++        if status == 404:
++            log.info(f"HDLF policy {policy_name!r} already absent.")
++            return None
++        if not 200 <= status < 300:
++            raise OSError(f"HDLF policy DELETE {policy_name!r} returned HTTP {status}: {response_body[:200]!r}")
++        if not response_body:
++            log.info(f"HDLF policy {policy_name!r} deleted without operation ID.")
++            return None
++        try:
++            operation_sequence_id: str = json.loads(response_body)["operationSequenceId"]
++        except (json.JSONDecodeError, KeyError) as exc:
++            raise OSError(
++                f"HDLF policy DELETE {policy_name!r} returned unexpected body: {response_body[:200]!r}"
++            ) from exc
++        log.info(
++            f"HDLF policy {policy_name!r} deleted.",
++            operation_sequence_id=operation_sequence_id,
++        )
++        return operation_sequence_id
++
+     async def get_policy_operations_status(self) -> PolicyOperationsStatus:
+         """Return the most recent processed policy operation ID.
+ 
+diff --git a/tests/execution_engine/test_dispatcher.py b/tests/execution_engine/test_dispatcher.py
+index 8b72af09..e6cd75bd 100644
+--- a/tests/execution_engine/test_dispatcher.py
++++ b/tests/execution_engine/test_dispatcher.py
+@@ -7,6 +7,7 @@
+ from unittest.mock import AsyncMock, MagicMock, patch
+ 
+ import pytest
++from pydantic import SecretStr
+ 
+ from fl_control_plane.execution_engine import dispatcher
+ from fl_shared.cr_models import FaultHandlerSpec, SecretRef
+@@ -235,26 +236,33 @@ async def test_env_includes_mcp_hdlf_coordinates_from_service_binding_settings()
+     assert env["MCP_HDLF_CONTAINER_ID"] == env["HDLF_CONTAINER_ID"]
+ 
+ 
+-async def test_env_includes_hdlf_cert_aliases_from_per_inspection_secret():
+-    """Non-MCP HDLF client reads the cert from the per-inspection Secret; the MCP
+-    client receives the same PEM inline, JSON-escaped for the MCP config template."""
++async def test_env_includes_hdlf_certs_from_per_inspection_secret_and_inline_mcp_values():
++    """Non-MCP HDLF client reads the Secret; MCP receives JSON-escaped inline PEM."""
++    certificate_pem = "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n"
++    key_pem = "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n"
+     certs = dispatcher.InspectionCertificates(
+-        secret_name="fl-job-run-hdlf-cert",
+-        certificate_pem="-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n",
+-        key_pem="-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n",
++        secret_name="fl-inspection-run-hdlf-cert",
++        certificate_pem=SecretStr(certificate_pem),
++        key_pem=SecretStr(key_pem),
+     )
+     _, job = await _dispatch(inspection_certs=certs)
+ 
+-    # The agent-consumed cert stays a secret_key_ref (no JSON boundary to cross).
++    env = _env(job)
+     refs = _secret_env_refs(job)
+-    assert refs["HDLF_CLIENT_CERTIFICATE"] == ("fl-job-run-hdlf-cert", "tls.crt")
+-    assert refs["HDLF_CLIENT_KEY"] == ("fl-job-run-hdlf-cert", "tls.key")
++    assert refs["HDLF_CLIENT_CERTIFICATE"] == ("fl-inspection-run-hdlf-cert", "tls.crt")
++    assert refs["HDLF_CLIENT_KEY"] == ("fl-inspection-run-hdlf-cert", "tls.key")
++    assert "MCP_HDLF_CLIENT_CERTIFICATE" not in refs
++    assert "MCP_HDLF_CLIENT_KEY" not in refs
++    assert json.loads(f'"{env["MCP_HDLF_CLIENT_CERTIFICATE"]}"') == certificate_pem
++    assert json.loads(f'"{env["MCP_HDLF_CLIENT_KEY"]}"') == key_pem
+ 
+-    # The MCP cert is injected inline and JSON-escaped; the agent runtime's
+-    # json.loads restores the exact PEM, so a wrap-and-decode recovers it.
+-    env = _env(job)
+-    assert json.loads(f'"{env["MCP_HDLF_CLIENT_CERTIFICATE"]}"') == certs.certificate_pem.get_secret_value()
+-    assert json.loads(f'"{env["MCP_HDLF_CLIENT_KEY"]}"') == certs.key_pem.get_secret_value()
++
++async def test_env_rejects_secret_ref_without_inline_mcp_values():
++    """Dispatcher requires submit activities to hydrate PEM values before Job build."""
++    certs = dispatcher.InspectionCertificates(secret_name="fl-inspection-run-hdlf-cert")
++
++    with pytest.raises(ValueError, match="PEM values"):
++        await _dispatch(inspection_certs=certs)
+ 
+ 
+ # --- Job spec ---
+diff --git a/tests/execution_engine/test_hdlf_cert_provisioner.py b/tests/execution_engine/test_hdlf_cert_provisioner.py
+index 9e74f639..e772f60a 100644
+--- a/tests/execution_engine/test_hdlf_cert_provisioner.py
++++ b/tests/execution_engine/test_hdlf_cert_provisioner.py
+@@ -141,18 +141,20 @@ async def __aexit__(self, *_args: object) -> None:
+             hdlf_inspection_cert_duration_hours=6,
+             hdlf_access_poll_timeout_seconds=1,
+             hdlf_access_poll_interval_seconds=0,
++            hdlf_policy_quota_wait_timeout_seconds=5,
++            hdlf_policy_quota_wait_interval_seconds=0.1,
+         ),
+     )
+-    issue_cert = AsyncMock(return_value="fl-job-exec-1-hdlf-cert")
++    issue_cert = AsyncMock(return_value="fl-inspection-insp-1-hdlf-cert")
+     monkeypatch.setattr(hdlf_cert_provisioner, "issue_inspection_cert", issue_cert)
+     read_secret = AsyncMock(return_value=(SecretStr("cert"), SecretStr("key")))
+     monkeypatch.setattr(hdlf_cert_provisioner, "_read_tls_secret", read_secret)
+ 
+-    certs = await hdlf_cert_provisioner.provision_inspection_access("insp-1", "exec-1")
++    certs = await hdlf_cert_provisioner.provision_inspection_access("insp-1")
+ 
+-    assert certs.secret_name == "fl-job-exec-1-hdlf-cert"
+-    assert certs.certificate_pem.get_secret_value() == "cert"
+-    assert certs.key_pem.get_secret_value() == "key"
++    assert certs.secret_name == "fl-inspection-insp-1-hdlf-cert"
++    assert certs.certificate_pem is None
++    assert certs.key_pem is None
+     assert contexts[0] == {"inspection_id": "insp-1"}
+     _FakeHdlfClient.instances[0].create_policy.assert_awaited_once_with(
+         policy_name="fl-inspection-insp-1",
+@@ -163,18 +165,191 @@ async def __aexit__(self, *_args: object) -> None:
+     _FakeHdlfClient.instances[0].get_policy_operations_status.assert_awaited_once()
+     issue_cert.assert_awaited_once_with(
+         inspection_id="insp-1",
+-        execution_id="exec-1",
+         issuer_name="pipeline-fl-hdlf-ca-issuer",
+         namespace="test-depl-name",
+         duration_hours=6,
+     )
+-    read_secret.assert_awaited_once_with("fl-job-exec-1-hdlf-cert", "test-depl-name")
++    read_secret.assert_awaited_once_with("fl-inspection-insp-1-hdlf-cert", "test-depl-name")
+     assert len(_FakeHdlfClient.instances) == 2
+     _FakeHdlfClient.instances[1].exists.assert_awaited_once_with("insp-1/")
+     assert _FakeHdlfClient.instances[1].kwargs["client_certificate"].get_secret_value() == "cert"
+     assert _FakeHdlfClient.instances[1].kwargs["client_key"].get_secret_value() == "key"
+ 
+ 
++@pytest.mark.asyncio
++async def test_read_inspection_certificates_returns_secret_reference_and_pem_values(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """Submit activities can hydrate a provisioned cert Secret before dispatch."""
++    read_secret = AsyncMock(return_value=(SecretStr("cert"), SecretStr("key")))
++    monkeypatch.setattr(hdlf_cert_provisioner, "_read_tls_secret", read_secret)
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(namespace="test-depl-name"),
++    )
++
++    certs = await hdlf_cert_provisioner.read_inspection_certificates("fl-inspection-insp-1-hdlf-cert")
++
++    assert certs.secret_name == "fl-inspection-insp-1-hdlf-cert"
++    assert certs.certificate_pem.get_secret_value() == "cert"
++    assert certs.key_pem.get_secret_value() == "key"
++    read_secret.assert_awaited_once_with("fl-inspection-insp-1-hdlf-cert", "test-depl-name")
++
++
++@pytest.mark.asyncio
++async def test_create_policy_waits_when_static_policy_quota_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Static policy quota exhaustion is retried within the local wait budget."""
++    _record_log_contexts(monkeypatch)
++    quota_error = OSError("Cannot create policy, maximum number of static policies reached")
++    op_seq_id = "0198a63d-687e-7465-ab13-dba03ec78143"
++    fake_client = SimpleNamespace(create_policy=AsyncMock(side_effect=[quota_error, op_seq_id]))
++    sleep = AsyncMock()
++    monkeypatch.setattr(hdlf_cert_provisioner.asyncio, "sleep", sleep)
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(
++            hdlf_policy_quota_wait_timeout_seconds=5,
++            hdlf_policy_quota_wait_interval_seconds=0.25,
++        ),
++    )
++
++    result = await hdlf_cert_provisioner._create_policy_waiting_for_quota(  # type: ignore[arg-type]
++        fake_client,
++        policy_name="fl-inspection-insp-1",
++        path="/insp-1/",
++        subject_cn="insp-1",
++        privileges=["browse", "open"],
++        inspection_id="insp-1",
++    )
++
++    assert result == op_seq_id
++    assert fake_client.create_policy.await_count == 2
++    sleep.assert_awaited_once_with(0.25)
++
++
++@pytest.mark.asyncio
++async def test_create_policy_waits_when_hdlf_returns_transient_http_error(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """Transient HDLF policy create failures are retried within the local wait budget."""
++    _record_log_contexts(monkeypatch)
++    transient_error = OSError("HDLF policy PUT 'fl-inspection-insp-1' returned HTTP 503: b'unavailable'")
++    op_seq_id = "0198a63d-687e-7465-ab13-dba03ec78143"
++    fake_client = SimpleNamespace(create_policy=AsyncMock(side_effect=[transient_error, op_seq_id]))
++    sleep = AsyncMock()
++    monkeypatch.setattr(hdlf_cert_provisioner.asyncio, "sleep", sleep)
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(
++            hdlf_policy_quota_wait_timeout_seconds=5,
++            hdlf_policy_quota_wait_interval_seconds=0.25,
++        ),
++    )
++
++    result = await hdlf_cert_provisioner._create_policy_waiting_for_quota(  # type: ignore[arg-type]
++        fake_client,
++        policy_name="fl-inspection-insp-1",
++        path="/insp-1/",
++        subject_cn="insp-1",
++        privileges=["browse", "open"],
++        inspection_id="insp-1",
++    )
++
++    assert result == op_seq_id
++    assert fake_client.create_policy.await_count == 2
++    sleep.assert_awaited_once_with(0.25)
++
++
++@pytest.mark.asyncio
++async def test_create_policy_waiting_for_quota_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Static policy quota exhaustion fails after the configured local wait budget."""
++    _record_log_contexts(monkeypatch)
++    fake_client = SimpleNamespace(
++        create_policy=AsyncMock(side_effect=OSError("Cannot create policy, maximum number of static policies reached"))
++    )
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(
++            hdlf_policy_quota_wait_timeout_seconds=0,
++            hdlf_policy_quota_wait_interval_seconds=0.25,
++        ),
++    )
++
++    with pytest.raises(ApplicationError) as error_info:
++        await hdlf_cert_provisioner._create_policy_waiting_for_quota(  # type: ignore[arg-type]
++            fake_client,
++            policy_name="fl-inspection-insp-1",
++            path="/insp-1/",
++            subject_cn="insp-1",
++            privileges=["browse", "open"],
++            inspection_id="insp-1",
++        )
++
++    assert error_info.value.type == "HDLFPolicyQuotaTimeout"
++    assert error_info.value.non_retryable is True
++
++
++@pytest.mark.asyncio
++async def test_create_policy_waiting_for_transient_error_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Retryable non-quota policy create failures fail after the local wait budget."""
++    _record_log_contexts(monkeypatch)
++    fake_client = SimpleNamespace(create_policy=AsyncMock(side_effect=OSError("HTTP 503")))
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(
++            hdlf_policy_quota_wait_timeout_seconds=0,
++            hdlf_policy_quota_wait_interval_seconds=0.25,
++        ),
++    )
++
++    with pytest.raises(ApplicationError) as error_info:
++        await hdlf_cert_provisioner._create_policy_waiting_for_quota(  # type: ignore[arg-type]
++            fake_client,
++            policy_name="fl-inspection-insp-1",
++            path="/insp-1/",
++            subject_cn="insp-1",
++            privileges=["browse", "open"],
++            inspection_id="insp-1",
++        )
++
++    assert error_info.value.type == "HDLFPolicyCreateRetryTimeout"
++    assert error_info.value.non_retryable is True
++
++
++@pytest.mark.asyncio
++async def test_create_policy_waiting_for_quota_propagates_non_quota_error(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """Non-quota policy creation failures propagate immediately."""
++    _record_log_contexts(monkeypatch)
++    fake_client = SimpleNamespace(create_policy=AsyncMock(side_effect=OSError("HDLF policy PUT returned HTTP 400")))
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(
++            hdlf_policy_quota_wait_timeout_seconds=5,
++            hdlf_policy_quota_wait_interval_seconds=0.25,
++        ),
++    )
++
++    with pytest.raises(OSError, match="HTTP 400"):
++        await hdlf_cert_provisioner._create_policy_waiting_for_quota(  # type: ignore[arg-type]
++            fake_client,
++            policy_name="fl-inspection-insp-1",
++            path="/insp-1/",
++            subject_cn="insp-1",
++            privileges=["browse", "open"],
++            inspection_id="insp-1",
++        )
++
++    fake_client.create_policy.assert_awaited_once()
++
++
+ @pytest.mark.asyncio
+ async def test_wait_for_policy_active_returns_when_operation_processed(monkeypatch: pytest.MonkeyPatch) -> None:
+     """Policy becomes active once operationSequenceId <= lastProcessedOperationSequenceId."""
+@@ -318,6 +493,66 @@ async def test_wait_for_policy_active_polls_when_last_processed_is_none(monkeypa
+     assert fake_client.get_policy_operations_status.await_count == 2
+ 
+ 
++@pytest.mark.asyncio
++async def test_cleanup_inspection_policy_deletes_policy_and_waits(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Inspection policy cleanup deletes the static policy and waits for processing."""
++    _record_log_contexts(monkeypatch)
++    op_seq_id = "0198a63d-687e-7465-ab13-dba03ec78143"
++
++    class _FakeHdlfClient:
++        instances: list[Self] = []  # noqa: RUF012
++
++        def __init__(self, *_args: object, **_kwargs: object) -> None:
++            self.delete_policy = AsyncMock(return_value=op_seq_id)
++            self.get_policy_operations_status = AsyncMock(return_value=_active_policy_status(op_seq_id))
++            self.instances.append(self)
++
++        async def __aenter__(self) -> Self:
++            return self
++
++        async def __aexit__(self, *_args: object) -> None:
++            return None
++
++    monkeypatch.setattr(hdlf_cert_provisioner, "HdlfClient", _FakeHdlfClient)
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(hdlf_access_poll_timeout_seconds=5, hdlf_access_poll_interval_seconds=0),
++    )
++
++    await hdlf_cert_provisioner.cleanup_inspection_policy("insp-1")
++
++    _FakeHdlfClient.instances[0].delete_policy.assert_awaited_once_with("fl-inspection-insp-1")
++    _FakeHdlfClient.instances[0].get_policy_operations_status.assert_awaited_once()
++
++
++@pytest.mark.asyncio
++async def test_cleanup_inspection_policy_noops_when_policy_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Inspection policy cleanup treats a missing policy as already cleaned up."""
++    _record_log_contexts(monkeypatch)
++
++    class _FakeHdlfClient:
++        instances: list[Self] = []  # noqa: RUF012
++
++        def __init__(self, *_args: object, **_kwargs: object) -> None:
++            self.delete_policy = AsyncMock(return_value=None)
++            self.get_policy_operations_status = AsyncMock()
++            self.instances.append(self)
++
++        async def __aenter__(self) -> Self:
++            return self
++
++        async def __aexit__(self, *_args: object) -> None:
++            return None
++
++    monkeypatch.setattr(hdlf_cert_provisioner, "HdlfClient", _FakeHdlfClient)
++
++    await hdlf_cert_provisioner.cleanup_inspection_policy("insp-1")
++
++    _FakeHdlfClient.instances[0].delete_policy.assert_awaited_once_with("fl-inspection-insp-1")
++    _FakeHdlfClient.instances[0].get_policy_operations_status.assert_not_awaited()
++
++
+ @pytest.mark.asyncio
+ async def test_wait_for_cert_trusted_returns_when_exists_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+     """Cert trust polling returns once GETFILESTATUS succeeds."""
+@@ -351,10 +586,11 @@ async def test_wait_for_cert_trusted_retries_on_os_error(monkeypatch: pytest.Mon
+ 
+ 
+ @pytest.mark.asyncio
+-async def test_patch_certificate_owner_binds_inspection_log_context(monkeypatch: pytest.MonkeyPatch) -> None:
+-    """Certificate owner patching binds inspection_id for structured log filtering."""
++async def test_cleanup_inspection_certificate_deletes_certificate_and_secret(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Inspection certificate cleanup deletes the cert-manager Certificate and Secret."""
+     contexts = _record_log_contexts(monkeypatch)
+-    patch_namespaced_custom_object = AsyncMock()
++    delete_certificate = AsyncMock()
++    delete_secret = AsyncMock()
+ 
+     class _FakeApiClient:
+         async def __aenter__(self) -> object:
+@@ -365,21 +601,27 @@ async def __aexit__(self, *_args: object) -> None:
+ 
+     class _FakeCustomObjectsApi:
+         def __init__(self, _api_client: object) -> None:
+-            self.patch_namespaced_custom_object = patch_namespaced_custom_object
++            self.delete_namespaced_custom_object = delete_certificate
++
++    class _FakeCoreV1Api:
++        def __init__(self, _api_client: object) -> None:
++            self.delete_namespaced_secret = delete_secret
+ 
+     monkeypatch.setattr(hdlf_cert_provisioner.client, "ApiClient", _FakeApiClient)
+     monkeypatch.setattr(hdlf_cert_provisioner.client, "CustomObjectsApi", _FakeCustomObjectsApi)
+-
+-    await hdlf_cert_provisioner.patch_certificate_owner(
+-        execution_id="exec-1",
+-        inspection_id="insp-1",
+-        namespace="test-depl-name",
+-        job_uid="job-uid-1",
++    monkeypatch.setattr(hdlf_cert_provisioner.client, "CoreV1Api", _FakeCoreV1Api)
++    monkeypatch.setattr(
++        hdlf_cert_provisioner,
++        "get_settings",
++        lambda: SimpleNamespace(namespace="test-depl-name"),
+     )
+ 
++    await hdlf_cert_provisioner.cleanup_inspection_certificate("insp-1")
++
+     assert contexts == [{"inspection_id": "insp-1"}]
+-    patch_namespaced_custom_object.assert_awaited_once()
+-    assert patch_namespaced_custom_object.await_args.kwargs["name"] == "fl-job-exec-1-hdlf-cert"
++    delete_certificate.assert_awaited_once()
++    assert delete_certificate.await_args.kwargs["name"] == "fl-inspection-insp-1-hdlf-cert"
++    delete_secret.assert_awaited_once_with(name="fl-inspection-insp-1-hdlf-cert", namespace="test-depl-name")
+ 
+ 
+ @pytest.mark.asyncio
+@@ -392,7 +634,7 @@ async def test_provision_inspection_access_fails_when_issuer_is_unset(monkeypatc
+     )
+ 
+     with pytest.raises(ApplicationError) as error_info:
+-        await hdlf_cert_provisioner.provision_inspection_access("insp-1", "exec-1")
++        await hdlf_cert_provisioner.provision_inspection_access("insp-1")
+ 
+     assert error_info.value.type == "ConfigError"
+     assert error_info.value.non_retryable is True
+diff --git a/tests/execution_engine/test_job_activity.py b/tests/execution_engine/test_job_activity.py
+index 9cabcda1..4ccb14a3 100644
+--- a/tests/execution_engine/test_job_activity.py
++++ b/tests/execution_engine/test_job_activity.py
+@@ -6,9 +6,9 @@
+ from unittest.mock import AsyncMock, patch
+ 
+ import pytest
++from pydantic import SecretStr
+ from temporalio.exceptions import ApplicationError
+ 
+-from fl_control_plane.execution_engine.hdlf_cert_provisioner import InspectionCertificates
+ from fl_control_plane.execution_engine.job_activity import (
+     poll_handler_job_activity,
+     submit_handler_job_activity,
+@@ -16,6 +16,7 @@
+ from fl_control_plane.execution_engine.models import (
+     HandlerExecution,
+     HandlerJobSubmission,
++    InspectionCertificates,
+     SubmitHandlerJobRequest,
+ )
+ from fl_control_plane.temporal.job_polling import K8sJobPollResult
+@@ -29,9 +30,15 @@
+ 
+ def _inspection_certs() -> InspectionCertificates:
+     return InspectionCertificates(
+-        secret_name=f"fl-job-{_EXECUTION_ID}-hdlf-cert",
+-        certificate_pem="-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n",
+-        key_pem="-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n",
++        secret_name=f"fl-inspection-{_INSPECTION_ID}-hdlf-cert",
++    )
++
++
++def _hydrated_inspection_certs() -> InspectionCertificates:
++    return InspectionCertificates(
++        secret_name=f"fl-inspection-{_INSPECTION_ID}-hdlf-cert",
++        certificate_pem=SecretStr("cert"),
++        key_pem=SecretStr("key"),
+     )
+ 
+ 
+@@ -52,6 +59,7 @@ def _submit_request() -> SubmitHandlerJobRequest:
+         handler=_handler(),
+         repo_url="https://github.example.com/org/repo.git",
+         commitish="abc123",
++        inspection_certs=_inspection_certs(),
+     )
+ 
+ 
+@@ -66,10 +74,10 @@ def test_submit_handler_job_request_rejects_stage_scope_without_matched_stages()
+         )
+ 
+ 
+-async def test_submit_handler_job_provisions_inspection_access_before_submission() -> None:
+-    """Handler submission injects the per-inspection HDLF cert Secret into the job spec."""
+-    provision_inspection_access = AsyncMock(return_value=_inspection_certs())
++async def test_submit_handler_job_reads_inspection_cert_before_submission() -> None:
++    """Handler submission resolves already-provisioned HDLF certs before building the Job."""
+     submitted_specs = []
++    read_inspection_certificates = AsyncMock(return_value=_hydrated_inspection_certs())
+ 
+     async def _submit_job(job_spec: Any) -> HandlerExecution:
+         submitted_specs.append(job_spec)
+@@ -82,25 +90,21 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+ 
+     with (
+         patch(f"{_ACTIVITY_MODULE}.load_k8s", new=AsyncMock()),
+-        patch(
+-            f"{_ACTIVITY_MODULE}.provision_inspection_access",
+-            new=provision_inspection_access,
+-        ),
++        patch(f"{_ACTIVITY_MODULE}.read_inspection_certificates", new=read_inspection_certificates),
+         patch(f"{_ACTIVITY_MODULE}._submit_job", side_effect=_submit_job),
+     ):
+         result = await submit_handler_job_activity(_submit_request())
+ 
+     assert result.execution_id == _EXECUTION_ID
+-    assert submitted_specs[0].inspection_certs.secret_name == f"fl-job-{_EXECUTION_ID}-hdlf-cert"
+-    provision_inspection_access.assert_awaited_once_with(
+-        inspection_id=_INSPECTION_ID,
+-        execution_id=_EXECUTION_ID,
+-    )
++    assert submitted_specs[0].inspection_certs.secret_name == f"fl-inspection-{_INSPECTION_ID}-hdlf-cert"
++    assert submitted_specs[0].inspection_certs.certificate_pem.get_secret_value() == "cert"
++    read_inspection_certificates.assert_awaited_once_with(f"fl-inspection-{_INSPECTION_ID}-hdlf-cert")
+ 
+ 
+ async def test_submit_handler_job_copies_match_context_to_job_spec() -> None:
+     """Handler submission forwards match scope and stage refs to the dispatcher job spec."""
+     submitted_specs = []
++    read_inspection_certificates = AsyncMock(return_value=_hydrated_inspection_certs())
+ 
+     async def _submit_job(job_spec: Any) -> HandlerExecution:
+         submitted_specs.append(job_spec)
+@@ -119,14 +123,12 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+         commitish="abc123",
+         match_scope="stage",
+         matched_stages=[MatchedStageRef(id="stage-1", name="Build")],
++        inspection_certs=_inspection_certs(),
+     )
+ 
+     with (
+         patch(f"{_ACTIVITY_MODULE}.load_k8s", new=AsyncMock()),
+-        patch(
+-            f"{_ACTIVITY_MODULE}.provision_inspection_access",
+-            new=AsyncMock(return_value=_inspection_certs()),
+-        ),
++        patch(f"{_ACTIVITY_MODULE}.read_inspection_certificates", new=read_inspection_certificates),
+         patch(f"{_ACTIVITY_MODULE}._submit_job", side_effect=_submit_job),
+     ):
+         await submit_handler_job_activity(request)
+@@ -135,27 +137,19 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+     assert submitted_specs[0].matched_stages == [MatchedStageRef(id="stage-1", name="Build")]
+ 
+ 
+-async def test_submit_handler_job_fails_before_submission_when_access_config_missing() -> None:
+-    """Handler submission does not create a k8s Job when HDLF access config fails."""
++async def test_submit_handler_job_rejects_missing_inspection_access() -> None:
++    """Handler submission requires HDLF access to be provisioned first."""
+     submit_job = AsyncMock()
+-    config_error = ApplicationError(
+-        "EE_HDLF_CA_ISSUER_NAME must be set",
+-        type="ConfigError",
+-        non_retryable=True,
+-    )
++    request = _submit_request().model_copy(update={"inspection_certs": None})
+ 
+     with (
+         patch(f"{_ACTIVITY_MODULE}.load_k8s", new=AsyncMock()),
+-        patch(
+-            f"{_ACTIVITY_MODULE}.provision_inspection_access",
+-            new=AsyncMock(side_effect=config_error),
+-        ),
+         patch(f"{_ACTIVITY_MODULE}._submit_job", new=submit_job),
+     ):
+         with pytest.raises(ApplicationError) as error_info:
+-            await submit_handler_job_activity(_submit_request())
++            await submit_handler_job_activity(request)
+ 
+-    assert error_info.value.type == "ConfigError"
++    assert error_info.value.type == "InvalidInput"
+     assert error_info.value.non_retryable is True
+     submit_job.assert_not_awaited()
+ 
+diff --git a/tests/hdlf_client/test_hdlf_client.py b/tests/hdlf_client/test_hdlf_client.py
+index 5655b8d6..f2611fb2 100644
+--- a/tests/hdlf_client/test_hdlf_client.py
++++ b/tests/hdlf_client/test_hdlf_client.py
+@@ -636,3 +636,40 @@ async def test_propagates_file_not_found(self, tmp_path):
+         with patch.object(client, "get_object", new=AsyncMock(side_effect=FileNotFoundError("missing"))):
+             with pytest.raises(FileNotFoundError):
+                 await client.get_object_parsed("/inspections/abc/missing.json")
++
++
++# ---------------------------------------------------------------------------
++# policies
++# ---------------------------------------------------------------------------
++
++
++class TestPolicies:
++    async def test_delete_policy_returns_operation_sequence_id(self, tmp_path):
++        """delete_policy returns the async operation ID from HDLF."""
++        client = _make_client(tmp_path)
++        body = json.dumps({"operationSequenceId": "0198a63d-687e-7465-ab13-dba03ec78143"}).encode()
++        client._session = _make_session(_fake_response(200, body))
++
++        operation_sequence_id = await client.delete_policy("fl-inspection-insp-1")
++
++        assert operation_sequence_id == "0198a63d-687e-7465-ab13-dba03ec78143"
++        request_args = client._session.request.call_args.args
++        assert request_args[0] == "DELETE"
++        assert request_args[1] == "/policies/v1/fl-inspection-insp-1"
++
++    async def test_delete_policy_404_is_noop(self, tmp_path):
++        """delete_policy treats a missing policy as already cleaned up."""
++        client = _make_client(tmp_path)
++        client._session = _make_session(_fake_response(404, b'{"message":"not found"}'))
++
++        operation_sequence_id = await client.delete_policy("fl-inspection-insp-1")
++
++        assert operation_sequence_id is None
++
++    async def test_delete_policy_rejects_unexpected_body(self, tmp_path):
++        """delete_policy raises when HDLF omits operationSequenceId from a JSON body."""
++        client = _make_client(tmp_path)
++        client._session = _make_session(_fake_response(200, b'{"ok":true}'))
++
++        with pytest.raises(OSError, match="unexpected body"):
++            await client.delete_policy("fl-inspection-insp-1")
+diff --git a/tests/temporal/test_finalize_activity.py b/tests/temporal/test_finalize_activity.py
+index 3eef0292..c0c22056 100644
+--- a/tests/temporal/test_finalize_activity.py
++++ b/tests/temporal/test_finalize_activity.py
+@@ -21,11 +21,11 @@
+ 
+ import pytest
+ from kubernetes_asyncio.client.exceptions import ApiException
++from pydantic import SecretStr
+ from temporalio.exceptions import ApplicationError
+ 
+ from fl_control_plane.execution_engine.config import get_settings
+-from fl_control_plane.execution_engine.hdlf_cert_provisioner import InspectionCertificates
+-from fl_control_plane.execution_engine.models import HandlerExecution
++from fl_control_plane.execution_engine.models import HandlerExecution, InspectionCertificates
+ from fl_control_plane.finalizer_dispatcher.models import FinalizerRegistryRow
+ from fl_control_plane.temporal.finalize_activity import (
+     _parse_finalizer_secrets,
+@@ -49,9 +49,15 @@
+ 
+ def _inspection_certs() -> InspectionCertificates:
+     return InspectionCertificates(
+-        secret_name=f"fl-job-{_EXECUTION_ID}-hdlf-cert",
+-        certificate_pem="-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n",
+-        key_pem="-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n",
++        secret_name=f"fl-inspection-{_INSPECTION_ID}-hdlf-cert",
++    )
++
++
++def _hydrated_inspection_certs() -> InspectionCertificates:
++    return InspectionCertificates(
++        secret_name=f"fl-inspection-{_INSPECTION_ID}-hdlf-cert",
++        certificate_pem=SecretStr("cert"),
++        key_pem=SecretStr("key"),
+     )
+ 
+ 
+@@ -86,6 +92,7 @@ def _request() -> FinalizeInspectionRequest:
+         inspection_id=_INSPECTION_ID,
+         execution_id=_EXECUTION_ID,
+         status="COMPLETED",
++        inspection_certs=_inspection_certs(),
+     )
+ 
+ 
+@@ -134,7 +141,7 @@ def test_parse_finalizer_secrets_rejects_duplicate_names() -> None:
+ async def test_submit_finalizer_job_uses_workflow_execution_id() -> None:
+     """The k8s job spec uses the execution_id carried by the workflow request."""
+     submitted_specs = []
+-    provision_inspection_access = AsyncMock(return_value=_inspection_certs())
++    read_inspection_certificates = AsyncMock(return_value=_hydrated_inspection_certs())
+ 
+     async def _submit_job(job_spec: Any) -> HandlerExecution:
+         submitted_specs.append(job_spec)
+@@ -150,10 +157,7 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+         patch(f"{_ACTIVITY_MODULE}.should_dispatch", new=AsyncMock(return_value=(True, None))),
+         patch(f"{_ACTIVITY_MODULE}.pick_finalizer", new=AsyncMock(return_value=_finalizer_row())),
+         patch(f"{_ACTIVITY_MODULE}.load_k8s", new=AsyncMock()),
+-        patch(
+-            f"{_ACTIVITY_MODULE}.provision_inspection_access",
+-            new=provision_inspection_access,
+-        ),
++        patch(f"{_ACTIVITY_MODULE}.read_inspection_certificates", new=read_inspection_certificates),
+         patch(f"{_ACTIVITY_MODULE}._submit_job", side_effect=_submit_job),
+     ):
+         result = await submit_finalizer_job_activity(_request())
+@@ -161,11 +165,9 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+     assert result.execution_id == _EXECUTION_ID
+     assert result.job_name == f"fl-job-{_EXECUTION_ID}"
+     assert submitted_specs[0].execution_id == _EXECUTION_ID
+-    assert submitted_specs[0].inspection_certs.secret_name == f"fl-job-{_EXECUTION_ID}-hdlf-cert"
+-    provision_inspection_access.assert_awaited_once_with(
+-        inspection_id=_INSPECTION_ID,
+-        execution_id=_EXECUTION_ID,
+-    )
++    assert submitted_specs[0].inspection_certs.secret_name == f"fl-inspection-{_INSPECTION_ID}-hdlf-cert"
++    assert submitted_specs[0].inspection_certs.certificate_pem.get_secret_value() == "cert"
++    read_inspection_certificates.assert_awaited_once_with(f"fl-inspection-{_INSPECTION_ID}-hdlf-cert")
+     assert result.started_at is not None
+     assert datetime.fromisoformat(result.started_at).tzinfo is not None
+ 
+@@ -173,7 +175,7 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+ async def test_submit_finalizer_job_passes_registry_secrets_to_job_spec() -> None:
+     """Finalizer registry secrets_json is parsed and carried into the k8s job spec."""
+     submitted_specs = []
+-    provision_inspection_access = AsyncMock(return_value=_inspection_certs())
++    read_inspection_certificates = AsyncMock(return_value=_hydrated_inspection_certs())
+     secrets_json = '[{"name":"GITHUB_TOKEN","vault_config":"vault-clusters","secret_key":"common/github"}]'
+ 
+     async def _submit_job(job_spec: Any) -> HandlerExecution:
+@@ -190,10 +192,7 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+         patch(f"{_ACTIVITY_MODULE}.should_dispatch", new=AsyncMock(return_value=(True, None))),
+         patch(f"{_ACTIVITY_MODULE}.pick_finalizer", new=AsyncMock(return_value=_finalizer_row(secrets_json))),
+         patch(f"{_ACTIVITY_MODULE}.load_k8s", new=AsyncMock()),
+-        patch(
+-            f"{_ACTIVITY_MODULE}.provision_inspection_access",
+-            new=provision_inspection_access,
+-        ),
++        patch(f"{_ACTIVITY_MODULE}.read_inspection_certificates", new=read_inspection_certificates),
+         patch(f"{_ACTIVITY_MODULE}._submit_job", side_effect=_submit_job),
+     ):
+         await submit_finalizer_job_activity(_request())
+@@ -204,13 +203,10 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+     assert submitted_specs[0].secrets[0].secret_key == "common/github"
+ 
+ 
+-async def test_submit_finalizer_job_fails_when_inspection_access_config_missing(
+-    monkeypatch: pytest.MonkeyPatch,
+-) -> None:
+-    """Finalizer submission fails before job creation when the HDLF issuer is unset."""
+-    monkeypatch.delenv("EE_HDLF_CA_ISSUER_NAME", raising=False)
+-    get_settings.cache_clear()
++async def test_submit_finalizer_job_rejects_missing_inspection_access() -> None:
++    """Finalizer submission requires HDLF access to be provisioned first."""
+     submit_job = AsyncMock()
++    request = _request().model_copy(update={"inspection_certs": None})
+ 
+     with (
+         patch(f"{_ACTIVITY_MODULE}.async_session", return_value=_mock_session_context()),
+@@ -220,9 +216,9 @@ async def test_submit_finalizer_job_fails_when_inspection_access_config_missing(
+         patch(f"{_ACTIVITY_MODULE}._submit_job", new=submit_job),
+     ):
+         with pytest.raises(ApplicationError) as error_info:
+-            await submit_finalizer_job_activity(_request())
++            await submit_finalizer_job_activity(request)
+ 
+-    assert error_info.value.type == "ConfigError"
++    assert error_info.value.type == "InvalidInput"
+     assert error_info.value.non_retryable is True
+     submit_job.assert_not_awaited()
+ 
+@@ -230,7 +226,7 @@ async def test_submit_finalizer_job_fails_when_inspection_access_config_missing(
+ async def test_submit_finalizer_job_loads_k8s_inside_heartbeat_context() -> None:
+     """Finalizer submission starts heartbeating before loading k8s credentials."""
+     heartbeat_probe = _HeartbeatProbe()
+-    provision_inspection_access = AsyncMock(return_value=_inspection_certs())
++    read_inspection_certificates = AsyncMock(return_value=_hydrated_inspection_certs())
+ 
+     async def _submit_job(job_spec: Any) -> HandlerExecution:
+         return HandlerExecution(
+@@ -246,10 +242,7 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+         patch(f"{_ACTIVITY_MODULE}.pick_finalizer", new=AsyncMock(return_value=_finalizer_row())),
+         patch(f"{_ACTIVITY_MODULE}.run_with_heartbeat", new=heartbeat_probe.run_with_heartbeat),
+         patch(f"{_ACTIVITY_MODULE}.load_k8s", new=heartbeat_probe.load_k8s),
+-        patch(
+-            f"{_ACTIVITY_MODULE}.provision_inspection_access",
+-            new=provision_inspection_access,
+-        ),
++        patch(f"{_ACTIVITY_MODULE}.read_inspection_certificates", new=read_inspection_certificates),
+         patch(f"{_ACTIVITY_MODULE}._submit_job", side_effect=_submit_job),
+     ):
+         await submit_finalizer_job_activity(_request())
+@@ -259,17 +252,14 @@ async def _submit_job(job_spec: Any) -> HandlerExecution:
+ 
+ async def test_submit_finalizer_job_treats_existing_job_as_success() -> None:
+     """A retry after a lost create response returns the same job coordinates."""
+-    provision_inspection_access = AsyncMock(return_value=_inspection_certs())
++    read_inspection_certificates = AsyncMock(return_value=_hydrated_inspection_certs())
+ 
+     with (
+         patch(f"{_ACTIVITY_MODULE}.async_session", return_value=_mock_session_context()),
+         patch(f"{_ACTIVITY_MODULE}.should_dispatch", new=AsyncMock(return_value=(True, None))),
+         patch(f"{_ACTIVITY_MODULE}.pick_finalizer", new=AsyncMock(return_value=_finalizer_row())),
+         patch(f"{_ACTIVITY_MODULE}.load_k8s", new=AsyncMock()),
+-        patch(
+-            f"{_ACTIVITY_MODULE}.provision_inspection_access",
+-            new=provision_inspection_access,
+-        ),
++        patch(f"{_ACTIVITY_MODULE}.read_inspection_certificates", new=read_inspection_certificates),
+         patch(
+             f"{_ACTIVITY_MODULE}._submit_job",
+             new=AsyncMock(side_effect=ApiException(status=409, reason="Conflict")),
+diff --git a/tests/temporal/test_hdlf_access_activity.py b/tests/temporal/test_hdlf_access_activity.py
+new file mode 100644
+index 00000000..9afac396
+--- /dev/null
++++ b/tests/temporal/test_hdlf_access_activity.py
+@@ -0,0 +1,68 @@
++"""Unit tests for workflow-scoped HDLF access Temporal activities."""
++
++from unittest.mock import AsyncMock, patch
++
++import pytest
++
++from fl_control_plane.execution_engine.models import InspectionCertificates
++from fl_control_plane.temporal.hdlf_access_activity import (
++    cleanup_inspection_access_activity,
++    provision_inspection_access_activity,
++)
++
++_ACTIVITY_MODULE = "fl_control_plane.temporal.hdlf_access_activity"
++_INSPECTION_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
++
++
++async def test_provision_inspection_access_activity_loads_k8s_and_provisions_access() -> None:
++    """Provision activity loads k8s and returns the inspection access Secret reference."""
++    certs = InspectionCertificates(secret_name=f"fl-inspection-{_INSPECTION_ID}-hdlf-cert")
++    load_k8s = AsyncMock()
++    provision_inspection_access = AsyncMock(return_value=certs)
++
++    with (
++        patch(f"{_ACTIVITY_MODULE}.load_k8s", new=load_k8s),
++        patch(f"{_ACTIVITY_MODULE}.provision_inspection_access", new=provision_inspection_access),
++    ):
++        result = await provision_inspection_access_activity(_INSPECTION_ID)
++
++    assert result == certs
++    load_k8s.assert_awaited_once_with()
++    provision_inspection_access.assert_awaited_once_with(_INSPECTION_ID)
++
++
++async def test_cleanup_inspection_access_activity_deletes_policy_and_certificate() -> None:
++    """Cleanup activity deletes both HDLF policy and inspection certificate resources."""
++    load_k8s = AsyncMock()
++    cleanup_inspection_policy = AsyncMock()
++    cleanup_inspection_certificate = AsyncMock()
++
++    with (
++        patch(f"{_ACTIVITY_MODULE}.load_k8s", new=load_k8s),
++        patch(f"{_ACTIVITY_MODULE}.cleanup_inspection_policy", new=cleanup_inspection_policy),
++        patch(f"{_ACTIVITY_MODULE}.cleanup_inspection_certificate", new=cleanup_inspection_certificate),
++    ):
++        await cleanup_inspection_access_activity(_INSPECTION_ID)
++
++    load_k8s.assert_awaited_once_with()
++    cleanup_inspection_policy.assert_awaited_once_with(_INSPECTION_ID)
++    cleanup_inspection_certificate.assert_awaited_once_with(_INSPECTION_ID)
++
++
++async def test_cleanup_inspection_access_activity_deletes_certificate_when_policy_delete_fails() -> None:
++    """Cleanup activity still deletes the certificate when policy deletion fails."""
++    load_k8s = AsyncMock()
++    cleanup_inspection_policy = AsyncMock(side_effect=OSError("HDLF delete failed"))
++    cleanup_inspection_certificate = AsyncMock()
++
++    with (
++        patch(f"{_ACTIVITY_MODULE}.load_k8s", new=load_k8s),
++        patch(f"{_ACTIVITY_MODULE}.cleanup_inspection_policy", new=cleanup_inspection_policy),
++        patch(f"{_ACTIVITY_MODULE}.cleanup_inspection_certificate", new=cleanup_inspection_certificate),
++    ):
++        with pytest.raises(OSError, match="HDLF delete failed"):
++            await cleanup_inspection_access_activity(_INSPECTION_ID)
++
++    load_k8s.assert_awaited_once_with()
++    cleanup_inspection_policy.assert_awaited_once_with(_INSPECTION_ID)
++    cleanup_inspection_certificate.assert_awaited_once_with(_INSPECTION_ID)
+diff --git a/tests/temporal/test_workflow.py b/tests/temporal/test_workflow.py
+index 5d7ecc5f..563982f2 100644
+--- a/tests/temporal/test_workflow.py
++++ b/tests/temporal/test_workflow.py
+@@ -14,6 +14,7 @@
+ from fl_control_plane.execution_engine.models import (
+     HandlerExecutionResult,
+     HandlerJobSubmission,
++    InspectionCertificates,
+     SubmitHandlerJobRequest,
+ )
+ from fl_control_plane.handler_orchestrator.models import ApplicabilityDecision
+@@ -37,7 +38,11 @@
+ from fl_control_plane.temporal.workflow import (
+     PipelineInspectionWorkflow,
+     _handler_execution_db_status,
++    _inspection_access_activity_start_to_close_timeout,
++    _inspection_cleanup_activity_start_to_close_timeout,
++    _inspection_terminal_activity_start_to_close_timeout,
+     _job_poll_activity_timeouts,
++    _job_submit_activity_start_to_close_timeout,
+ )
+ from fl_shared.cr_models import FaultHandlerSpec
+ 
+@@ -108,6 +113,19 @@
+ )
+ 
+ _HARDCODED_FINALIZE_RESULT = FinalizeInspectionResult(completion_text=None)
++_HARDCODED_INSPECTION_CERTS = InspectionCertificates(secret_name=f"fl-inspection-{_INSPECTION_ID}-hdlf-cert")
++
++
++@activity.defn(name="provision_inspection_access_activity")
++async def _mock_provision_inspection_access_activity(inspection_id: str) -> InspectionCertificates:
++    """Default workflow-test provision activity returns an inspection Secret reference."""
++    return _HARDCODED_INSPECTION_CERTS
++
++
++@activity.defn(name="cleanup_inspection_access_activity")
++async def _mock_cleanup_inspection_access_activity(inspection_id: str) -> None:
++    """Default workflow-test cleanup activity succeeds."""
++    return None
+ 
+ 
+ def test_job_poll_activity_timeouts_use_request_defaults() -> None:
+@@ -133,6 +151,35 @@ def test_job_poll_activity_timeouts_use_captured_request_budget() -> None:
+     assert schedule_to_close_timeout == timedelta(seconds=450)
+ 
+ 
++def test_job_submit_activity_timeout_stays_short() -> None:
++    """Job submission timeout no longer includes HDLF provisioning."""
++    assert _job_submit_activity_start_to_close_timeout(_SAMPLE_REQUEST) == timedelta(minutes=2)
++
++
++def test_inspection_access_activity_timeout_uses_hdlf_wait_budgets() -> None:
++    """HDLF access provisioning timeout covers quota wait plus policy/cert propagation."""
++    request = _SAMPLE_REQUEST.model_copy(
++        update={
++            "hdlf_policy_quota_wait_timeout_seconds": 12,
++            "hdlf_access_poll_timeout_seconds": 5,
++        }
++    )
++
++    assert _inspection_access_activity_start_to_close_timeout(request) == timedelta(seconds=202)
++
++
++def test_inspection_terminal_activity_timeout_stays_short() -> None:
++    """Terminal marking keeps its short DB-write timeout."""
++    assert _inspection_terminal_activity_start_to_close_timeout(_SAMPLE_REQUEST) == timedelta(minutes=2)
++
++
++def test_inspection_cleanup_activity_timeout_covers_hdlf_cleanup() -> None:
++    """Cleanup timeout covers HDLF policy delete propagation."""
++    request = _SAMPLE_REQUEST.model_copy(update={"hdlf_access_poll_timeout_seconds": 5})
++
++    assert _inspection_cleanup_activity_start_to_close_timeout(request) == timedelta(seconds=125)
++
++
+ def test_handler_execution_db_status_maps_poll_timeout_to_timed_out() -> None:
+     """Handler client-side poll timeouts persist as timed_out DB statuses."""
+     result = HandlerExecutionResult(
+@@ -416,6 +463,8 @@ async def _mock_orchestrate_handlers_activity(
+                 _mock_analyze_pipeline_activity,
+                 _mock_extract_data_activity,
+                 _mock_mark_inspection_terminal_activity,
++                _mock_provision_inspection_access_activity,
++                _mock_cleanup_inspection_access_activity,
+                 _mock_persist_inspection_db_activity,
+                 _mock_orchestrate_handlers_activity,
+             ],
+@@ -485,6 +534,8 @@ async def _mock_orchestrate_handlers_activity(
+                 _mock_analyze_pipeline_activity,
+                 _mock_extract_data_activity,
+                 _mock_mark_inspection_terminal_activity,
++                _mock_provision_inspection_access_activity,
++                _mock_cleanup_inspection_access_activity,
+                 _mock_persist_inspection_db_activity,
+                 _mock_orchestrate_handlers_activity,
+             ],
+@@ -503,6 +554,8 @@ async def _mock_orchestrate_handlers_activity(
+ async def test_pipeline_inspection_workflow_marks_stop_without_finalizer_failed() -> None:
+     """A stopped workflow dispatches no finalizer and marks the inspection FAILED."""
+     terminal_requests: list[MarkInspectionTerminalRequest] = []
++    provision_calls: list[str] = []
++    cleanup_calls: list[str] = []
+ 
+     async with await WorkflowEnvironment.start_time_skipping(
+         data_converter=pydantic_data_converter,
+@@ -539,6 +592,15 @@ async def _mock_mark_inspection_terminal_activity(
+             terminal_requests.append(request)
+             return _HARDCODED_FINALIZE_RESULT
+ 
++        @activity.defn(name="provision_inspection_access_activity")
++        async def _mock_unused_provision_inspection_access_activity(inspection_id: str) -> InspectionCertificates:
++            provision_calls.append(inspection_id)
++            return _HARDCODED_INSPECTION_CERTS
++
++        @activity.defn(name="cleanup_inspection_access_activity")
++        async def _mock_unused_cleanup_inspection_access_activity(inspection_id: str) -> None:
++            cleanup_calls.append(inspection_id)
++
+         async with Worker(
+             environment.client,
+             task_queue=_TASK_QUEUE,
+@@ -549,6 +611,8 @@ async def _mock_mark_inspection_terminal_activity(
+                 _mock_persist_inspection_db_activity,
+                 _mock_orchestrate_handlers_activity,
+                 _mock_mark_inspection_terminal_activity,
++                _mock_unused_provision_inspection_access_activity,
++                _mock_unused_cleanup_inspection_access_activity,
+             ],
+         ):
+             await environment.client.execute_workflow(
+@@ -560,11 +624,14 @@ async def _mock_mark_inspection_terminal_activity(
+ 
+     assert terminal_requests[0].finalize_request.status == "FAILED"
+     assert terminal_requests[0].job_result.status == "skipped"
++    assert provision_calls == []
++    assert cleanup_calls == []
+ 
+ 
+ async def test_pipeline_inspection_workflow_does_not_retry_poll_timeout() -> None:
+     """PollTimeout from finalizer polling is non-retryable in the workflow policy."""
+     poll_attempts = 0
++    finalizer_requests: list[FinalizeInspectionRequest] = []
+ 
+     async with await WorkflowEnvironment.start_time_skipping(
+         data_converter=pydantic_data_converter,
+@@ -602,6 +669,7 @@ async def _mock_orchestrate_handlers_activity(
+         async def _mock_submit_finalizer_job_activity(
+             request: FinalizeInspectionRequest,
+         ) -> FinalizerJobSubmission:
++            finalizer_requests.append(request)
+             return FinalizerJobSubmission(
+                 inspection_id=request.inspection_id,
+                 execution_id=request.execution_id,
+@@ -635,6 +703,8 @@ async def _mock_persist_inspection_db_activity(
+                 _mock_submit_finalizer_job_activity,
+                 _mock_poll_finalizer_job_activity,
+                 _mock_persist_inspection_db_activity,
++                _mock_provision_inspection_access_activity,
++                _mock_cleanup_inspection_access_activity,
+             ],
+         ):
+             with pytest.raises(WorkflowFailureError):
+@@ -646,11 +716,16 @@ async def _mock_persist_inspection_db_activity(
+                 )
+ 
+     assert poll_attempts == 1
++    assert finalizer_requests[0].inspection_certs == _HARDCODED_INSPECTION_CERTS
+ 
+ 
+ async def test_pipeline_inspection_workflow_treats_handler_config_error_as_fatal() -> None:
+     """ConfigError during handler submission fails the inspection instead of a handler."""
+     terminal_requests: list[MarkInspectionTerminalRequest] = []
++    provision_calls: list[str] = []
++    cleanup_calls: list[str] = []
++    handler_requests: list[SubmitHandlerJobRequest] = []
++    finalizer_requests: list[FinalizeInspectionRequest] = []
+     handler = FaultHandlerSpec.model_validate(
+         {
+             "fault_id": "handler-one",
+@@ -711,6 +786,7 @@ async def _mock_persist_handler_executions_activity(
+         async def _mock_submit_handler_job_activity(
+             request: SubmitHandlerJobRequest,
+         ) -> HandlerJobSubmission:
++            handler_requests.append(request)
+             raise ApplicationError("issuer missing", type="ConfigError", non_retryable=True)
+ 
+         @activity.defn(name="poll_handler_job_activity")
+@@ -723,6 +799,7 @@ async def _mock_poll_handler_job_activity(
+         async def _mock_submit_finalizer_job_activity(
+             request: FinalizeInspectionRequest,
+         ) -> FinalizerJobSubmission:
++            finalizer_requests.append(request)
+             return FinalizerJobSubmission(
+                 inspection_id=request.inspection_id,
+                 execution_id=request.execution_id,
+@@ -749,6 +826,15 @@ async def _mock_persist_inspection_db_activity(
+         ) -> None:
+             return None
+ 
++        @activity.defn(name="provision_inspection_access_activity")
++        async def _mock_counting_provision_inspection_access_activity(inspection_id: str) -> InspectionCertificates:
++            provision_calls.append(inspection_id)
++            return _HARDCODED_INSPECTION_CERTS
++
++        @activity.defn(name="cleanup_inspection_access_activity")
++        async def _mock_counting_cleanup_inspection_access_activity(inspection_id: str) -> None:
++            cleanup_calls.append(inspection_id)
++
+         async with Worker(
+             environment.client,
+             task_queue=_TASK_QUEUE,
+@@ -765,6 +851,8 @@ async def _mock_persist_inspection_db_activity(
+                 _mock_poll_finalizer_job_activity,
+                 _mock_mark_inspection_terminal_activity,
+                 _mock_persist_inspection_db_activity,
++                _mock_counting_provision_inspection_access_activity,
++                _mock_counting_cleanup_inspection_access_activity,
+             ],
+         ):
+             with pytest.raises(WorkflowFailureError) as error_info:
+@@ -776,11 +864,19 @@ async def _mock_persist_inspection_db_activity(
+                 )
+ 
+     assert terminal_requests[0].finalize_request.status == "FAILED"
++    assert provision_calls == [_INSPECTION_ID]
++    assert cleanup_calls == [_INSPECTION_ID]
++    assert handler_requests[0].inspection_certs == _HARDCODED_INSPECTION_CERTS
++    assert finalizer_requests[0].inspection_certs == _HARDCODED_INSPECTION_CERTS
+     assert "issuer missing" in _exception_chain_text(error_info.value)
+ 
+ 
+ async def test_pipeline_inspection_workflow_surfaces_finalize_failure_when_both_fail() -> None:
+     """A finalizer failure is reported because finalization writes the workflow result."""
++    provision_calls: list[str] = []
++    cleanup_calls: list[str] = []
++    finalizer_requests: list[FinalizeInspectionRequest] = []
++
+     async with await WorkflowEnvironment.start_time_skipping(
+         data_converter=pydantic_data_converter,
+     ) as environment:
+@@ -807,8 +903,18 @@ async def _mock_extract_data_activity(
+         async def _mock_submit_finalizer_job_activity(
+             request: FinalizeInspectionRequest,
+         ) -> FinalizerJobSubmission:
++            finalizer_requests.append(request)
+             raise ApplicationError("finalizer submission exploded", type="InvalidInput")
+ 
++        @activity.defn(name="provision_inspection_access_activity")
++        async def _mock_provision_before_finalizer_failure(inspection_id: str) -> InspectionCertificates:
++            provision_calls.append(inspection_id)
++            return _HARDCODED_INSPECTION_CERTS
++
++        @activity.defn(name="cleanup_inspection_access_activity")
++        async def _mock_cleanup_after_finalize_failure(inspection_id: str) -> None:
++            cleanup_calls.append(inspection_id)
++
+         async with Worker(
+             environment.client,
+             task_queue=_TASK_QUEUE,
+@@ -817,7 +923,9 @@ async def _mock_submit_finalizer_job_activity(
+                 _mock_extract_metadata_activity,
+                 _mock_analyze_pipeline_activity,
+                 _mock_extract_data_activity,
++                _mock_provision_before_finalizer_failure,
+                 _mock_submit_finalizer_job_activity,
++                _mock_cleanup_after_finalize_failure,
+             ],
+         ):
+             with pytest.raises(WorkflowFailureError) as error_info:
+@@ -830,6 +938,9 @@ async def _mock_submit_finalizer_job_activity(
+ 
+     exception_text = _exception_chain_text(error_info.value)
+     assert "finalizer submission exploded" in exception_text
++    assert provision_calls == [_INSPECTION_ID]
++    assert cleanup_calls == [_INSPECTION_ID]
++    assert finalizer_requests[0].inspection_certs == _HARDCODED_INSPECTION_CERTS
+ 
+ 
+ def test_workflow_id_is_deterministic_for_same_inspection() -> None:
+
+```

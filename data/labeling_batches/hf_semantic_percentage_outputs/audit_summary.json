@@ -1,0 +1,24 @@
+{
+  "rows": 2500,
+  "manually_verified_rows": 20,
+  "curated_partial_mostly_rows": 216,
+  "audit_statuses": {
+    "accepted_high_confidence": 1216,
+    "accepted_medium_confidence": 614,
+    "manually_verified": 20,
+    "accepted_mixed_evidence": 208,
+    "uncertain_fuzzy_only": 131,
+    "uncertain_metric_disagreement": 311
+  },
+  "confidence": {
+    "high": 1236,
+    "medium": 822,
+    "low": 442
+  },
+  "labels": {
+    "100%": 1353,
+    "partial": 310,
+    "mostly": 587,
+    "0%": 250
+  }
+}

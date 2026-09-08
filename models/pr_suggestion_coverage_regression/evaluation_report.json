@@ -1,0 +1,261 @@
+{
+  "objective": "compare robust tabular regressors and combine complementary models",
+  "research_sources": {
+    "catboost_categorical_features": "https://catboost.ai/en/docs/features/categorical-features",
+    "xgboost_robust_objectives": "https://xgboost.readthedocs.io/en/stable/parameter.html",
+    "lightgbm_robust_objectives": "https://lightgbm.readthedocs.io/en/stable/Parameters.html",
+    "stacked_generalization": "https://scikit-learn.org/stable/modules/ensemble.html#stacked-generalization"
+  },
+  "validation": "three repetitions of four-fold PR-grouped out-of-fold evaluation",
+  "internal_dev_rows": 209,
+  "internal_test_rows": 70,
+  "hf_rows": 2500,
+  "candidate_oof_metrics": {
+    "baseline": {
+      "percentage_mae": 11.952153110047847,
+      "percentage_rmse": 21.735249081424833,
+      "r2": 0.727066304645962,
+      "within_5_points": 0.6076555023923444,
+      "within_10_points": 0.6602870813397129,
+      "dangerous_error_rate": 0.019138755980861243
+    },
+    "two_stage": {
+      "percentage_mae": 10.866028708133971,
+      "percentage_rmse": 21.123582594503098,
+      "r2": 0.7422117806308589,
+      "within_5_points": 0.631578947368421,
+      "within_10_points": 0.6889952153110048,
+      "dangerous_error_rate": 0.009569377990430622
+    },
+    "catboost_mae": {
+      "percentage_mae": 11.339712918660288,
+      "percentage_rmse": 21.835180778212596,
+      "r2": 0.724550812193643,
+      "within_5_points": 0.6267942583732058,
+      "within_10_points": 0.7081339712918661,
+      "dangerous_error_rate": 0.004784688995215311
+    },
+    "catboost_huber": {
+      "percentage_mae": 13.373205741626794,
+      "percentage_rmse": 22.810536472487435,
+      "r2": 0.6993931233930323,
+      "within_5_points": 0.5263157894736842,
+      "within_10_points": 0.6220095693779905,
+      "dangerous_error_rate": 0.014354066985645933
+    },
+    "lightgbm_l1": {
+      "percentage_mae": 11.732057416267942,
+      "percentage_rmse": 22.644115810983745,
+      "r2": 0.7037634459942592,
+      "within_5_points": 0.6028708133971292,
+      "within_10_points": 0.69377990430622,
+      "dangerous_error_rate": 0.014354066985645933
+    },
+    "lightgbm_huber": {
+      "percentage_mae": 28.555023923444978,
+      "percentage_rmse": 38.869183129172995,
+      "r2": 0.12715176181948817,
+      "within_5_points": 0.16267942583732056,
+      "within_10_points": 0.23923444976076555,
+      "dangerous_error_rate": 0.004784688995215311
+    },
+    "xgboost_l1": {
+      "percentage_mae": 11.425837320574162,
+      "percentage_rmse": 22.103064370024683,
+      "r2": 0.7177506897401211,
+      "within_5_points": 0.6172248803827751,
+      "within_10_points": 0.6842105263157895,
+      "dangerous_error_rate": 0.009569377990430622
+    },
+    "xgboost_pseudohuber": {
+      "percentage_mae": 11.569377990430622,
+      "percentage_rmse": 20.988262839822948,
+      "r2": 0.7455040350382347,
+      "within_5_points": 0.5789473684210527,
+      "within_10_points": 0.6746411483253588,
+      "dangerous_error_rate": 0.004784688995215311
+    }
+  },
+  "selected_by_family": {
+    "catboost": {
+      "name": "catboost_mae",
+      "family": "catboost",
+      "parameters": {
+        "loss_function": "MAE",
+        "iterations": 400,
+        "depth": 6,
+        "learning_rate": 0.03,
+        "l2_leaf_reg": 7.0
+      }
+    },
+    "lightgbm": {
+      "name": "lightgbm_l1",
+      "family": "lightgbm",
+      "parameters": {
+        "objective": "regression_l1",
+        "n_estimators": 400,
+        "num_leaves": 15,
+        "learning_rate": 0.03,
+        "min_child_samples": 15
+      }
+    },
+    "xgboost": {
+      "name": "xgboost_l1",
+      "family": "xgboost",
+      "parameters": {
+        "objective": "reg:absoluteerror",
+        "n_estimators": 400,
+        "max_depth": 4,
+        "learning_rate": 0.03,
+        "min_child_weight": 5.0
+      }
+    }
+  },
+  "selected_blend": {
+    "weights": {
+      "baseline": 0.5,
+      "two_stage": 0.3,
+      "catboost_mae": 0.2,
+      "lightgbm_l1": 0.0,
+      "xgboost_l1": 0.0
+    },
+    "disagreement_threshold": 20.0,
+    "percentage_mae": 11.110047846889952,
+    "percentage_rmse": 21.041994920616116,
+    "r2": 0.7441992960959329,
+    "within_5_points": 0.631578947368421,
+    "within_10_points": 0.6794258373205742,
+    "dangerous_error_rate": 0.014354066985645933
+  },
+  "stacking_results": [
+    {
+      "alpha": 0.1,
+      "percentage_mae": 12.875598086124402,
+      "percentage_rmse": 21.58581405509305,
+      "r2": 0.7308063719953991,
+      "within_5_points": 0.5789473684210527,
+      "within_10_points": 0.6698564593301436,
+      "dangerous_error_rate": 0.009569377990430622
+    },
+    {
+      "alpha": 1.0,
+      "percentage_mae": 12.875598086124402,
+      "percentage_rmse": 21.58581405509305,
+      "r2": 0.7308063719953991,
+      "within_5_points": 0.5789473684210527,
+      "within_10_points": 0.6698564593301436,
+      "dangerous_error_rate": 0.009569377990430622
+    },
+    {
+      "alpha": 10.0,
+      "percentage_mae": 12.880382775119617,
+      "percentage_rmse": 21.587033144922902,
+      "r2": 0.7307759649437777,
+      "within_5_points": 0.5741626794258373,
+      "within_10_points": 0.6698564593301436,
+      "dangerous_error_rate": 0.009569377990430622
+    },
+    {
+      "alpha": 100.0,
+      "percentage_mae": 12.909090909090908,
+      "percentage_rmse": 21.590800805570815,
+      "r2": 0.7306819795114932,
+      "within_5_points": 0.569377990430622,
+      "within_10_points": 0.6698564593301436,
+      "dangerous_error_rate": 0.009569377990430622
+    }
+  ],
+  "selected_stacker": {
+    "alpha": 0.1,
+    "percentage_mae": 12.875598086124402,
+    "percentage_rmse": 21.58581405509305,
+    "r2": 0.7308063719953991,
+    "within_5_points": 0.5789473684210527,
+    "within_10_points": 0.6698564593301436,
+    "dangerous_error_rate": 0.009569377990430622
+  },
+  "selected_ensemble_type": "convex_blend",
+  "baseline_model": {
+    "percentage_mae": 9.742857142857142,
+    "percentage_rmse": 19.309509130403672,
+    "r2": 0.7301698069318446,
+    "within_5_points": 0.6142857142857143,
+    "within_10_points": 0.7428571428571429,
+    "dangerous_error_rate": 0.014285714285714285
+  },
+  "component_test_metrics": {
+    "baseline": {
+      "percentage_mae": 10.157142857142857,
+      "percentage_rmse": 19.135979574762153,
+      "r2": 0.7349978031066656,
+      "within_5_points": 0.5571428571428572,
+      "within_10_points": 0.6857142857142857,
+      "dangerous_error_rate": 0.014285714285714285
+    },
+    "two_stage": {
+      "percentage_mae": 10.014285714285714,
+      "percentage_rmse": 20.364885745531975,
+      "r2": 0.699868186399938,
+      "within_5_points": 0.6714285714285714,
+      "within_10_points": 0.7,
+      "dangerous_error_rate": 0.014285714285714285
+    },
+    "catboost_mae": {
+      "percentage_mae": 10.414285714285715,
+      "percentage_rmse": 19.483692815128393,
+      "r2": 0.7252797808275826,
+      "within_5_points": 0.6285714285714286,
+      "within_10_points": 0.7571428571428571,
+      "dangerous_error_rate": 0.0
+    },
+    "lightgbm_l1": {
+      "percentage_mae": 10.485714285714286,
+      "percentage_rmse": 19.555050498528505,
+      "r2": 0.7232638081207516,
+      "within_5_points": 0.6428571428571429,
+      "within_10_points": 0.7285714285714285,
+      "dangerous_error_rate": 0.0
+    },
+    "xgboost_l1": {
+      "percentage_mae": 10.642857142857142,
+      "percentage_rmse": 20.730584720579948,
+      "r2": 0.6889922721046238,
+      "within_5_points": 0.6,
+      "within_10_points": 0.7714285714285715,
+      "dangerous_error_rate": 0.0
+    }
+  },
+  "convex_blend_test_metrics": {
+    "percentage_mae": 9.742857142857142,
+    "percentage_rmse": 19.309509130403672,
+    "r2": 0.7301698069318446,
+    "within_5_points": 0.6142857142857143,
+    "within_10_points": 0.7428571428571429,
+    "dangerous_error_rate": 0.014285714285714285
+  },
+  "ridge_stacker_test_metrics": {
+    "percentage_mae": 11.585714285714285,
+    "percentage_rmse": 19.8209845510113,
+    "r2": 0.7156858184073815,
+    "within_5_points": 0.6142857142857143,
+    "within_10_points": 0.6857142857142857,
+    "dangerous_error_rate": 0.014285714285714285
+  },
+  "final_ensemble": {
+    "percentage_mae": 9.742857142857142,
+    "percentage_rmse": 19.309509130403672,
+    "r2": 0.7301698069318446,
+    "within_5_points": 0.6142857142857143,
+    "within_10_points": 0.7428571428571429,
+    "dangerous_error_rate": 0.014285714285714285
+  },
+  "improvement_vs_baseline_mae": 0.0,
+  "rmse_regression_ratio": 0.0,
+  "deployment_checks": {
+    "mae_improved": false,
+    "rmse_within_2_percent": true,
+    "within_10_not_worse": true,
+    "dangerous_error_not_worse": true
+  },
+  "artifact_decision": "kept_existing_baseline"
+}

@@ -1,0 +1,2049 @@
+{
+  "objective": "estimate cross-repository transfer using leave-one-external-repository-out retraining",
+  "evaluation_version": "repository-held-out-v1",
+  "interpretation_scope": "exploratory because external semantic labels are confidence-weighted LLM-assisted references",
+  "training_policy": "all internal rows plus all external repositories except the held-out repository",
+  "external_rows": 2500,
+  "external_repositories": 29,
+  "external_pull_requests": 1196,
+  "internal_training_rows_per_fold": 279,
+  "models": [
+    "current_ensemble",
+    "unixcoder_two_stage",
+    "unixcoder_encoder_two_stage",
+    "codebert_two_stage",
+    "combined_two_stage",
+    "selected_embedding_blend"
+  ],
+  "overall_micro_metrics": {
+    "current_ensemble": {
+      "percentage_mae": 4.1064,
+      "percentage_rmse": 8.82142845575477,
+      "r2": 0.9184569184535103,
+      "within_5_points": 0.7664,
+      "within_10_points": 0.8916,
+      "dangerous_error_rate": 0.0016
+    },
+    "unixcoder_two_stage": {
+      "percentage_mae": 4.3196,
+      "percentage_rmse": 9.846806588940396,
+      "r2": 0.8983985040721504,
+      "within_5_points": 0.7668,
+      "within_10_points": 0.874,
+      "dangerous_error_rate": 0.0016
+    },
+    "unixcoder_encoder_two_stage": {
+      "percentage_mae": 4.3008,
+      "percentage_rmse": 9.783128334024859,
+      "r2": 0.8997083472430155,
+      "within_5_points": 0.7748,
+      "within_10_points": 0.8692,
+      "dangerous_error_rate": 0.0016
+    },
+    "codebert_two_stage": {
+      "percentage_mae": 4.2516,
+      "percentage_rmse": 9.651590542496091,
+      "r2": 0.9023871337086151,
+      "within_5_points": 0.7752,
+      "within_10_points": 0.88,
+      "dangerous_error_rate": 0.0016
+    },
+    "combined_two_stage": {
+      "percentage_mae": 4.4876,
+      "percentage_rmse": 10.039860556800578,
+      "r2": 0.8943755041508822,
+      "within_5_points": 0.7572,
+      "within_10_points": 0.862,
+      "dangerous_error_rate": 0.0016
+    },
+    "selected_embedding_blend": {
+      "percentage_mae": 4.0844,
+      "percentage_rmse": 8.996465972813992,
+      "r2": 0.915188807348475,
+      "within_5_points": 0.7792,
+      "within_10_points": 0.884,
+      "dangerous_error_rate": 0.0016
+    }
+  },
+  "macro_repository_metrics": {
+    "current_ensemble": {
+      "percentage_mae": 3.7582500402324786,
+      "percentage_rmse": 7.7147051776306705,
+      "within_5_points": 0.7830856207355349,
+      "within_10_points": 0.8998057566056441,
+      "dangerous_error_rate": 0.0014983800755019954
+    },
+    "unixcoder_two_stage": {
+      "percentage_mae": 4.288114490317452,
+      "percentage_rmse": 9.044130791709152,
+      "within_5_points": 0.7655361176724161,
+      "within_10_points": 0.8860526993652422,
+      "dangerous_error_rate": 0.0014983800755019954
+    },
+    "unixcoder_encoder_two_stage": {
+      "percentage_mae": 3.9715308749893743,
+      "percentage_rmse": 8.489709933164281,
+      "within_5_points": 0.7845553516208292,
+      "within_10_points": 0.8838209674779285,
+      "dangerous_error_rate": 0.0014983800755019954
+    },
+    "codebert_two_stage": {
+      "percentage_mae": 4.174656395999847,
+      "percentage_rmse": 8.751785184697628,
+      "within_5_points": 0.7886930670025637,
+      "within_10_points": 0.8911676617741082,
+      "dangerous_error_rate": 0.0014983800755019954
+    },
+    "combined_two_stage": {
+      "percentage_mae": 4.417546800016215,
+      "percentage_rmse": 9.182121248597007,
+      "within_5_points": 0.7541552906913457,
+      "within_10_points": 0.8742372408726808,
+      "dangerous_error_rate": 0.0014983800755019954
+    },
+    "selected_embedding_blend": {
+      "percentage_mae": 3.825540812338511,
+      "percentage_rmse": 7.932493229970074,
+      "within_5_points": 0.7857854431858954,
+      "within_10_points": 0.8973578810030143,
+      "dangerous_error_rate": 0.0014983800755019954
+    }
+  },
+  "macro_repository_metrics_minimum_10_rows": {
+    "current_ensemble": {
+      "percentage_mae": 3.9426932348519044,
+      "percentage_rmse": 8.552223043709374,
+      "within_5_points": 0.7891936717776499,
+      "within_10_points": 0.9001227397680459,
+      "dangerous_error_rate": 0.0019751373722526303
+    },
+    "unixcoder_two_stage": {
+      "percentage_mae": 4.0224640503679545,
+      "percentage_rmse": 9.113968989461206,
+      "within_5_points": 0.7862622561237406,
+      "within_10_points": 0.8870442148198396,
+      "dangerous_error_rate": 0.0019751373722526303
+    },
+    "unixcoder_encoder_two_stage": {
+      "percentage_mae": 4.030023022081953,
+      "percentage_rmse": 9.102960779885489,
+      "within_5_points": 0.7911310443082648,
+      "within_10_points": 0.8847336995542391,
+      "dangerous_error_rate": 0.0019751373722526303
+    },
+    "codebert_two_stage": {
+      "percentage_mae": 4.06861272402,
+      "percentage_rmse": 9.086757087756949,
+      "within_5_points": 0.7902721741801472,
+      "within_10_points": 0.888736160217385,
+      "dangerous_error_rate": 0.0019751373722526303
+    },
+    "combined_two_stage": {
+      "percentage_mae": 4.143205630324405,
+      "percentage_rmse": 9.251612368743478,
+      "within_5_points": 0.7769420751032385,
+      "within_10_points": 0.8828329286250995,
+      "dangerous_error_rate": 0.0019751373722526303
+    },
+    "selected_embedding_blend": {
+      "percentage_mae": 3.9120765253553103,
+      "percentage_rmse": 8.633468409879605,
+      "within_5_points": 0.798434346825852,
+      "within_10_points": 0.8918454896049834,
+      "dangerous_error_rate": 0.0019751373722526303
+    }
+  },
+  "confidence_metrics": {
+    "high": {
+      "rows": 1236,
+      "current_ensemble": {
+        "percentage_mae": 1.0145631067961165,
+        "percentage_rmse": 4.329659881856384,
+        "r2": 0.9884061566365122,
+        "within_5_points": 0.9506472491909385,
+        "within_10_points": 0.9749190938511327,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 0.6674757281553398,
+        "percentage_rmse": 4.794397350522019,
+        "r2": 0.9857836562883017,
+        "within_5_points": 0.9773462783171522,
+        "within_10_points": 0.9797734627831716,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 0.686084142394822,
+        "percentage_rmse": 4.769950438365793,
+        "r2": 0.9859282665917997,
+        "within_5_points": 0.9757281553398058,
+        "within_10_points": 0.9781553398058253,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 0.6877022653721683,
+        "percentage_rmse": 4.816537047113163,
+        "r2": 0.9856520559083017,
+        "within_5_points": 0.9765372168284789,
+        "within_10_points": 0.9789644012944984,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 0.7799352750809061,
+        "percentage_rmse": 5.221470486875076,
+        "r2": 0.9831381383831329,
+        "within_5_points": 0.9741100323624595,
+        "within_10_points": 0.9765372168284789,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 0.8260517799352751,
+        "percentage_rmse": 4.312152617217387,
+        "r2": 0.9884997280093639,
+        "within_5_points": 0.970873786407767,
+        "within_10_points": 0.9781553398058253,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "low": {
+      "rows": 442,
+      "current_ensemble": {
+        "percentage_mae": 8.823529411764707,
+        "percentage_rmse": 15.370536544478803,
+        "r2": -0.1332943745095363,
+        "within_5_points": 0.5248868778280543,
+        "within_10_points": 0.7647058823529411,
+        "dangerous_error_rate": 0.00904977375565611
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 10.538461538461538,
+        "percentage_rmse": 17.616323158620794,
+        "r2": -0.4886589554386356,
+        "within_5_points": 0.47737556561085975,
+        "within_10_points": 0.6968325791855203,
+        "dangerous_error_rate": 0.00904977375565611
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 10.638009049773755,
+        "percentage_rmse": 17.510694857404726,
+        "r2": -0.47086033850961906,
+        "within_5_points": 0.4751131221719457,
+        "within_10_points": 0.6719457013574661,
+        "dangerous_error_rate": 0.00904977375565611
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 10.223981900452488,
+        "percentage_rmse": 16.962228467101124,
+        "r2": -0.38016336187803823,
+        "within_5_points": 0.48642533936651583,
+        "within_10_points": 0.7104072398190046,
+        "dangerous_error_rate": 0.00904977375565611
+      },
+      "combined_two_stage": {
+        "percentage_mae": 10.95475113122172,
+        "percentage_rmse": 17.78745808592029,
+        "r2": -0.5177227945458958,
+        "within_5_points": 0.43665158371040724,
+        "within_10_points": 0.6583710407239819,
+        "dangerous_error_rate": 0.00904977375565611
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 9.33710407239819,
+        "percentage_rmse": 15.867879277338261,
+        "r2": -0.2078206564921936,
+        "within_5_points": 0.5248868778280543,
+        "within_10_points": 0.7239819004524887,
+        "dangerous_error_rate": 0.00904977375565611
+      }
+    },
+    "medium": {
+      "rows": 822,
+      "current_ensemble": {
+        "percentage_mae": 6.218978102189781,
+        "percentage_rmse": 9.024837315125236,
+        "r2": 0.7383877024379346,
+        "within_5_points": 0.6192214111922141,
+        "within_10_points": 0.8345498783454988,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 6.467153284671533,
+        "percentage_rmse": 9.667211999048634,
+        "r2": 0.6998199148809878,
+        "within_5_points": 0.6058394160583942,
+        "within_10_points": 0.8102189781021898,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 6.328467153284672,
+        "percentage_rmse": 9.591663046625438,
+        "r2": 0.7044933772840383,
+        "within_5_points": 0.6338199513381995,
+        "within_10_points": 0.8114355231143552,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 6.399026763990268,
+        "percentage_rmse": 9.680919101366458,
+        "r2": 0.6989680630382913,
+        "within_5_points": 0.6277372262773723,
+        "within_10_points": 0.8223844282238443,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 6.585158150851582,
+        "percentage_rmse": 9.769421980824458,
+        "r2": 0.6934388412152843,
+        "within_5_points": 0.6034063260340633,
+        "within_10_points": 0.7992700729927007,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 6.159367396593674,
+        "percentage_rmse": 9.099811500413933,
+        "r2": 0.73402293863843,
+        "within_5_points": 0.6277372262773723,
+        "within_10_points": 0.8284671532846716,
+        "dangerous_error_rate": 0.0
+      }
+    }
+  },
+  "paired_comparisons_vs_current": {
+    "unixcoder_two_stage": {
+      "bootstrap": {
+        "mae_reduction": {
+          "estimate": -0.2132000000000005,
+          "ci_95_low": -0.3411599220086447,
+          "ci_95_high": -0.08127514808650381,
+          "probability_positive": 0.0006
+        },
+        "rmse_reduction": {
+          "estimate": -1.025378133185626,
+          "ci_95_low": -1.6184516765302752,
+          "ci_95_high": -0.5321089409653866,
+          "probability_positive": 0.0
+        },
+        "within_5_gain": {
+          "estimate": 0.00040000000000006697,
+          "ci_95_low": -0.013492329478793365,
+          "ci_95_high": 0.010309553509190368,
+          "probability_positive": 0.5088
+        },
+        "within_10_gain": {
+          "estimate": -0.01759999999999995,
+          "ci_95_low": -0.02672382424224094,
+          "ci_95_high": -0.00856239621080705,
+          "probability_positive": 0.0001
+        },
+        "dangerous_error_reduction": {
+          "estimate": 0.0,
+          "ci_95_low": 0.0,
+          "ci_95_high": 0.0,
+          "probability_positive": 0.0
+        }
+      },
+      "repository_wins_all": {
+        "wins": 9,
+        "ties": 2,
+        "losses": 18
+      },
+      "repository_wins_minimum_10_rows": {
+        "wins": 8,
+        "ties": 1,
+        "losses": 13
+      }
+    },
+    "unixcoder_encoder_two_stage": {
+      "bootstrap": {
+        "mae_reduction": {
+          "estimate": -0.1943999999999999,
+          "ci_95_low": -0.29276748614958437,
+          "ci_95_high": -0.08807155963302755,
+          "probability_positive": 0.0006
+        },
+        "rmse_reduction": {
+          "estimate": -0.961699878270089,
+          "ci_95_low": -1.2334929438101452,
+          "ci_95_high": -0.6240996145694517,
+          "probability_positive": 0.0
+        },
+        "within_5_gain": {
+          "estimate": 0.008400000000000074,
+          "ci_95_low": -0.0057845679486031995,
+          "ci_95_high": 0.019239370061453407,
+          "probability_positive": 0.8774
+        },
+        "within_10_gain": {
+          "estimate": -0.022399999999999975,
+          "ci_95_low": -0.034087990714861315,
+          "ci_95_high": -0.009239293628901598,
+          "probability_positive": 0.0004
+        },
+        "dangerous_error_reduction": {
+          "estimate": 0.0,
+          "ci_95_low": 0.0,
+          "ci_95_high": 0.0,
+          "probability_positive": 0.0
+        }
+      },
+      "repository_wins_all": {
+        "wins": 8,
+        "ties": 2,
+        "losses": 19
+      },
+      "repository_wins_minimum_10_rows": {
+        "wins": 7,
+        "ties": 0,
+        "losses": 15
+      }
+    },
+    "codebert_two_stage": {
+      "bootstrap": {
+        "mae_reduction": {
+          "estimate": -0.1452,
+          "ci_95_low": -0.26669623422945204,
+          "ci_95_high": -0.046458384976053035,
+          "probability_positive": 0.0008
+        },
+        "rmse_reduction": {
+          "estimate": -0.8301620867413213,
+          "ci_95_low": -1.0763538976121148,
+          "ci_95_high": -0.5685929835071004,
+          "probability_positive": 0.0
+        },
+        "within_5_gain": {
+          "estimate": 0.00880000000000003,
+          "ci_95_low": -0.0027297009295999845,
+          "ci_95_high": 0.01857860667193967,
+          "probability_positive": 0.9288
+        },
+        "within_10_gain": {
+          "estimate": -0.011599999999999944,
+          "ci_95_low": -0.022634015266108493,
+          "ci_95_high": -0.00045257530281133323,
+          "probability_positive": 0.0181
+        },
+        "dangerous_error_reduction": {
+          "estimate": 0.0,
+          "ci_95_low": 0.0,
+          "ci_95_high": 0.0,
+          "probability_positive": 0.0
+        }
+      },
+      "repository_wins_all": {
+        "wins": 10,
+        "ties": 2,
+        "losses": 17
+      },
+      "repository_wins_minimum_10_rows": {
+        "wins": 9,
+        "ties": 0,
+        "losses": 13
+      }
+    },
+    "combined_two_stage": {
+      "bootstrap": {
+        "mae_reduction": {
+          "estimate": -0.38119999999999976,
+          "ci_95_low": -0.5137433002248881,
+          "ci_95_high": -0.22848498785831,
+          "probability_positive": 0.0
+        },
+        "rmse_reduction": {
+          "estimate": -1.2184321010458081,
+          "ci_95_low": -1.6089220345227082,
+          "ci_95_high": -0.7830123584689753,
+          "probability_positive": 0.0
+        },
+        "within_5_gain": {
+          "estimate": -0.009199999999999986,
+          "ci_95_low": -0.021824530879251684,
+          "ci_95_high": 0.0,
+          "probability_positive": 0.0223
+        },
+        "within_10_gain": {
+          "estimate": -0.02959999999999996,
+          "ci_95_low": -0.0385403995127357,
+          "ci_95_high": -0.01975166678958767,
+          "probability_positive": 0.0
+        },
+        "dangerous_error_reduction": {
+          "estimate": 0.0,
+          "ci_95_low": 0.0,
+          "ci_95_high": 0.0,
+          "probability_positive": 0.0
+        }
+      },
+      "repository_wins_all": {
+        "wins": 4,
+        "ties": 2,
+        "losses": 23
+      },
+      "repository_wins_minimum_10_rows": {
+        "wins": 4,
+        "ties": 0,
+        "losses": 18
+      }
+    },
+    "selected_embedding_blend": {
+      "bootstrap": {
+        "mae_reduction": {
+          "estimate": 0.02200000000000024,
+          "ci_95_low": -0.0430945399403699,
+          "ci_95_high": 0.08253075722573586,
+          "probability_positive": 0.7164
+        },
+        "rmse_reduction": {
+          "estimate": -0.17503751705922177,
+          "ci_95_low": -0.26679099062369077,
+          "ci_95_high": -0.06911931861701065,
+          "probability_positive": 0.0005
+        },
+        "within_5_gain": {
+          "estimate": 0.012800000000000034,
+          "ci_95_low": 0.004255228687219573,
+          "ci_95_high": 0.01941747572815533,
+          "probability_positive": 0.997
+        },
+        "within_10_gain": {
+          "estimate": -0.00759999999999994,
+          "ci_95_low": -0.015709758551307892,
+          "ci_95_high": 0.0011579100778081129,
+          "probability_positive": 0.0398
+        },
+        "dangerous_error_reduction": {
+          "estimate": 0.0,
+          "ci_95_low": 0.0,
+          "ci_95_high": 0.0,
+          "probability_positive": 0.0
+        }
+      },
+      "repository_wins_all": {
+        "wins": 14,
+        "ties": 3,
+        "losses": 12
+      },
+      "repository_wins_minimum_10_rows": {
+        "wins": 14,
+        "ties": 0,
+        "losses": 8
+      }
+    }
+  },
+  "per_repository": {
+    "4ian/GDevelop": {
+      "rows": 62,
+      "pull_requests": 38,
+      "current_ensemble": {
+        "percentage_mae": 3.725806451612903,
+        "percentage_rmse": 8.921702426866096,
+        "r2": 0.8636702063905732,
+        "within_5_points": 0.8387096774193549,
+        "within_10_points": 0.8870967741935484,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 3.661290322580645,
+        "percentage_rmse": 9.619368901571253,
+        "r2": 0.8415148883612399,
+        "within_5_points": 0.8225806451612904,
+        "within_10_points": 0.9032258064516129,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.4838709677419355,
+        "percentage_rmse": 9.221293730519387,
+        "r2": 0.8543605528046814,
+        "within_5_points": 0.8709677419354839,
+        "within_10_points": 0.9032258064516129,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 3.661290322580645,
+        "percentage_rmse": 9.57904298539938,
+        "r2": 0.842840892432821,
+        "within_5_points": 0.8387096774193549,
+        "within_10_points": 0.9032258064516129,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 3.5161290322580645,
+        "percentage_rmse": 9.341202519811302,
+        "r2": 0.8505482910988857,
+        "within_5_points": 0.8387096774193549,
+        "within_10_points": 0.9032258064516129,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.596774193548387,
+        "percentage_rmse": 9.03666367209606,
+        "r2": 0.8601341955330238,
+        "within_5_points": 0.8387096774193549,
+        "within_10_points": 0.9032258064516129,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Alamofire/Alamofire": {
+      "rows": 36,
+      "pull_requests": 19,
+      "current_ensemble": {
+        "percentage_mae": 2.861111111111111,
+        "percentage_rmse": 4.9749371855331,
+        "r2": 0.9626308897473775,
+        "within_5_points": 0.8333333333333334,
+        "within_10_points": 0.9166666666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 2.6944444444444446,
+        "percentage_rmse": 4.78132942926035,
+        "r2": 0.9654828532683408,
+        "within_5_points": 0.8333333333333334,
+        "within_10_points": 0.9166666666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 2.5555555555555554,
+        "percentage_rmse": 4.515405728048022,
+        "r2": 0.9692155702296017,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.9166666666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 2.3055555555555554,
+        "percentage_rmse": 4.0858835573770875,
+        "r2": 0.9747936753514859,
+        "within_5_points": 0.8333333333333334,
+        "within_10_points": 0.9166666666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 2.6666666666666665,
+        "percentage_rmse": 4.636809247747852,
+        "r2": 0.9675379446290351,
+        "within_5_points": 0.8055555555555556,
+        "within_10_points": 0.9444444444444444,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 2.611111111111111,
+        "percentage_rmse": 4.564354645876384,
+        "r2": 0.9685445199893751,
+        "within_5_points": 0.8611111111111112,
+        "within_10_points": 0.9166666666666666,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "All-Hands-AI/OpenHands": {
+      "rows": 126,
+      "pull_requests": 73,
+      "current_ensemble": {
+        "percentage_mae": 3.1507936507936507,
+        "percentage_rmse": 5.718946511932876,
+        "r2": 0.9695627911120906,
+        "within_5_points": 0.8174603174603174,
+        "within_10_points": 0.9126984126984127,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 3.7777777777777777,
+        "percentage_rmse": 7.558239485950688,
+        "r2": 0.94683644028751,
+        "within_5_points": 0.7857142857142857,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.5952380952380953,
+        "percentage_rmse": 7.314369419163897,
+        "r2": 0.950211787160059,
+        "within_5_points": 0.8095238095238095,
+        "within_10_points": 0.8968253968253969,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 3.0396825396825395,
+        "percentage_rmse": 5.928810475195986,
+        "r2": 0.9672879402658213,
+        "within_5_points": 0.8253968253968254,
+        "within_10_points": 0.8968253968253969,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 4.015873015873016,
+        "percentage_rmse": 8.118174789000413,
+        "r2": 0.9386676577031791,
+        "within_5_points": 0.7857142857142857,
+        "within_10_points": 0.873015873015873,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.126984126984127,
+        "percentage_rmse": 5.698788509515902,
+        "r2": 0.9697769816138498,
+        "within_5_points": 0.8174603174603174,
+        "within_10_points": 0.9206349206349206,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Automattic/pocket-casts-android": {
+      "rows": 233,
+      "pull_requests": 121,
+      "current_ensemble": {
+        "percentage_mae": 4.639484978540772,
+        "percentage_rmse": 9.792920277100599,
+        "r2": 0.9139337956165091,
+        "within_5_points": 0.7296137339055794,
+        "within_10_points": 0.871244635193133,
+        "dangerous_error_rate": 0.004291845493562232
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.9742489270386265,
+        "percentage_rmse": 10.83290964286475,
+        "r2": 0.8946830062001436,
+        "within_5_points": 0.7253218884120172,
+        "within_10_points": 0.8412017167381974,
+        "dangerous_error_rate": 0.004291845493562232
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 5.1931330472103,
+        "percentage_rmse": 11.170546803081232,
+        "r2": 0.8880157159881131,
+        "within_5_points": 0.7296137339055794,
+        "within_10_points": 0.8240343347639485,
+        "dangerous_error_rate": 0.004291845493562232
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.8412017167381975,
+        "percentage_rmse": 10.183298621539615,
+        "r2": 0.9069352593280866,
+        "within_5_points": 0.7339055793991416,
+        "within_10_points": 0.8497854077253219,
+        "dangerous_error_rate": 0.004291845493562232
+      },
+      "combined_two_stage": {
+        "percentage_mae": 5.167381974248927,
+        "percentage_rmse": 11.159399125454817,
+        "r2": 0.8882391145047496,
+        "within_5_points": 0.7167381974248928,
+        "within_10_points": 0.8283261802575107,
+        "dangerous_error_rate": 0.004291845493562232
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 4.763948497854077,
+        "percentage_rmse": 10.23626474256251,
+        "r2": 0.9059646312902866,
+        "within_5_points": 0.7381974248927039,
+        "within_10_points": 0.8454935622317596,
+        "dangerous_error_rate": 0.004291845493562232
+      }
+    },
+    "Automattic/pocket-casts-ios": {
+      "rows": 75,
+      "pull_requests": 54,
+      "current_ensemble": {
+        "percentage_mae": 3.84,
+        "percentage_rmse": 7.313913681014655,
+        "r2": 0.9312715561544962,
+        "within_5_points": 0.76,
+        "within_10_points": 0.8933333333333333,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.08,
+        "percentage_rmse": 7.048404074682439,
+        "r2": 0.9361709417327151,
+        "within_5_points": 0.7333333333333333,
+        "within_10_points": 0.8533333333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.933333333333333,
+        "percentage_rmse": 7.096477999684069,
+        "r2": 0.9352972750736621,
+        "within_5_points": 0.72,
+        "within_10_points": 0.88,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.013333333333334,
+        "percentage_rmse": 7.715784686817883,
+        "r2": 0.9235113405358488,
+        "within_5_points": 0.7866666666666666,
+        "within_10_points": 0.8666666666666667,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 3.9066666666666667,
+        "percentage_rmse": 6.777413469261952,
+        "r2": 0.9409846737169092,
+        "within_5_points": 0.7466666666666667,
+        "within_10_points": 0.88,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.7866666666666666,
+        "percentage_rmse": 7.0823724838503095,
+        "r2": 0.9355542358557365,
+        "within_5_points": 0.7733333333333333,
+        "within_10_points": 0.8666666666666667,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Avaiga/taipy": {
+      "rows": 359,
+      "pull_requests": 91,
+      "current_ensemble": {
+        "percentage_mae": 2.4540389972144845,
+        "percentage_rmse": 7.947074232567525,
+        "r2": 0.8754598568459748,
+        "within_5_points": 0.8802228412256268,
+        "within_10_points": 0.9665738161559888,
+        "dangerous_error_rate": 0.002785515320334262
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 2.4846796657381613,
+        "percentage_rmse": 8.417715766088978,
+        "r2": 0.860272034510118,
+        "within_5_points": 0.8885793871866295,
+        "within_10_points": 0.9498607242339833,
+        "dangerous_error_rate": 0.002785515320334262
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 2.7576601671309193,
+        "percentage_rmse": 8.877689478323603,
+        "r2": 0.8445843597935876,
+        "within_5_points": 0.883008356545961,
+        "within_10_points": 0.9331476323119777,
+        "dangerous_error_rate": 0.002785515320334262
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 2.584958217270195,
+        "percentage_rmse": 8.584497266279676,
+        "r2": 0.8546802793065368,
+        "within_5_points": 0.8746518105849582,
+        "within_10_points": 0.9442896935933147,
+        "dangerous_error_rate": 0.002785515320334262
+      },
+      "combined_two_stage": {
+        "percentage_mae": 2.632311977715877,
+        "percentage_rmse": 8.6779264046912,
+        "r2": 0.8514998998734586,
+        "within_5_points": 0.8746518105849582,
+        "within_10_points": 0.9415041782729805,
+        "dangerous_error_rate": 0.002785515320334262
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 2.5236768802228413,
+        "percentage_rmse": 8.198444040161874,
+        "r2": 0.8674567258718904,
+        "within_5_points": 0.8885793871866295,
+        "within_10_points": 0.9498607242339833,
+        "dangerous_error_rate": 0.002785515320334262
+      }
+    },
+    "AvaloniaUI/Avalonia": {
+      "rows": 48,
+      "pull_requests": 24,
+      "current_ensemble": {
+        "percentage_mae": 1.6041666666666667,
+        "percentage_rmse": 6.491982234520774,
+        "r2": 0.9486847508036503,
+        "within_5_points": 0.9375,
+        "within_10_points": 0.9583333333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 1.6041666666666667,
+        "percentage_rmse": 6.641096796965593,
+        "r2": 0.9463003546472208,
+        "within_5_points": 0.9375,
+        "within_10_points": 0.9583333333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 1.6458333333333333,
+        "percentage_rmse": 6.336073968423454,
+        "r2": 0.9511198787931954,
+        "within_5_points": 0.9166666666666666,
+        "within_10_points": 0.9583333333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 1.6666666666666667,
+        "percentage_rmse": 6.438814590693953,
+        "r2": 0.9495218260500564,
+        "within_5_points": 0.9166666666666666,
+        "within_10_points": 0.9583333333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 1.6875,
+        "percentage_rmse": 6.587551391323891,
+        "r2": 0.9471627958101847,
+        "within_5_points": 0.9375,
+        "within_10_points": 0.9583333333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 1.4583333333333333,
+        "percentage_rmse": 6.331139971074193,
+        "r2": 0.9511959765428687,
+        "within_5_points": 0.9375,
+        "within_10_points": 0.9583333333333334,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Azure/azure-rest-api-specs": {
+      "rows": 8,
+      "pull_requests": 4,
+      "current_ensemble": {
+        "percentage_mae": 5.0,
+        "percentage_rmse": 7.33143914930759,
+        "r2": 0.8165431177003893,
+        "within_5_points": 0.625,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 5.25,
+        "percentage_rmse": 7.648529270389178,
+        "r2": 0.8003306490320516,
+        "within_5_points": 0.625,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 5.625,
+        "percentage_rmse": 8.580501150865256,
+        "r2": 0.7487067356407658,
+        "within_5_points": 0.625,
+        "within_10_points": 0.75,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 5.0,
+        "percentage_rmse": 7.842193570679061,
+        "r2": 0.7900911951362594,
+        "within_5_points": 0.625,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 7.125,
+        "percentage_rmse": 10.470195795685962,
+        "r2": 0.6258332888912591,
+        "within_5_points": 0.5,
+        "within_10_points": 0.625,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 5.375,
+        "percentage_rmse": 7.705517503711221,
+        "r2": 0.7973441416457789,
+        "within_5_points": 0.5,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Chia-Network/chia-blockchain": {
+      "rows": 85,
+      "pull_requests": 38,
+      "current_ensemble": {
+        "percentage_mae": 4.247058823529412,
+        "percentage_rmse": 10.892523069680845,
+        "r2": 0.8637847353096153,
+        "within_5_points": 0.8,
+        "within_10_points": 0.8823529411764706,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.2823529411764705,
+        "percentage_rmse": 11.834147997364637,
+        "r2": 0.8392160128037344,
+        "within_5_points": 0.8117647058823529,
+        "within_10_points": 0.8941176470588236,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 4.670588235294118,
+        "percentage_rmse": 12.33502903022407,
+        "r2": 0.8253175985879282,
+        "within_5_points": 0.8,
+        "within_10_points": 0.8588235294117647,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.223529411764706,
+        "percentage_rmse": 11.602738013579584,
+        "r2": 0.8454426104261704,
+        "within_5_points": 0.8352941176470589,
+        "within_10_points": 0.8941176470588236,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 5.035294117647059,
+        "percentage_rmse": 14.149620655900367,
+        "r2": 0.7701426500246935,
+        "within_5_points": 0.8117647058823529,
+        "within_10_points": 0.8705882352941177,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 4.235294117647059,
+        "percentage_rmse": 11.042165175576114,
+        "r2": 0.8600163606097029,
+        "within_5_points": 0.8235294117647058,
+        "within_10_points": 0.9058823529411765,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "CodeEditApp/CodeEdit": {
+      "rows": 96,
+      "pull_requests": 46,
+      "current_ensemble": {
+        "percentage_mae": 3.46875,
+        "percentage_rmse": 8.199974593456576,
+        "r2": 0.9073768353901561,
+        "within_5_points": 0.84375,
+        "within_10_points": 0.90625,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 3.7604166666666665,
+        "percentage_rmse": 8.008459069425696,
+        "r2": 0.9116528544534765,
+        "within_5_points": 0.7708333333333334,
+        "within_10_points": 0.90625,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.6875,
+        "percentage_rmse": 8.325412902673357,
+        "r2": 0.9045213729955226,
+        "within_5_points": 0.78125,
+        "within_10_points": 0.90625,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 3.53125,
+        "percentage_rmse": 8.404487888424057,
+        "r2": 0.9026990427235706,
+        "within_5_points": 0.8229166666666666,
+        "within_10_points": 0.90625,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 3.71875,
+        "percentage_rmse": 8.193620485882091,
+        "r2": 0.9075203259627508,
+        "within_5_points": 0.75,
+        "within_10_points": 0.90625,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.5416666666666665,
+        "percentage_rmse": 8.15858443604036,
+        "r2": 0.9083095241120213,
+        "within_5_points": 0.8125,
+        "within_10_points": 0.90625,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "CorentinJ/Real-Time-Voice-Cloning": {
+      "rows": 3,
+      "pull_requests": 2,
+      "current_ensemble": {
+        "percentage_mae": 1.6666666666666667,
+        "percentage_rmse": 2.886751345948129,
+        "r2": 0.625,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 2.6666666666666665,
+        "percentage_rmse": 4.618802153517006,
+        "r2": 0.039999999999999813,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 1.3333333333333333,
+        "percentage_rmse": 2.309401076758503,
+        "r2": 0.76,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 2.0,
+        "percentage_rmse": 3.4641016151377544,
+        "r2": 0.45999999999999996,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 3.0,
+        "percentage_rmse": 5.196152422706632,
+        "r2": -0.21500000000000008,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 1.6666666666666667,
+        "percentage_rmse": 2.886751345948129,
+        "r2": 0.625,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "CryptoBlades/cryptoblades": {
+      "rows": 9,
+      "pull_requests": 7,
+      "current_ensemble": {
+        "percentage_mae": 4.111111111111111,
+        "percentage_rmse": 7.340905181848413,
+        "r2": 0.9648754345307068,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.7777777777777778,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 8.88888888888889,
+        "percentage_rmse": 17.511900715418264,
+        "r2": 0.8001158748551565,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.7777777777777778,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 4.555555555555555,
+        "percentage_rmse": 12.078447287995626,
+        "r2": 0.9049101969872537,
+        "within_5_points": 0.8888888888888888,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 8.444444444444445,
+        "percentage_rmse": 17.107503227141788,
+        "r2": 0.8092410196987254,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.7777777777777778,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 9.222222222222221,
+        "percentage_rmse": 18.65773595887537,
+        "r2": 0.7731025492468134,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.7777777777777778,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 4.666666666666667,
+        "percentage_rmse": 9.439868172337532,
+        "r2": 0.941917728852839,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "DiceDB/dice": {
+      "rows": 96,
+      "pull_requests": 51,
+      "current_ensemble": {
+        "percentage_mae": 4.46875,
+        "percentage_rmse": 7.524266298672139,
+        "r2": 0.9601405044163551,
+        "within_5_points": 0.7291666666666666,
+        "within_10_points": 0.8854166666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.291666666666667,
+        "percentage_rmse": 7.946435259494243,
+        "r2": 0.9555421780629153,
+        "within_5_points": 0.6979166666666666,
+        "within_10_points": 0.8541666666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 4.447916666666667,
+        "percentage_rmse": 8.394566695190408,
+        "r2": 0.9503864788181494,
+        "within_5_points": 0.7395833333333334,
+        "within_10_points": 0.84375,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.5,
+        "percentage_rmse": 8.757139944068497,
+        "r2": 0.9460081680797068,
+        "within_5_points": 0.7291666666666666,
+        "within_10_points": 0.84375,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 4.614583333333333,
+        "percentage_rmse": 8.666866984864445,
+        "r2": 0.9471155800085256,
+        "within_5_points": 0.71875,
+        "within_10_points": 0.8125,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 4.427083333333333,
+        "percentage_rmse": 7.670967996283129,
+        "r2": 0.9585710596960423,
+        "within_5_points": 0.7395833333333334,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Dokploy/dokploy": {
+      "rows": 4,
+      "pull_requests": 2,
+      "current_ensemble": {
+        "percentage_mae": 6.25,
+        "percentage_rmse": 8.958236433584458,
+        "r2": 0.3063209076175041,
+        "within_5_points": 0.5,
+        "within_10_points": 0.75,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 11.5,
+        "percentage_rmse": 18.398369492974098,
+        "r2": -1.925985953538628,
+        "within_5_points": 0.5,
+        "within_10_points": 0.75,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 8.0,
+        "percentage_rmse": 11.335784048754634,
+        "r2": -0.11075094543490005,
+        "within_5_points": 0.5,
+        "within_10_points": 0.75,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 10.0,
+        "percentage_rmse": 15.827191791344413,
+        "r2": -1.1653160453808753,
+        "within_5_points": 0.75,
+        "within_10_points": 0.75,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 9.5,
+        "percentage_rmse": 14.45683229480096,
+        "r2": -0.8065910318746623,
+        "within_5_points": 0.5,
+        "within_10_points": 0.75,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 7.5,
+        "percentage_rmse": 10.816653826391969,
+        "r2": -0.011345218800648205,
+        "within_5_points": 0.5,
+        "within_10_points": 0.75,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "DrewThomasson/ebook2audiobook": {
+      "rows": 288,
+      "pull_requests": 109,
+      "current_ensemble": {
+        "percentage_mae": 7.479166666666667,
+        "percentage_rmse": 11.420011675417266,
+        "r2": 0.8120257289227466,
+        "within_5_points": 0.5729166666666666,
+        "within_10_points": 0.7708333333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 7.645833333333333,
+        "percentage_rmse": 12.247732216391917,
+        "r2": 0.7837895511427182,
+        "within_5_points": 0.5833333333333334,
+        "within_10_points": 0.7395833333333334,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 7.607638888888889,
+        "percentage_rmse": 12.437482551634886,
+        "r2": 0.7770382920457211,
+        "within_5_points": 0.6006944444444444,
+        "within_10_points": 0.7326388888888888,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 7.857638888888889,
+        "percentage_rmse": 12.741963698303683,
+        "r2": 0.7659880473561956,
+        "within_5_points": 0.6006944444444444,
+        "within_10_points": 0.7604166666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 8.10763888888889,
+        "percentage_rmse": 12.882885934448073,
+        "r2": 0.7607832219589554,
+        "within_5_points": 0.5868055555555556,
+        "within_10_points": 0.71875,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 7.357638888888889,
+        "percentage_rmse": 11.6802004834392,
+        "r2": 0.8033626974202246,
+        "within_5_points": 0.6006944444444444,
+        "within_10_points": 0.7569444444444444,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "FiloSottile/mkcert": {
+      "rows": 2,
+      "pull_requests": 1,
+      "current_ensemble": {
+        "percentage_mae": 0.0,
+        "percentage_rmse": 0.0,
+        "r2": 1.0,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 0.0,
+        "percentage_rmse": 0.0,
+        "r2": 1.0,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 0.0,
+        "percentage_rmse": 0.0,
+        "r2": 1.0,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 0.0,
+        "percentage_rmse": 0.0,
+        "r2": 1.0,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 0.0,
+        "percentage_rmse": 0.0,
+        "r2": 1.0,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 0.0,
+        "percentage_rmse": 0.0,
+        "r2": 1.0,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "FlowiseAI/Flowise": {
+      "rows": 29,
+      "pull_requests": 21,
+      "current_ensemble": {
+        "percentage_mae": 3.1724137931034484,
+        "percentage_rmse": 5.693311260018047,
+        "r2": 0.964058750626269,
+        "within_5_points": 0.8275862068965517,
+        "within_10_points": 0.9655172413793104,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 3.5172413793103448,
+        "percentage_rmse": 6.443387414963525,
+        "r2": 0.953964612504285,
+        "within_5_points": 0.7931034482758621,
+        "within_10_points": 0.9310344827586207,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.2758620689655173,
+        "percentage_rmse": 5.827994272593214,
+        "r2": 0.9623381589009308,
+        "within_5_points": 0.8275862068965517,
+        "within_10_points": 0.9655172413793104,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 3.689655172413793,
+        "percentage_rmse": 6.25051721997799,
+        "r2": 0.9566793238931519,
+        "within_5_points": 0.7586206896551724,
+        "within_10_points": 0.9655172413793104,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 3.4827586206896552,
+        "percentage_rmse": 5.939348623289049,
+        "r2": 0.9608852147773119,
+        "within_5_points": 0.7586206896551724,
+        "within_10_points": 0.9655172413793104,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.1379310344827585,
+        "percentage_rmse": 5.738556829269761,
+        "r2": 0.9634852200511563,
+        "within_5_points": 0.7931034482758621,
+        "within_10_points": 0.9655172413793104,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Genesis-Embodied-AI/Genesis": {
+      "rows": 55,
+      "pull_requests": 36,
+      "current_ensemble": {
+        "percentage_mae": 5.236363636363636,
+        "percentage_rmse": 9.760774931977853,
+        "r2": 0.9184217409174129,
+        "within_5_points": 0.6181818181818182,
+        "within_10_points": 0.8727272727272727,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 5.545454545454546,
+        "percentage_rmse": 10.26999159068435,
+        "r2": 0.9096878853171588,
+        "within_5_points": 0.6,
+        "within_10_points": 0.8,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 5.709090909090909,
+        "percentage_rmse": 10.465527828412322,
+        "r2": 0.9062161387951327,
+        "within_5_points": 0.6,
+        "within_10_points": 0.7818181818181819,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 5.5636363636363635,
+        "percentage_rmse": 10.615597443898722,
+        "r2": 0.9035072424057491,
+        "within_5_points": 0.6727272727272727,
+        "within_10_points": 0.7818181818181819,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 5.8,
+        "percentage_rmse": 10.679632271503802,
+        "r2": 0.9023396146517044,
+        "within_5_points": 0.6363636363636364,
+        "within_10_points": 0.7818181818181819,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 5.4,
+        "percentage_rmse": 9.977246841962694,
+        "r2": 0.9147631739547396,
+        "within_5_points": 0.6363636363636364,
+        "within_10_points": 0.8181818181818182,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "GoogleContainerTools/jib": {
+      "rows": 148,
+      "pull_requests": 62,
+      "current_ensemble": {
+        "percentage_mae": 3.060810810810811,
+        "percentage_rmse": 6.02640585818509,
+        "r2": 0.9476286785751129,
+        "within_5_points": 0.8108108108108109,
+        "within_10_points": 0.9324324324324325,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 3.027027027027027,
+        "percentage_rmse": 6.691058979733348,
+        "r2": 0.9354395579978974,
+        "within_5_points": 0.8175675675675675,
+        "within_10_points": 0.8851351351351351,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.1621621621621623,
+        "percentage_rmse": 6.853683168411929,
+        "r2": 0.9322631764565926,
+        "within_5_points": 0.8378378378378378,
+        "within_10_points": 0.8783783783783784,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 3.141891891891892,
+        "percentage_rmse": 6.931615778250934,
+        "r2": 0.930713959692582,
+        "within_5_points": 0.8108108108108109,
+        "within_10_points": 0.8986486486486487,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 3.108108108108108,
+        "percentage_rmse": 6.898883575955939,
+        "r2": 0.9313667743038317,
+        "within_5_points": 0.831081081081081,
+        "within_10_points": 0.8918918918918919,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.0472972972972974,
+        "percentage_rmse": 6.276834285581279,
+        "r2": 0.9431856418179504,
+        "within_5_points": 0.8243243243243243,
+        "within_10_points": 0.9121621621621622,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "GraphiteEditor/Graphite": {
+      "rows": 56,
+      "pull_requests": 39,
+      "current_ensemble": {
+        "percentage_mae": 4.160714285714286,
+        "percentage_rmse": 13.849316641212715,
+        "r2": 0.6270298793528196,
+        "within_5_points": 0.875,
+        "within_10_points": 0.8928571428571429,
+        "dangerous_error_rate": 0.017857142857142856
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.660714285714286,
+        "percentage_rmse": 15.431299362010964,
+        "r2": 0.5369559111041663,
+        "within_5_points": 0.875,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.017857142857142856
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 4.375,
+        "percentage_rmse": 15.26960098646046,
+        "r2": 0.54660917369982,
+        "within_5_points": 0.8928571428571429,
+        "within_10_points": 0.8928571428571429,
+        "dangerous_error_rate": 0.017857142857142856
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.696428571428571,
+        "percentage_rmse": 15.490204277911527,
+        "r2": 0.5334140665546818,
+        "within_5_points": 0.8571428571428571,
+        "within_10_points": 0.8928571428571429,
+        "dangerous_error_rate": 0.017857142857142856
+      },
+      "combined_two_stage": {
+        "percentage_mae": 4.482142857142857,
+        "percentage_rmse": 15.271939721500438,
+        "r2": 0.5464702778351342,
+        "within_5_points": 0.875,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.017857142857142856
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 4.25,
+        "percentage_rmse": 14.490144433865582,
+        "r2": 0.5917156057564894,
+        "within_5_points": 0.8928571428571429,
+        "within_10_points": 0.8928571428571429,
+        "dangerous_error_rate": 0.017857142857142856
+      }
+    },
+    "Infisical/infisical": {
+      "rows": 9,
+      "pull_requests": 6,
+      "current_ensemble": {
+        "percentage_mae": 2.5555555555555554,
+        "percentage_rmse": 4.977728174356026,
+        "r2": 0.9430185679404918,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 5.222222222222222,
+        "percentage_rmse": 10.082988974836116,
+        "r2": 0.766197263074215,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 0.7777777777777778,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 4.333333333333333,
+        "percentage_rmse": 7.54983443527075,
+        "r2": 0.8689171540514451,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 0.7777777777777778,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 4.111111111111111,
+        "percentage_rmse": 6.708203932499369,
+        "r2": 0.8965135426721935,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 5.444444444444445,
+        "percentage_rmse": 9.882644720249063,
+        "r2": 0.7753960592811311,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 0.7777777777777778,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.0,
+        "percentage_rmse": 5.174724898753341,
+        "r2": 0.9384191698370337,
+        "within_5_points": 0.7777777777777778,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "JetBrains/kotlin": {
+      "rows": 57,
+      "pull_requests": 42,
+      "current_ensemble": {
+        "percentage_mae": 2.6666666666666665,
+        "percentage_rmse": 5.563035899673184,
+        "r2": 0.9798068244851793,
+        "within_5_points": 0.8245614035087719,
+        "within_10_points": 0.9473684210526315,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 2.5964912280701755,
+        "percentage_rmse": 5.724677268157691,
+        "r2": 0.978616297130564,
+        "within_5_points": 0.8596491228070176,
+        "within_10_points": 0.9298245614035088,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 2.508771929824561,
+        "percentage_rmse": 5.9042060535525875,
+        "r2": 0.9772540590998022,
+        "within_5_points": 0.8596491228070176,
+        "within_10_points": 0.9298245614035088,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 2.6491228070175437,
+        "percentage_rmse": 5.877402457644262,
+        "r2": 0.977460111911178,
+        "within_5_points": 0.8421052631578947,
+        "within_10_points": 0.9122807017543859,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 2.754385964912281,
+        "percentage_rmse": 5.862458618415279,
+        "r2": 0.9775745856952756,
+        "within_5_points": 0.8245614035087719,
+        "within_10_points": 0.9298245614035088,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 2.6140350877192984,
+        "percentage_rmse": 5.536164990949741,
+        "r2": 0.9800014299181452,
+        "within_5_points": 0.8771929824561403,
+        "within_10_points": 0.9298245614035088,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "JuliaLang/julia": {
+      "rows": 386,
+      "pull_requests": 168,
+      "current_ensemble": {
+        "percentage_mae": 3.8678756476683938,
+        "percentage_rmse": 7.10013500564923,
+        "r2": 0.9564887636095024,
+        "within_5_points": 0.7357512953367875,
+        "within_10_points": 0.883419689119171,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 4.329015544041451,
+        "percentage_rmse": 9.96717410229661,
+        "r2": 0.914254309991962,
+        "within_5_points": 0.7538860103626943,
+        "within_10_points": 0.8860103626943006,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.9974093264248705,
+        "percentage_rmse": 8.954259124946292,
+        "r2": 0.9307965848682096,
+        "within_5_points": 0.7694300518134715,
+        "within_10_points": 0.8911917098445595,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 3.844559585492228,
+        "percentage_rmse": 8.251550333213414,
+        "r2": 0.9412322156937635,
+        "within_5_points": 0.7668393782383419,
+        "within_10_points": 0.9015544041450777,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 4.391191709844559,
+        "percentage_rmse": 9.223618028392046,
+        "r2": 0.9265704562501902,
+        "within_5_points": 0.7305699481865285,
+        "within_10_points": 0.8575129533678757,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.6968911917098444,
+        "percentage_rmse": 7.043719872148928,
+        "r2": 0.9571774660509574,
+        "within_5_points": 0.7616580310880829,
+        "within_10_points": 0.8963730569948186,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "Kindelia/HVM": {
+      "rows": 3,
+      "pull_requests": 1,
+      "current_ensemble": {
+        "percentage_mae": 2.6666666666666665,
+        "percentage_rmse": 4.08248290463863,
+        "r2": 0.9032258064516129,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 2.3333333333333335,
+        "percentage_rmse": 3.5118845842842465,
+        "r2": 0.9283870967741935,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 2.6666666666666665,
+        "percentage_rmse": 4.08248290463863,
+        "r2": 0.9032258064516129,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 2.0,
+        "percentage_rmse": 2.943920288775949,
+        "r2": 0.9496774193548387,
+        "within_5_points": 1.0,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 2.6666666666666665,
+        "percentage_rmse": 4.08248290463863,
+        "r2": 0.9032258064516129,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 2.6666666666666665,
+        "percentage_rmse": 4.08248290463863,
+        "r2": 0.9032258064516129,
+        "within_5_points": 0.6666666666666666,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "LAION-AI/Open-Assistant": {
+      "rows": 14,
+      "pull_requests": 13,
+      "current_ensemble": {
+        "percentage_mae": 1.7142857142857142,
+        "percentage_rmse": 3.565709706956767,
+        "r2": 0.9841677255400254,
+        "within_5_points": 0.9285714285714286,
+        "within_10_points": 0.9285714285714286,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 1.2857142857142858,
+        "percentage_rmse": 2.7516228977511745,
+        "r2": 0.990571791613723,
+        "within_5_points": 0.9285714285714286,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 1.4285714285714286,
+        "percentage_rmse": 3.0472470011002204,
+        "r2": 0.9884371029224904,
+        "within_5_points": 0.9285714285714286,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 1.3571428571428572,
+        "percentage_rmse": 2.6859422395661667,
+        "r2": 0.9910165184243964,
+        "within_5_points": 0.9285714285714286,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 1.2142857142857142,
+        "percentage_rmse": 2.712405363721075,
+        "r2": 0.9908386277001271,
+        "within_5_points": 0.9285714285714286,
+        "within_10_points": 1.0,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 1.5714285714285714,
+        "percentage_rmse": 3.295017884191656,
+        "r2": 0.9864803049555273,
+        "within_5_points": 0.9285714285714286,
+        "within_10_points": 0.9285714285714286,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "LMCache/LMCache": {
+      "rows": 40,
+      "pull_requests": 28,
+      "current_ensemble": {
+        "percentage_mae": 6.675,
+        "percentage_rmse": 14.952424552560029,
+        "r2": 0.8408474610204858,
+        "within_5_points": 0.8,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 5.775,
+        "percentage_rmse": 13.781327947625368,
+        "r2": 0.8648013151484547,
+        "within_5_points": 0.775,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 6.075,
+        "percentage_rmse": 14.25043858974172,
+        "r2": 0.8554404479335129,
+        "within_5_points": 0.8,
+        "within_10_points": 0.825,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 8.175,
+        "percentage_rmse": 17.177747232975573,
+        "r2": 0.7899499700799277,
+        "within_5_points": 0.725,
+        "within_10_points": 0.8,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 5.9,
+        "percentage_rmse": 14.15627069534911,
+        "r2": 0.857344654762408,
+        "within_5_points": 0.775,
+        "within_10_points": 0.875,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 6.7,
+        "percentage_rmse": 15.109599597606815,
+        "r2": 0.8374839555002881,
+        "within_5_points": 0.775,
+        "within_10_points": 0.85,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "LadybirdBrowser/ladybird": {
+      "rows": 75,
+      "pull_requests": 60,
+      "current_ensemble": {
+        "percentage_mae": 3.48,
+        "percentage_rmse": 6.676326335143702,
+        "r2": 0.9549317248661119,
+        "within_5_points": 0.7866666666666666,
+        "within_10_points": 0.92,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 3.933333333333333,
+        "percentage_rmse": 8.136338242723197,
+        "r2": 0.9330649159318711,
+        "within_5_points": 0.8266666666666667,
+        "within_10_points": 0.8933333333333333,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 3.68,
+        "percentage_rmse": 6.689294930459164,
+        "r2": 0.9547564668413615,
+        "within_5_points": 0.7733333333333333,
+        "within_10_points": 0.8933333333333333,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 3.3066666666666666,
+        "percentage_rmse": 6.125357132445422,
+        "r2": 0.9620633783348007,
+        "within_5_points": 0.8,
+        "within_10_points": 0.9066666666666666,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 3.8133333333333335,
+        "percentage_rmse": 6.8507907086214015,
+        "r2": 0.9525455194522028,
+        "within_5_points": 0.7333333333333333,
+        "within_10_points": 0.8933333333333333,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 3.493333333333333,
+        "percentage_rmse": 6.582805886043833,
+        "r2": 0.956185493812403,
+        "within_5_points": 0.8,
+        "within_10_points": 0.9066666666666666,
+        "dangerous_error_rate": 0.0
+      }
+    },
+    "LazyVim/LazyVim": {
+      "rows": 54,
+      "pull_requests": 27,
+      "current_ensemble": {
+        "percentage_mae": 5.62962962962963,
+        "percentage_rmse": 13.58648566011802,
+        "r2": 0.7927903616906691,
+        "within_5_points": 0.6851851851851852,
+        "within_10_points": 0.8703703703703703,
+        "dangerous_error_rate": 0.018518518518518517
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 5.203703703703703,
+        "percentage_rmse": 13.8102216572444,
+        "r2": 0.7859097045598116,
+        "within_5_points": 0.7962962962962963,
+        "within_10_points": 0.8703703703703703,
+        "dangerous_error_rate": 0.018518518518518517
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 5.37037037037037,
+        "percentage_rmse": 13.99603118347801,
+        "r2": 0.7801099965854633,
+        "within_5_points": 0.7592592592592593,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.018518518518518517
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 5.314814814814815,
+        "percentage_rmse": 13.645647793479931,
+        "r2": 0.7909818506018939,
+        "within_5_points": 0.7222222222222222,
+        "within_10_points": 0.8888888888888888,
+        "dangerous_error_rate": 0.018518518518518517
+      },
+      "combined_two_stage": {
+        "percentage_mae": 5.703703703703703,
+        "percentage_rmse": 14.069931164116012,
+        "r2": 0.7777817984022124,
+        "within_5_points": 0.7222222222222222,
+        "within_10_points": 0.8518518518518519,
+        "dangerous_error_rate": 0.018518518518518517
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 5.407407407407407,
+        "percentage_rmse": 13.712659736062768,
+        "r2": 0.7889238897077703,
+        "within_5_points": 0.7407407407407407,
+        "within_10_points": 0.8518518518518519,
+        "dangerous_error_rate": 0.018518518518518517
+      }
+    },
+    "ManimCommunity/manim": {
+      "rows": 44,
+      "pull_requests": 13,
+      "current_ensemble": {
+        "percentage_mae": 5.136363636363637,
+        "percentage_rmse": 12.176728923349131,
+        "r2": 0.8640505690055037,
+        "within_5_points": 0.7272727272727273,
+        "within_10_points": 0.8636363636363636,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_two_stage": {
+        "percentage_mae": 5.363636363636363,
+        "percentage_rmse": 12.564379664895373,
+        "r2": 0.8552567830031006,
+        "within_5_points": 0.6818181818181818,
+        "within_10_points": 0.8636363636363636,
+        "dangerous_error_rate": 0.0
+      },
+      "unixcoder_encoder_two_stage": {
+        "percentage_mae": 5.5,
+        "percentage_rmse": 12.98250571135844,
+        "r2": 0.8454627559388129,
+        "within_5_points": 0.7272727272727273,
+        "within_10_points": 0.8636363636363636,
+        "dangerous_error_rate": 0.0
+      },
+      "codebert_two_stage": {
+        "percentage_mae": 5.545454545454546,
+        "percentage_rmse": 12.834612293609524,
+        "r2": 0.8489635996554094,
+        "within_5_points": 0.7045454545454546,
+        "within_10_points": 0.8636363636363636,
+        "dangerous_error_rate": 0.0
+      },
+      "combined_two_stage": {
+        "percentage_mae": 5.431818181818182,
+        "percentage_rmse": 12.678722333105966,
+        "r2": 0.8526103118601973,
+        "within_5_points": 0.7045454545454546,
+        "within_10_points": 0.8636363636363636,
+        "dangerous_error_rate": 0.0
+      },
+      "selected_embedding_blend": {
+        "percentage_mae": 5.318181818181818,
+        "percentage_rmse": 12.473608503192214,
+        "r2": 0.8573406185486938,
+        "within_5_points": 0.7045454545454546,
+        "within_10_points": 0.8636363636363636,
+        "dangerous_error_rate": 0.0
+      }
+    }
+  },
+  "bootstrap": {
+    "iterations": 10000,
+    "seed": 20260908,
+    "sampling_unit": "repository"
+  },
+  "configuration_fingerprint": "87712d3937c5e26a62cb406d4187ac7638055569acb36d63be0f7dc070149dfa"
+}

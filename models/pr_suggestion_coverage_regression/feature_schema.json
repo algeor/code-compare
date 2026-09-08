@@ -1,0 +1,146 @@
+{
+  "model_name": "weighted_percentage_ensemble",
+  "components": [
+    "baseline",
+    "two_stage",
+    "catboost_mae"
+  ],
+  "weights": {
+    "baseline": 0.5,
+    "two_stage": 0.3,
+    "catboost_mae": 0.2
+  },
+  "disagreement_threshold": 20.0,
+  "meta_model": null,
+  "baseline_component": {
+    "model_name": "random_forest",
+    "model_parameters": {
+      "min_samples_leaf": 7,
+      "max_features": 0.8
+    },
+    "weight_profile": {
+      "hf_scale": 1.1,
+      "confidence_floor": 0.0,
+      "internal_scale": 1.0,
+      "minority_scale": 1.0
+    }
+  },
+  "selected_by_family": {
+    "catboost": {
+      "name": "catboost_mae",
+      "family": "catboost",
+      "parameters": {
+        "loss_function": "MAE",
+        "iterations": 400,
+        "depth": 6,
+        "learning_rate": 0.03,
+        "l2_leaf_reg": 7.0
+      }
+    },
+    "lightgbm": {
+      "name": "lightgbm_l1",
+      "family": "lightgbm",
+      "parameters": {
+        "objective": "regression_l1",
+        "n_estimators": 400,
+        "num_leaves": 15,
+        "learning_rate": 0.03,
+        "min_child_samples": 15
+      }
+    },
+    "xgboost": {
+      "name": "xgboost_l1",
+      "family": "xgboost",
+      "parameters": {
+        "objective": "reg:absoluteerror",
+        "n_estimators": 400,
+        "max_depth": 4,
+        "learning_rate": 0.03,
+        "min_child_weight": 5.0
+      }
+    }
+  },
+  "selection_policy": "repeated grouped OOF ensemble; deploy when holdout MAE and within-10 accuracy improve, dangerous errors do not increase, and RMSE regression stays within 2%",
+  "prediction_type": "percentage_regression",
+  "prediction_output": "0-100 integer percentage",
+  "numeric_features": [
+    "line_recall",
+    "token_recall",
+    "identifier_normalized_token_recall",
+    "literal_normalized_token_recall",
+    "identifier_and_literal_normalized_token_recall",
+    "best_added_line_overlap",
+    "best_hunk_token_recall",
+    "best_hunk_token_precision",
+    "best_hunk_token_f1",
+    "best_hunk_identifier_normalized_recall",
+    "best_hunk_literal_normalized_recall",
+    "best_hunk_identifier_and_literal_normalized_recall",
+    "best_hunk_contiguous_line_ratio",
+    "best_hunk_token_lcs_recall",
+    "best_hunk_size_ratio",
+    "meaningful_anchor_recall",
+    "meaningful_anchor_count",
+    "best_hunk_size",
+    "candidate_hunk_count",
+    "structural_similarity",
+    "structural_node_recall",
+    "gumtree_operation_count",
+    "gumtree_insert_ratio",
+    "gumtree_delete_ratio",
+    "gumtree_update_ratio",
+    "gumtree_move_ratio",
+    "file_overlap_ratio",
+    "changed_line_overlap_ratio"
+  ],
+  "boolean_features": [
+    "exact_normalized_match",
+    "structural_available",
+    "gumtree_available"
+  ],
+  "categorical_features": [
+    "suggestion_language",
+    "tokenizer",
+    "best_hunk_candidate_type",
+    "structural_engine",
+    "structural_language"
+  ],
+  "feature_columns": [
+    "line_recall",
+    "token_recall",
+    "identifier_normalized_token_recall",
+    "literal_normalized_token_recall",
+    "identifier_and_literal_normalized_token_recall",
+    "best_added_line_overlap",
+    "best_hunk_token_recall",
+    "best_hunk_token_precision",
+    "best_hunk_token_f1",
+    "best_hunk_identifier_normalized_recall",
+    "best_hunk_literal_normalized_recall",
+    "best_hunk_identifier_and_literal_normalized_recall",
+    "best_hunk_contiguous_line_ratio",
+    "best_hunk_token_lcs_recall",
+    "best_hunk_size_ratio",
+    "meaningful_anchor_recall",
+    "meaningful_anchor_count",
+    "best_hunk_size",
+    "candidate_hunk_count",
+    "structural_similarity",
+    "structural_node_recall",
+    "gumtree_operation_count",
+    "gumtree_insert_ratio",
+    "gumtree_delete_ratio",
+    "gumtree_update_ratio",
+    "gumtree_move_ratio",
+    "file_overlap_ratio",
+    "changed_line_overlap_ratio",
+    "exact_normalized_match",
+    "structural_available",
+    "gumtree_available",
+    "suggestion_language",
+    "tokenizer",
+    "best_hunk_candidate_type",
+    "structural_engine",
+    "structural_language"
+  ]
+}
