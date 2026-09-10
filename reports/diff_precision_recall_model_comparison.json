@@ -1,0 +1,130 @@
+{
+  "comparison": "saved percentage model vs Diff Precision/Recall",
+  "output_contract": "all values are 0-100 integer percentages; no categorical buckets",
+  "benchmark": {
+    "held_out_rows": 70,
+    "held_out_pull_requests": 19,
+    "split": "25% grouped holdout by pull request",
+    "random_state": 42,
+    "mae_definition": "mean(abs(predicted_percentage - reference_percentage)) across held-out examples",
+    "reference_label_caveat": "LLM-assisted weak labels, not independent human ground truth"
+  },
+  "diff_precision_recall": {
+    "definition": {
+      "precision": "how much of the draft was kept; overlap / draft",
+      "recall": "how much of the final diff was already in the draft; overlap / final",
+      "levels": [
+        "raw word tokens",
+        "changed file set",
+        "stripped added/removed line occurrences"
+      ],
+      "aggregate_percentage": "equal-weight mean of token F1, file F1, and line F1"
+    },
+    "primary_comparison_metric": "aggregate_diff_f1",
+    "primary_reason": "It balances precision and recall at all three levels without allowing token counts to dominate.",
+    "metrics_against_reference_percentage": {
+      "token_precision": {
+        "percentage_mae": 27.057142857142857,
+        "percentage_rmse": 41.68213046378508,
+        "r2": -0.25732599312501625,
+        "within_5_points": 0.37142857142857144,
+        "within_10_points": 0.42857142857142855,
+        "dangerous_error_rate": 0.11428571428571428
+      },
+      "token_recall": {
+        "percentage_mae": 67.67142857142858,
+        "percentage_rmse": 77.08335006434825,
+        "r2": -3.3000077537411805,
+        "within_5_points": 0.17142857142857143,
+        "within_10_points": 0.17142857142857143,
+        "dangerous_error_rate": 0.6285714285714286
+      },
+      "file_precision": {
+        "percentage_mae": 29.385714285714286,
+        "percentage_rmse": 46.50422407849482,
+        "r2": -0.5650668114031687,
+        "within_5_points": 0.4,
+        "within_10_points": 0.4,
+        "dangerous_error_rate": 0.17142857142857143
+      },
+      "file_recall": {
+        "percentage_mae": 60.142857142857146,
+        "percentage_rmse": 68.60279044720306,
+        "r2": -2.4058980124576776,
+        "within_5_points": 0.1,
+        "within_10_points": 0.1,
+        "dangerous_error_rate": 0.5142857142857142
+      },
+      "line_precision": {
+        "percentage_mae": 21.414285714285715,
+        "percentage_rmse": 40.70994964379101,
+        "r2": -0.19935902406244344,
+        "within_5_points": 0.5857142857142857,
+        "within_10_points": 0.6571428571428571,
+        "dangerous_error_rate": 0.17142857142857143
+      },
+      "line_recall": {
+        "percentage_mae": 68.21428571428571,
+        "percentage_rmse": 77.62409419761367,
+        "r2": -3.3605489648755524,
+        "within_5_points": 0.17142857142857143,
+        "within_10_points": 0.17142857142857143,
+        "dangerous_error_rate": 0.6285714285714286
+      }
+    },
+    "aggregate_diff_f1_metrics": {
+      "percentage_mae": 62.02857142857143,
+      "percentage_rmse": 70.92853546251426,
+      "r2": -2.640743325321134,
+      "within_5_points": 0.1,
+      "within_10_points": 0.1,
+      "dangerous_error_rate": 0.5857142857142857
+    }
+  },
+  "percentage_model": {
+    "artifact": "models/pr_suggestion_coverage_regression/model.joblib",
+    "model_name": "weighted_percentage_ensemble",
+    "components": {
+      "random_forest": 0.5,
+      "two_stage": 0.3,
+      "catboost_mae": 0.2
+    },
+    "component_roles": {
+      "random_forest": "stable nonlinear anchor; best component holdout RMSE",
+      "two_stage": "separates 0, intermediate, and 100 percent cases; best component within-5 accuracy",
+      "catboost_mae": "handles categorical context directly and limits outlier influence; best component within-10 accuracy and zero serious holdout errors"
+    },
+    "weight_selection": "repeated pull-request-grouped out-of-fold validation",
+    "disagreement_rule": "fall back to the stable baseline when component disagreement exceeds 20 points",
+    "metrics": {
+      "percentage_mae": 9.742857142857142,
+      "percentage_rmse": 19.309509130403672,
+      "r2": 0.7301698069318446,
+      "within_5_points": 0.6142857142857143,
+      "within_10_points": 0.7428571428571429,
+      "dangerous_error_rate": 0.014285714285714285
+    }
+  },
+  "primary_comparison": {
+    "aggregate_diff_f1": {
+      "percentage_mae": 62.02857142857143,
+      "percentage_rmse": 70.92853546251426,
+      "r2": -2.640743325321134,
+      "within_5_points": 0.1,
+      "within_10_points": 0.1,
+      "dangerous_error_rate": 0.5857142857142857
+    },
+    "percentage_model": {
+      "percentage_mae": 9.742857142857142,
+      "percentage_rmse": 19.309509130403672,
+      "r2": 0.7301698069318446,
+      "within_5_points": 0.6142857142857143,
+      "within_10_points": 0.7428571428571429,
+      "dangerous_error_rate": 0.014285714285714285
+    },
+    "mae_improvement_points": 52.28571428571429,
+    "within_10_improvement_percentage_points": 0.6428571428571429,
+    "dangerous_error_reduction_percentage_points": 0.5714285714285715,
+    "winner": "percentage_model"
+  }
+}
