@@ -1,10 +1,10 @@
-# Graduation Codebase Review: Semantic Suggestion Coverage
+# Team Codebase Review: Semantic Suggestion Coverage
 
 **Review date:** 2026-09-08
 
 **Reviewed commit:** `221759b` (`main`) plus the remediation worktree described below
 
-**Review posture:** master’s graduation review, with production-safety criteria
+**Review posture:** internal team-readiness review with production-safety criteria
 
 **Target claim:** estimate what percentage of a code suggestion landed in a merged pull request
 
@@ -30,7 +30,7 @@ It is **not yet** safely interpretable as:
 
 The distinction matters. The current system observes similarity inside a PR diff. It does not prove chronology, causality, persistence in the merge result, or coverage of all meaningful suggestion units.
 
-### Graduation blockers
+### Project blockers
 
 1. **The raw-diff inference contract is intentionally narrow.** It now accepts raw diffs, but safely abstains on replacements, deletions, renames, multi-file, and multi-hunk suggestions and does not reconstruct the final repository state.
 2. **No defensible ground truth.** The 279 internal labels and 2,500 external labels are primarily LLM-generated; only 20 external examples have explicit manual overrides.
@@ -112,7 +112,7 @@ Validation after this slice:
 - Clean-environment suite: **26/26 tests passed**; focused Ruff and mypy checks passed.
 - `git diff --check`: passed.
 
-This checkpoint improves repository safety and prevents known data corruption. It does **not** change the major-revision verdict or make the metric scientifically valid; the construct, labels, provenance, matching semantics, split policy, and raw-input API remain graduation blockers.
+This checkpoint improves repository safety and prevents known data corruption. It does **not** change the major-revision verdict or make the metric scientifically valid; the construct, labels, provenance, matching semantics, split policy, and raw-input API remain release blockers.
 
 ### Final engineering checkpoint — 2026-09-09
 
@@ -224,7 +224,7 @@ The phrase “percentage of suggested code that landed” currently mixes four d
 
 The repository currently approximates the first three and sometimes describes the result as the fourth. Causal adoption cannot be inferred from a final diff alone.
 
-The thesis and API should use one explicit primary construct:
+The project documentation and API should use one explicit primary construct:
 
 > **Semantic suggestion coverage:** the weighted fraction of meaningful units in a suggestion that are present in the final merged implementation, regardless of textual form.
 
@@ -1010,7 +1010,7 @@ code-compare/
     method.md
     data-card.md
     model-card.md
-    graduation-codebase-review.md
+    team-codebase-review.md
   archive/
     bucket-era/
 ```
@@ -1221,7 +1221,7 @@ Create:
 
 **Exit condition:** a new environment can reproduce and serve the result safely.
 
-## 12. Minimum Graduation Acceptance Criteria
+## 12. Minimum Project Acceptance Criteria
 
 ### Scientific validity
 
@@ -1258,7 +1258,7 @@ Create:
 - Performance is broken down by repository, language, suggestion size, edit type, and confidence/abstention band.
 - Calibration is reported, not only MAE.
 - Error analysis includes false high-coverage claims and false zero claims.
-- Thesis language matches what the experiment can actually establish.
+- Project language matches what the experiment can actually establish.
 
 ## 13. Recommended Final Claim After Remediation
 
@@ -1272,7 +1272,7 @@ Until those conditions are met, use this narrower claim:
 
 ## 14. Final Assessment
 
-The project has enough technical substance for a strong master’s work: data collection, language-aware diff processing, structural analysis, multiple model families, grouped validation, embeddings, and honest negative results. The weakness is not effort or scope. The weakness is that the research question and the evidence chain are not yet aligned.
+The project has strong technical substance for a team-facing solution: data collection, language-aware diff processing, structural analysis, multiple model families, grouped validation, embeddings, and honest negative results. The weakness is not effort or scope. The weakness is that the product question and the evidence chain are not yet aligned.
 
 The next major gain will not come from another regressor. It will come from:
 

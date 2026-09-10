@@ -18,13 +18,13 @@ uv.lock        # exact cross-platform dependency lock
 
 Research documentation:
 
-- `docs/graduation-codebase-review.md`: end-to-end review and remediation verdict.
+- `docs/team-codebase-review.md`: end-to-end review and remediation verdict.
 - `docs/data-card.md`: dataset composition, provenance, risks, and prohibited uses.
 - `docs/annotation-guide.md`: required protocol for a future human benchmark.
 - `docs/model-card.md`: intended use, results, limitations, and artifact safety.
 - `docs/reproducibility.md`: locked installation, validation, and rebuild commands.
 
-## Graduation-Grade Evidence Pipeline
+## Validation Evidence Pipeline
 
 The repository now contains the enforcement pipeline for a new scientifically valid dataset. It deliberately rejects the current LLM-assisted corpus as confirmatory evidence.
 

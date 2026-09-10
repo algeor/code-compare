@@ -117,7 +117,7 @@ Do not use these corpora to:
 
 ## 8. Required Replacement Benchmark
 
-Before a graduation-ready claim, create a new benchmark with:
+Before a validated production claim, create a new benchmark with:
 
 1. a written semantic-unit definition fixed before labeling;
 2. verified suggestion timestamps and immutable before/after revisions;

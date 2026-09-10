@@ -1,6 +1,6 @@
 # Model Card: Experimental PR Suggestion Coverage Estimator
 
-**Status:** exploratory; not graduation-ready or production-validated  
+**Status:** exploratory; not production-validated
 **Primary artifact:** `models/pr_suggestion_coverage_regression/`  
 **Output:** rounded integer estimate from 0 to 100
 
@@ -106,7 +106,7 @@ Inference verifies model and schema hashes before deserializing. This catches ac
 
 The current manifests were added after the existing artifacts were trained. They bind the checked-in bytes and document the verification runtime, but do not recover missing original training provenance.
 
-## 10. Graduation Blockers
+## 10. Validation Blockers
 
 The model must not be called scientifically validated until all of the following exist:
 

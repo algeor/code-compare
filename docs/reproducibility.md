@@ -152,7 +152,7 @@ For every reported run, archive:
 
 ## 10. Confirmatory Reproduction Standard
 
-A graduation-quality run must start from an immutable data release, frozen human labels, and frozen splits; build features and artifacts in a clean environment; evaluate the untouched test once; and emit one manifest binding code, data, annotations, configuration, model, and reports. The current repository does not yet meet that standard.
+A reliable confirmatory run must start from an immutable data release, frozen human labels, and frozen splits; build features and artifacts in a clean environment; evaluate the untouched test once; and emit one manifest binding code, data, annotations, configuration, model, and reports. The current repository does not yet meet that standard.
 
 ## 11. New Benchmark Workflow
 
