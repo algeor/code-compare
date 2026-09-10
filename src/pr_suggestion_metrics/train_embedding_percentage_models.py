@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 from pathlib import Path
 from typing import Any
@@ -20,6 +19,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from pr_suggestion_metrics.embedding_features import FeatureSubsetRegressor, add_embedding_interactions
+from pr_suggestion_metrics.model_artifacts import write_model_manifest
 from pr_suggestion_metrics.train_advanced_percentage_models import (
     DISAGREEMENT_THRESHOLDS,
     GROUP_SPLIT_SEEDS,
@@ -30,7 +30,6 @@ from pr_suggestion_metrics.train_percentage_regressor import (
     BOOLEAN_FEATURES,
     CATEGORICAL_FEATURES,
     FEATURE_COLUMNS,
-    NUMERIC_FEATURES,
     RANDOM_STATE,
     fit,
     make_pipeline,
@@ -488,6 +487,7 @@ def main() -> None:
             "feature_columns": required_feature_columns,
         }
         (args.output_dir / "feature_schema.json").write_text(json.dumps(schema, indent=2) + "\n")
+        write_model_manifest(args.output_dir)
     print(json.dumps(report, indent=2))
 
 

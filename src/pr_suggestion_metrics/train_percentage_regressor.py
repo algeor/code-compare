@@ -19,6 +19,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from pr_suggestion_metrics.feature_preprocessing import coerce_boolean_series
+from pr_suggestion_metrics.model_artifacts import write_model_manifest
 
 
 RANDOM_STATE = 42
@@ -201,6 +202,7 @@ def main() -> None:
             "feature_columns": FEATURE_COLUMNS,
         }
         (args.model_dir / "feature_schema.json").write_text(json.dumps(schema, indent=2) + "\n")
+        write_model_manifest(args.model_dir)
     report = {
         "objective": "minimize percentage MAE on internal semantic labels",
         "internal_dev_rows": len(internal_dev),

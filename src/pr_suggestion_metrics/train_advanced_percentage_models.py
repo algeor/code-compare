@@ -21,6 +21,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from xgboost import XGBRegressor
 
+from pr_suggestion_metrics.model_artifacts import write_model_manifest
 from pr_suggestion_metrics.train_percentage_regressor import (
     BOOLEAN_FEATURES,
     CATEGORICAL_FEATURES,
@@ -435,6 +436,7 @@ def main() -> None:
             "feature_columns": FEATURE_COLUMNS,
         }
         (args.model_dir / "feature_schema.json").write_text(json.dumps(schema, indent=2) + "\n")
+        write_model_manifest(args.model_dir)
         (args.model_dir / "evaluation_report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 

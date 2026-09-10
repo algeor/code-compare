@@ -5,29 +5,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import csv
+import hashlib
 import json
 import os
 import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import Literal
-from urllib.parse import urljoin, urlparse
+from typing import Any, Literal
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from pydantic import BaseModel, Field
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from fl_shared import SharedSettings  # noqa: E402
-from fl_shared.hdlf_client.client import HdlfClient, HdlfConnectionParams  # noqa: E402
+from pr_suggestion_metrics.private_collection_adapter import load_database_adapter, load_hdlf_adapter
+from pr_suggestion_metrics.scientific_contracts import FileSnapshot, SuggestionProvenance
 
 OutputFormat = Literal["table", "json", "csv", "jsonl"]
 
@@ -91,6 +87,7 @@ class SuggestionDiff(BaseModel):
     diff_path: str
     diff_text: str
     diff_bytes: int
+    provenance: SuggestionProvenance | None = None
 
 
 class CodeChangeMiss(BaseModel):
@@ -127,6 +124,7 @@ class DatasetSettings(BaseSettings):
 
     github_wdf_token: SecretStr | None = None
     github_tool_token: SecretStr | None = None
+    database_url: str | None = None
     ssl_ca_bundle: str | None = "/etc/ssl/ca-bundle.pem"
 
     model_config = {"env_prefix": "", "env_file": ".env", "extra": "ignore"}
@@ -186,6 +184,7 @@ class PairedExample(BaseModel):
     reviewer_edited_version: str | None = None
     renamed_files: bool | None = None
     config_files_touched: bool | None = None
+    suggestion_provenance: SuggestionProvenance | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -647,10 +646,13 @@ async def _load_old_csv_candidates(
 
 
 def _database_url(explicit_url: str | None) -> str:
-    """Resolve the database URL from CLI or shared settings."""
+    """Resolve the database URL from CLI or local environment settings."""
     if explicit_url:
         return explicit_url
-    return SharedSettings().database_url
+    database_url = DatasetSettings().database_url
+    if not database_url:
+        raise RuntimeError("Database collection requires --database-url or DATABASE_URL.")
+    return database_url
 
 
 def _statuses(values: list[str]) -> tuple[str, ...]:
@@ -665,16 +667,17 @@ def _progress(message: str) -> None:
 
 
 async def _load_candidates(
-    engine: AsyncEngine,
+    engine: Any,
     *,
     statuses: tuple[str, ...],
     limit: int | None,
     include_github_without_pr_marker: bool,
 ) -> list[CandidateRow]:
     """Load candidate handler executions from the DB."""
+    database_adapter = load_database_adapter()
     status_params = {f"status_{index}": status for index, status in enumerate(statuses)}
     status_placeholders = ", ".join(f":{name}" for name in status_params)
-    query = text(
+    query = database_adapter.text(
         f"""
         SELECT
             i.id AS inspection_id,
@@ -717,23 +720,22 @@ async def _load_candidates(
     return candidates
 
 
-def _load_hdlf_params(args: argparse.Namespace) -> HdlfConnectionParams:
+def _load_hdlf_params(args: argparse.Namespace) -> Any:
     """Resolve HDLF connection settings from CLI overrides or environment."""
+    hdlf_adapter = load_hdlf_adapter()
     if args.hdlf_rest_api_host or args.hdlf_container_id or args.hdlf_cert_dir:
         if not args.hdlf_rest_api_host or not args.hdlf_container_id or not args.hdlf_cert_dir:
             raise ValueError(
                 "When using HDLF CLI overrides, set --hdlf-rest-api-host, --hdlf-container-id, and --hdlf-cert-dir."
             )
-        return HdlfConnectionParams(
+        return hdlf_adapter.connection_params(
             rest_api_host=args.hdlf_rest_api_host,
             container_id=args.hdlf_container_id,
             cert_dir=args.hdlf_cert_dir,
         )
 
-    from fl_shared.hdlf_client.config import Settings as HdlfSettings  # pylint: disable=import-outside-toplevel
-
-    settings = HdlfSettings()
-    return HdlfConnectionParams(
+    settings = hdlf_adapter.settings()
+    return hdlf_adapter.connection_params(
         rest_api_host=settings.hdlf_rest_api_host or "",
         container_id=settings.hdlf_container_id or "",
         cert_dir=settings.hdlf_cert_dir,
@@ -745,18 +747,19 @@ def _load_hdlf_params(args: argparse.Namespace) -> HdlfConnectionParams:
 async def _check_hdlf(
     candidates: list[CandidateRow],
     *,
-    params: HdlfConnectionParams,
+    params: Any,
     diff_preview_chars: int,
     save_diffs_dir: Path | None,
 ) -> ScanResult:
     """Check HDLF for code_changes.diff for each candidate."""
+    hdlf_client = load_hdlf_adapter().client
     hits: list[CodeChangeHit] = []
     misses: list[CodeChangeMiss] = []
 
     if save_diffs_dir is not None:
         save_diffs_dir.mkdir(parents=True, exist_ok=True)
 
-    async with HdlfClient(
+    async with hdlf_client(
         rest_api_host=params.rest_api_host,
         container_id=params.container_id,
         cert_dir=params.cert_dir,
@@ -821,13 +824,14 @@ async def _check_hdlf(
 async def _load_suggestion_diffs(
     candidates: list[CandidateRow],
     *,
-    params: HdlfConnectionParams,
+    params: Any,
 ) -> tuple[list[SuggestionDiff], list[CodeChangeMiss]]:
     """Load full FL suggestion diffs from HDLF for paired dataset collection."""
+    hdlf_client = load_hdlf_adapter().client
     suggestions: list[SuggestionDiff] = []
     misses: list[CodeChangeMiss] = []
 
-    async with HdlfClient(
+    async with hdlf_client(
         rest_api_host=params.rest_api_host,
         container_id=params.container_id,
         cert_dir=params.cert_dir,
@@ -1181,6 +1185,35 @@ async def _fetch_pr_review_comments(
         page += 1
 
 
+async def _fetch_file_snapshot(
+    client: httpx.AsyncClient,
+    *,
+    repo: RepoRef,
+    token: str | None,
+    path: str,
+    revision_sha: str,
+) -> FileSnapshot:
+    """Fetch one UTF-8 repository file at an immutable Git revision."""
+    encoded_path = quote(path, safe="/")
+    url = f"{_api_base(repo.hostname)}/repos/{repo.owner}/{repo.repo}/contents/{encoded_path}"
+    response = await client.get(url, headers=_github_headers(token), params={"ref": revision_sha})
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("type") != "file":
+        raise ValueError(f"GitHub content response for {path}@{revision_sha} was not a file")
+    content = payload.get("content")
+    if not isinstance(content, str) or payload.get("encoding") != "base64":
+        raise ValueError(f"GitHub content response for {path}@{revision_sha} was not base64 text")
+    decoded = base64.b64decode(content, validate=False).decode("utf-8", errors="replace")
+    return FileSnapshot(
+        revision_sha=revision_sha,
+        path=path,
+        content=decoded,
+        content_sha256=hashlib.sha256(decoded.encode("utf-8")).hexdigest(),
+        source="github_contents_api",
+    )
+
+
 def _comment_author(comment: dict[str, object]) -> str:
     """Return the GitHub login for one comment, or empty string."""
     user = comment.get("user")
@@ -1244,6 +1277,7 @@ def _extract_comment_diff_suggestions(
 
     comment_id = str(comment.get("id") or "unknown")
     html_url = str(comment.get("html_url") or "")
+    source_kind = "github_review_comment" if kind == "review" else "github_issue_comment"
     suggestions: list[SuggestionDiff] = []
     for index, match in enumerate(_CODE_SUGGESTION_FENCE_RE.finditer(body), start=1):
         diff_text = _normalize_comment_suggestion(match.group(1), match.group(2), _comment_path(comment))
@@ -1267,6 +1301,26 @@ def _extract_comment_diff_suggestions(
                 diff_path=f"github_{kind}_comment:{comment_id}#suggestion:{index}",
                 diff_text=diff_text,
                 diff_bytes=len(diff_text.encode("utf-8")),
+                provenance=SuggestionProvenance.model_validate(
+                    {
+                        "source_kind": source_kind,
+                        "suggestion_id": f"github:{kind}:{comment_id}:{index}",
+                        "comment_url": html_url or None,
+                        "author_login": _comment_author(comment) or None,
+                        "suggestion_created_at": comment.get("created_at"),
+                        "suggestion_updated_at": comment.get("updated_at"),
+                        "comment_commit_sha": comment.get("commit_id"),
+                        "original_commit_sha": comment.get("original_commit_id"),
+                        "path": _comment_path(comment),
+                        "line": comment.get("line"),
+                        "start_line": comment.get("start_line"),
+                        "side": comment.get("side"),
+                        "start_side": comment.get("start_side"),
+                        "original_line": comment.get("original_line"),
+                        "original_start_line": comment.get("original_start_line"),
+                        "original_position": comment.get("original_position"),
+                    }
+                ),
             )
         )
     return suggestions
@@ -1438,6 +1492,7 @@ async def _collect_pairs(
     pairs: list[PairedExample] = []
     misses: list[CodeChangeMiss] = []
     pr_cache: dict[tuple[str, str, str, int], tuple[dict[str, object], str]] = {}
+    snapshot_cache: dict[tuple[str, str, str, str, str], FileSnapshot] = {}
 
     async with httpx.AsyncClient(verify=_github_verify_value(settings), timeout=30.0) as client:
         for index, suggestion in enumerate(suggestions, start=1):
@@ -1491,6 +1546,55 @@ async def _collect_pairs(
                 )
                 continue
 
+            provenance: SuggestionProvenance | None = None
+            if suggestion.provenance is not None:
+                provenance_data = suggestion.provenance.model_dump(mode="json")
+                provenance_data.update(
+                    {
+                        "pull_base_sha": _nested_string(pr_json, "base", "sha"),
+                        "pull_head_sha": _nested_string(pr_json, "head", "sha"),
+                        "merge_commit_sha": pr_json.get("merge_commit_sha"),
+                        "pr_merged_at": pr_json.get("merged_at"),
+                        "compared_diff_base_sha": _nested_string(pr_json, "base", "sha"),
+                        "compared_diff_head_sha": _nested_string(pr_json, "head", "sha"),
+                        "compared_diff_source": "github_pull_diff_api",
+                    }
+                )
+                snapshot_errors: list[str] = []
+                path = suggestion.provenance.path
+                base_revision = suggestion.provenance.original_commit_sha or suggestion.provenance.comment_commit_sha
+                final_revision = pr_json.get("merge_commit_sha")
+                if path and base_revision:
+                    cache_key = (repo.hostname, repo.owner, repo.repo, path, base_revision)
+                    try:
+                        if cache_key not in snapshot_cache:
+                            snapshot_cache[cache_key] = await _fetch_file_snapshot(
+                                client,
+                                repo=repo,
+                                token=token,
+                                path=path,
+                                revision_sha=base_revision,
+                            )
+                        provenance_data["suggestion_base_snapshot"] = snapshot_cache[cache_key].model_dump(mode="json")
+                    except (httpx.HTTPError, ValueError) as exc:
+                        snapshot_errors.append(f"suggestion-time snapshot: {type(exc).__name__}: {exc}")
+                if path and isinstance(final_revision, str):
+                    cache_key = (repo.hostname, repo.owner, repo.repo, path, final_revision)
+                    try:
+                        if cache_key not in snapshot_cache:
+                            snapshot_cache[cache_key] = await _fetch_file_snapshot(
+                                client,
+                                repo=repo,
+                                token=token,
+                                path=path,
+                                revision_sha=final_revision,
+                            )
+                        provenance_data["final_state_snapshot"] = snapshot_cache[cache_key].model_dump(mode="json")
+                    except (httpx.HTTPError, ValueError) as exc:
+                        snapshot_errors.append(f"final-state snapshot: {type(exc).__name__}: {exc}")
+                provenance_data["collection_errors"] = snapshot_errors
+                provenance = SuggestionProvenance.model_validate(provenance_data)
+
             pairs.append(
                 PairedExample(
                     inspection_id=candidate.inspection_id,
@@ -1514,6 +1618,7 @@ async def _collect_pairs(
                     merged_pr_diff_source="github_pull_diff_api",
                     renamed_files=_diff_has_renames(pr_diff),
                     config_files_touched=_diff_touches_config(pr_diff),
+                    suggestion_provenance=provenance,
                 )
             )
 
@@ -1626,7 +1731,7 @@ def _emit(result: ScanResult, output_format: OutputFormat, *, show_misses: bool)
 async def async_main() -> int:
     """Run the DB shortlist and optional HDLF scan."""
     args = parse_args()
-    engine: AsyncEngine | None = None
+    engine = None
     try:
         if args.github_pr_url:
             _progress("GitHub: loading direct PR candidates")
@@ -1654,7 +1759,7 @@ async def async_main() -> int:
             _progress(f"CSV: loaded {len(candidates)} resolved PR candidate(s)")
         else:
             _progress("DB: loading candidate handler executions")
-            engine = create_async_engine(_database_url(args.database_url))
+            engine = load_database_adapter().create_async_engine(_database_url(args.database_url))
             candidates = await _load_candidates(
                 engine,
                 statuses=_statuses(args.status),

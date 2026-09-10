@@ -60,8 +60,13 @@ dev = [
 [project.scripts]
 pr-suggestion-audit-labels = "pr_suggestion_metrics.audit_semantic_labels:main"
 pr-suggestion-build-dataset = "pr_suggestion_metrics.build_dataset:main"
+pr-suggestion-calibrate-uncertainty = "pr_suggestion_metrics.uncertainty:main"
+pr-suggestion-collect = "pr_suggestion_metrics.collect_pr_code_changes:main"
 pr-suggestion-evaluate = "pr_suggestion_metrics.evaluate_metrics:main"
+pr-suggestion-evaluate-frozen = "pr_suggestion_metrics.evaluate_frozen_benchmark:main"
+pr-suggestion-freeze-benchmark = "pr_suggestion_metrics.freeze_benchmark:main"
 pr-suggestion-label-batches = "pr_suggestion_metrics.semantic_labeling_batches:main"
+pr-suggestion-prepare-annotations = "pr_suggestion_metrics.prepare_annotation_packets:main"
 pr-suggestion-prepare-parsers = "pr_suggestion_metrics.prepare_structural_parsers:main"
 
 [tool.hatch.build.targets.wheel]

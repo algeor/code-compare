@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from pr_suggestion_metrics.scientific_contracts import SuggestionProvenance
+
 HumanLabel = Literal["0%", "partial", "mostly", "100%"]
 PercentageBucket = Literal[
     "0",
@@ -58,6 +60,7 @@ class RawPair(BaseModel):
     reviewer_edited_version: str | None = None
     renamed_files: bool | None = None
     config_files_touched: bool | None = None
+    suggestion_provenance: SuggestionProvenance | None = None
 
 
 class DiffStats(BaseModel):
@@ -99,6 +102,7 @@ class DatasetRow(BaseModel):
     label_notes: str = ""
     split: Literal["unassigned", "train", "validation", "test"] = "unassigned"
     metadata: dict[str, object] = Field(default_factory=dict)
+    suggestion_provenance: SuggestionProvenance | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -265,6 +269,7 @@ def _dataset_row(pair: RawPair) -> DatasetRow:
             "reviewer_edited_version": pair.reviewer_edited_version,
             "inspection_commit_sha": pair.inspection_commit_sha,
         },
+        suggestion_provenance=pair.suggestion_provenance,
     )
 
 

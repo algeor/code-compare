@@ -2,7 +2,7 @@
 
 **Review date:** 2026-09-08
 
-**Reviewed commit:** `d149dbb` (`main`) plus the existing uncommitted paper/embedding-evaluation work
+**Reviewed commit:** `221759b` (`main`) plus the remediation worktree described below
 
 **Review posture:** master’s graduation review, with production-safety criteria
 
@@ -32,14 +32,14 @@ The distinction matters. The current system observes similarity inside a PR diff
 
 ### Graduation blockers
 
-1. **No end-to-end inference contract.** Public inference requires an already-computed 36-column metric row instead of accepting a suggestion and merged diff.
+1. **The raw-diff inference contract is intentionally narrow.** It now accepts raw diffs, but safely abstains on replacements, deletions, renames, multi-file, and multi-hunk suggestions and does not reconstruct the final repository state.
 2. **No defensible ground truth.** The 279 internal labels and 2,500 external labels are primarily LLM-generated; only 20 external examples have explicit manual overrides.
 3. **Label leakage and anchoring.** The labeler sees weak labels and deterministic overlap values that are later used as model features.
 4. **Invalid suggestion-time provenance.** All 279 internal rows record `inspection_commit_sha == merge_commit_sha`; comment timestamps and original review anchors are absent.
 5. **The percentage lacks an auditable denominator.** Internal labels do not persist semantic units or unit weights.
 6. **The same small holdout has guided repeated deployment decisions.** It is no longer an untouched test set.
 7. **Core change semantics are incomplete.** Deletions are ignored, multiple suggestion hunks are collapsed to one best match, and unrelated PR changes can become candidates.
-8. **The repository is not reproducible from its declared setup.** Paths still point to the former `ml/` layout, requirements are unpinned and incomplete, and collection cannot import in the supplied environment.
+8. **Scientific reproduction is not yet possible.** Engineering setup is now locked and validated, but the original labels, split decisions, and pre-remediation model-training provenance do not constitute a frozen confirmatory run.
 
 ### Positive assessment
 
@@ -49,7 +49,7 @@ The distinction matters. The current system observes similarity inside a PR diff
 - The current ensemble has a conservative disagreement fallback.
 - Repository-held-out embedding evaluation is a meaningful improvement over a random external row split.
 - The embedding experiment was not promoted after failing the internal holdout gates.
-- The focused test suite passes: **18/18 tests**.
+- The full test suite passes: **34/34 tests** after remediation.
 - Structural parser smoke checks pass for Python, C, C++, Go, HTML, Java, JavaScript, Rust, and TypeScript in the current local environment.
 
 ## 2. Scope and Evidence
@@ -67,7 +67,7 @@ This review covered:
 - stored datasets, reports, model artifacts, caches, and repository hygiene;
 - test coverage and focused runtime checks.
 
-No implementation files or existing user-generated artifacts were modified during the review. This document is the only added file.
+The initial review pass modified only this document. The later remediation passes changed the implementation, packaging, tests, documentation, notebook paths, and artifact metadata listed in the checkpoints below.
 
 ### Validation performed
 
@@ -113,6 +113,103 @@ Validation after this slice:
 - `git diff --check`: passed.
 
 This checkpoint improves repository safety and prevents known data corruption. It does **not** change the major-revision verdict or make the metric scientifically valid; the construct, labels, provenance, matching semantics, split policy, and raw-input API remain graduation blockers.
+
+### Final engineering checkpoint — 2026-09-09
+
+The implementable repository defects identified by this review have now been addressed without manufacturing scientific evidence that does not exist.
+
+| Finding | Final status | Result |
+|---|---|---|
+| G-01 — production input-to-output API | Partially remediated | Added `predict_coverage_from_diffs`. It supports single-file, single-hunk, pure-addition suggestions and abstains on unsupported semantics. Final-state reconstruction, evidence, and uncertainty remain open. |
+| G-02 — suggestion-time provenance | Unresolved scientific blocker | Requires newly collected timestamps, anchors, and immutable before/after revisions. Existing rows cannot be repaired by code alone. |
+| G-03 — independent ground truth | Unresolved scientific blocker | Current labels remain LLM-assisted/weak. `docs/annotation-guide.md` defines the required future double-human protocol. |
+| G-04 — label-feature anchoring | Unresolved scientific blocker | Existing labels remain contaminated by the prior prompt. Future annotators must be blinded to model and overlap features. |
+| G-05 — auditable percentage denominator | Protocol defined, data unresolved | Added a fixed semantic-unit weight/credit formula and required annotation record. Existing percentages are not retroactively reproducible from units. |
+| G-06 — reused holdout | Unresolved scientific blocker | Existing reports remain exploratory. A new untouched test manifest is required. |
+| G-07 — external task mismatch | Documented | The data card restricts external weak labels to auxiliary research and records the domain mismatch. |
+| G-08 — duplicate leakage | Unresolved scientific blocker | A future frozen release needs cross-source near-duplicate detection before splitting. |
+| G-09 — label input truncation | Unresolved for existing labels | Existing LLM outputs cannot be repaired without relabeling from complete inputs. |
+| G-10/G-11 — edit semantics and best-hunk coverage | Safely bounded, not solved | Raw inference abstains rather than presenting unsupported replacements, deletions, multi-file, or multi-hunk suggestions as valid estimates. |
+| G-12 — whole-PR confounding | Unresolved scientific blocker | The API warns that PR-diff overlap is not causal or final-state evidence. Correct resolution requires scoped, temporal state reconstruction. |
+| G-13/G-14 — structural proxy and magic heuristic | Documented, not validated | Both remain exploratory features/baselines, not definitions of the target construct. |
+| G-15 — unsafe input coercion | Remediated | Boolean and numeric inputs are strict, finite, range-checked, and identify bad rows. Caller indexes are preserved. |
+| G-16 — uncertainty/abstention/OOD | Partially remediated | Explicit abstention exists for unsupported raw suggestion shapes. Calibration, predictive intervals, and OOD detection remain open. |
+| G-17/G-18 — artifact state and schema integrity | Partially remediated | Training writes a manifest after model/schema writes; inference verifies SHA-256 hashes before deserialization. Original training provenance remains unavailable. |
+| G-19 — dead GumTree features | Unresolved modeling issue | Availability and zero-valued fields remain in the deployed schema. They require ablation or regenerated data, not a cosmetic code change. |
+| G-20 — private collection coupling | Remediated | Public GitHub collection imports without `fl_shared`; private HDLF loading is isolated behind an adapter with an actionable runtime failure. |
+| G-21 — incomplete root migration | Remediated for active paths | Active package, README, paper commands, and collection notebook use the repository-root layout. Historical narrative remains historical evidence. |
+| G-22 — dependency and packaging claims | Remediated | Added `pyproject.toml`, 153-package `uv.lock`, pinned export, extras, and six CLI entry points. Locked package validation passes. |
+| G-23 — dropped zero label | Remediated | A legitimate integer zero is serialized and regression-tested. |
+| G-24 — source identity filters | Unresolved scientific blocker | Filename/repository filters still do not prove suggestion authorship or chronology. |
+| G-25 — missing product-path tests | Partially remediated | Added raw-diff prediction, abstention, collector-boundary, validation, and artifact-tamper tests. Broad golden edit-semantics and final-state tests still require the redesigned pipeline. |
+
+New documentation artifacts:
+
+- `docs/data-card.md`
+- `docs/annotation-guide.md`
+- `docs/model-card.md`
+- `docs/reproducibility.md`
+
+Final validation of the remediation worktree:
+
+- full suite: **34/34 tests passed**;
+- focused artifact/inference suite: **23/23 tests passed**;
+- all **279** checked-in internal metric rows produced bounded percentage predictions with preserved indexes;
+- supported raw-diff prediction and unsupported replacement abstention both passed;
+- all three model/schema SHA-256 manifests verified before deserialization;
+- collector imported without loading `fl_shared`, and collector CLI help executed;
+- Ruff passed over `src` and `tests`;
+- focused mypy passed over artifact, inference, preprocessing, and private-adapter boundaries;
+- `uv lock --check` resolved all **153** locked packages;
+- all **8** notebooks parsed as valid JSON;
+- `git diff --check` passed;
+- no credential/runtime file pattern is tracked in the current one-commit repository history.
+
+Credential note: runtime credentials were removed from the current repository and the relevant Jupyter, environment, key, IDE, and cache paths are ignored. Because exposure may have occurred before the history reset, any previously used token or Jupyter credential should still be considered compromised and rotated. Git ignore rules prevent recommitting a file; they do not revoke a credential already copied elsewhere.
+
+**Final verdict remains major revision required.** Engineering safety and reproducibility are substantially better. The remaining blockers require new provenance, independent human annotation, a frozen benchmark, broader edit semantics, uncertainty calibration, and an untouched confirmatory evaluation; they cannot be honestly “fixed” by rewriting code or reports around the current data.
+
+### Scientific-pipeline checkpoint — 2026-09-10
+
+The repository now implements the missing **process**, while refusing to fabricate the missing **evidence**:
+
+- GitHub review collection preserves comment creation/update times, author, commit/original-commit anchors, file/line anchors, PR merge time, base/head/merge SHAs, and content-hashed suggestion-time/final-state file snapshots.
+- `SuggestionProvenance.validation_issues()` prevents incomplete or post-merge examples from entering a frozen benchmark.
+- Human labels use validated semantic units, fixed weights `1-3`, fixed credits `0/0.5/1`, evidence, and a mechanically recomputed percentage.
+- Blinded packet generation removes existing labels, overlap features, model outputs, and source-author identity; every example is assigned to two distinct annotators.
+- Benchmark freezing requires two independent scored annotations plus a separate adjudicator, verifies exact duplicate and PR boundaries, supports repository-disjoint or temporal split policy, hashes every input/output, and keeps test labels private.
+- Exact change-unit evidence now parses and aggregates additions, deletions, replacements, explicit renames, cross-file moves, multiple files, and multiple hunks. The trained model still abstains outside its validated domain rather than misrepresenting this exact evidence as semantic coverage.
+- Split-conformal interval calibration is implemented, requires at least 100 non-test rows and 20 independent groups by default, and is cryptographically bound to the model/schema bytes.
+- The sealed evaluator verifies benchmark/model hashes, predicts before opening private labels, reports abstention coverage separately, writes a consumption receipt, and refuses a repeated confirmatory run.
+
+New commands:
+
+- `pr-suggestion-prepare-annotations`
+- `pr-suggestion-freeze-benchmark`
+- `pr-suggestion-calibrate-uncertainty`
+- `pr-suggestion-evaluate-frozen`
+
+What cannot be generated honestly inside this code change:
+
+1. **Independent human judgments.** The agent and the existing LLM labels are not two independent qualified human annotators.
+2. **A new untouched test result.** Evaluating the old repeatedly inspected holdout again would not make it untouched.
+3. **Private-source provenance without access.** On 2026-09-10, `GITHUB_WDF_TOKEN` and `GITHUB_TOOL_TOKEN` were absent and the configured `github.tools.sap` `gh` credential was invalid. Re-authentication is required before recollection.
+4. **A valid calibration artifact without new held-out human labels.** The implementation intentionally leaves uncertainty unavailable instead of calibrating on the reused test data.
+
+Therefore the academic verdict remains **major revision required for the existing empirical result**, but the repository now contains the concrete collection, annotation, freezing, calibration, and one-shot evaluation path needed to produce a defensible replacement result.
+
+Validation of this scientific-pipeline slice:
+
+- full suite: **56/56 tests passed**;
+- Ruff passed over all source and tests;
+- focused mypy passed over all seven new/changed scientific boundary modules;
+- `uv lock --check` resolved all **153** packages;
+- source distribution and wheel built successfully;
+- the wheel exposes all **10** console entry points;
+- all **8** notebooks remain valid JSON;
+- `git diff --check` passed.
+
+The next action is evidence collection, not another implementation pass: renew `github.tools.sap` access, recollect provenance-complete examples, and give the blinded packets to at least two qualified humans. Only after those returned records are adjudicated can the new frozen benchmark, uncertainty artifact, and one-shot final result be created.
 
 ## 3. Required Definition of the Metric
 

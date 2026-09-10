@@ -11,6 +11,7 @@ import pandas as pd
 from sklearn.dummy import DummyRegressor
 from sklearn.linear_model import LinearRegression
 
+from pr_suggestion_metrics.model_artifacts import write_model_manifest
 from pr_suggestion_metrics.model_inference import predict_coverage_percentages
 from pr_suggestion_metrics.two_stage_percentage import (
     PercentageModelBlend,
@@ -63,6 +64,7 @@ class TwoStageCatBoostRegressorTest(unittest.TestCase):
             model_dir = Path(temporary_directory)
             joblib.dump(self.model, model_dir / "model.joblib")
             (model_dir / "feature_schema.json").write_text(json.dumps(schema))
+            write_model_manifest(model_dir)
 
             result = predict_coverage_percentages(self.features, model_dir=model_dir)
 

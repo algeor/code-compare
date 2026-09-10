@@ -742,21 +742,24 @@ Validated package versions:
 | PyTorch | 2.14.0 |
 | Transformers | 5.16.1 |
 
-Install the pinned project requirements, then run from the repository root.
+Install the exact locked environment from the repository root:
+
+```bash
+uv sync --locked --all-extras
+```
 
 ### A.2 Tests
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
-  .ml-venv/bin/python -m unittest discover -s tests -v
+uv run --locked --extra train --extra test python -m pytest -q
 ```
 
-Expected result: 18 passing unit tests.
+Expected result: 26 passing tests.
 
 ### A.3 Rebuild the advanced comparison
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .ml-venv/bin/python \
+uv run --locked --extra train python \
   -m pr_suggestion_metrics.train_advanced_percentage_models \
   --internal-scores reports/metric_scores.csv \
   --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
@@ -770,9 +773,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .ml-venv/bin/python \
 
 ```bash
 MPLCONFIGDIR=.matplotlib-cache \
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=src \
-.ml-venv/bin/python \
+uv run --locked --extra train --extra notebooks python \
   -m pr_suggestion_metrics.generate_percentage_paper_assets \
   --output-dir docs/paper \
   --model-dir models/pr_suggestion_coverage_regression

@@ -1,0 +1,49 @@
+{
+  "comparison": "saved percentage model vs PIPELINE3-1376 rudimentary exact baseline",
+  "output_contract": "0-100 integer percentage; no categorical buckets",
+  "benchmark": {
+    "held_out_rows": 70,
+    "held_out_pull_requests": 19,
+    "split": "25% grouped holdout by pull request",
+    "random_state": 42,
+    "reference_label_caveat": "LLM-assisted weak labels, not independent human ground truth"
+  },
+  "exact_baseline": {
+    "source": "pipeline-fl-control-plane PIPELINE3-1376",
+    "source_commit": "93f803ea",
+    "algorithm_version": "diff-unit-multiset-v2",
+    "method": "matched path+operation+line occurrences / suggested occurrences",
+    "metrics": {
+      "percentage_mae": 40.94285714285714,
+      "percentage_rmse": 57.83004656503646,
+      "r2": -1.4202217569977513,
+      "within_5_points": 0.34285714285714286,
+      "within_10_points": 0.37142857142857144,
+      "dangerous_error_rate": 0.34285714285714286
+    }
+  },
+  "percentage_model": {
+    "artifact": "models/pr_suggestion_coverage_regression/model.joblib",
+    "model_name": "weighted_percentage_ensemble",
+    "components": {
+      "random_forest": 0.5,
+      "two_stage": 0.3,
+      "catboost_mae": 0.2
+    },
+    "metrics": {
+      "percentage_mae": 9.742857142857142,
+      "percentage_rmse": 19.309509130403672,
+      "r2": 0.7301698069318446,
+      "within_5_points": 0.6142857142857143,
+      "within_10_points": 0.7428571428571429,
+      "dangerous_error_rate": 0.014285714285714285
+    }
+  },
+  "improvement": {
+    "mae_points": 31.200000000000003,
+    "mae_relative": 0.7620376831821354,
+    "within_10_percentage_points": 0.37142857142857144,
+    "dangerous_error_percentage_points": 0.32857142857142857
+  },
+  "winner": "percentage_model"
+}

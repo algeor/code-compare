@@ -12,9 +12,7 @@ Regenerate statistics and figures from the repository root:
 
 ```bash
 MPLCONFIGDIR=.matplotlib-cache \
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=src \
-.ml-venv/bin/python \
+uv run --locked --extra train --extra notebooks python \
   -m pr_suggestion_metrics.generate_percentage_paper_assets \
   --output-dir docs/paper \
   --model-dir models/pr_suggestion_coverage_regression

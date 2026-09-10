@@ -12,7 +12,7 @@ import re
 import tokenize
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -176,6 +176,16 @@ class LabeledExample:
 
 
 @dataclass(frozen=True)
+class ScoringExample:
+    """Label-free suggestion/PR-diff pair used by the public scoring boundary."""
+
+    suggested_diff: str
+    landed_diff: str
+    file_overlap_ratio: float
+    changed_line_overlap_ratio: float
+
+
+@dataclass(frozen=True)
 class MetricResult:
     """Computed deterministic suggestion coverage metrics for one example."""
 
@@ -217,6 +227,8 @@ class MetricResult:
     gumtree_update_ratio: float
     gumtree_move_ratio: float
     gumtree_error: str
+    file_overlap_ratio: float
+    changed_line_overlap_ratio: float
     predicted_percentage: int
     predicted_label: Label
 
@@ -1074,7 +1086,7 @@ def _indent_block(text: str) -> str:
     return "\n".join(f"    {line}" if line.strip() else line for line in text.splitlines())
 
 
-def _score_example(example: LabeledExample, *, enable_gumtree: bool) -> MetricResult:
+def _score_example(example: LabeledExample | ScoringExample, *, enable_gumtree: bool) -> MetricResult:
     suggested_lines_by_file = _prepare_lines_by_file(_added_lines_by_file_from_diff(example.suggested_diff))
     landed_lines_by_file = _prepare_lines_by_file(_added_lines_by_file_from_diff(example.landed_diff))
     landed_hunks_by_file = _prepare_hunks_by_file(_added_hunks_by_file_from_diff(example.landed_diff))
@@ -1172,9 +1184,79 @@ def _score_example(example: LabeledExample, *, enable_gumtree: bool) -> MetricRe
         gumtree_update_ratio=float(gumtree_features["update_ratio"]),
         gumtree_move_ratio=float(gumtree_features["move_ratio"]),
         gumtree_error=str(gumtree_features["error"]),
+        file_overlap_ratio=example.file_overlap_ratio,
+        changed_line_overlap_ratio=example.changed_line_overlap_ratio,
         predicted_percentage=predicted_percentage,
         predicted_label=_bucket_percentage(predicted_percentage),
     )
+
+
+def raw_diff_support_issues(suggested_diff: str) -> list[str]:
+    """Return reasons why a suggestion diff is outside the currently supported inference domain."""
+    issues: list[str] = []
+    added_lines_by_file = _added_lines_by_file_from_diff(suggested_diff)
+    files_with_additions = [path for path, lines in added_lines_by_file.items() if _non_empty_normalized_lines(lines)]
+    removed_lines = [
+        line
+        for line in suggested_diff.splitlines()
+        if line.startswith("-") and not line.startswith("---") and line[1:].strip()
+    ]
+    hunk_count = sum(line.startswith("@@") for line in suggested_diff.splitlines())
+
+    if not suggested_diff.strip():
+        issues.append("suggestion diff is empty")
+    if not files_with_additions:
+        issues.append("suggestion diff contains no supported added code lines")
+    if removed_lines:
+        issues.append("suggestion deletions and replacements are not yet supported")
+    if len(files_with_additions) > 1:
+        issues.append("multi-file suggestions are not yet supported by raw inference")
+    if hunk_count > 1:
+        issues.append("multi-hunk suggestions are not yet supported by raw inference")
+    if "rename from " in suggested_diff or "rename to " in suggested_diff:
+        issues.append("renamed suggestion files are not yet supported")
+    return issues
+
+
+def score_diff_pair(suggested_diff: str, merged_pr_diff: str, *, enable_gumtree: bool = False) -> MetricResult:
+    """Compute deterministic model features for a supported suggestion/merged-PR diff pair."""
+    support_issues = raw_diff_support_issues(suggested_diff)
+    if support_issues:
+        raise ValueError("Unsupported suggestion diff: " + "; ".join(support_issues))
+
+    suggested_lines_by_file = _added_lines_by_file_from_diff(suggested_diff)
+    landed_lines_by_file = _added_lines_by_file_from_diff(merged_pr_diff)
+    suggested_files = set(suggested_lines_by_file)
+    landed_files = set(landed_lines_by_file)
+    suggested_lines = {
+        line.strip()
+        for lines in suggested_lines_by_file.values()
+        for line in lines
+        if line.strip()
+    }
+    landed_lines = {
+        line.strip()
+        for lines in landed_lines_by_file.values()
+        for line in lines
+        if line.strip()
+    }
+    file_overlap_ratio = len(suggested_files & landed_files) / len(suggested_files) if suggested_files else 0.0
+    changed_line_overlap_ratio = len(suggested_lines & landed_lines) / len(suggested_lines) if suggested_lines else 0.0
+
+    return _score_example(
+        ScoringExample(
+            suggested_diff=suggested_diff,
+            landed_diff=merged_pr_diff,
+            file_overlap_ratio=file_overlap_ratio,
+            changed_line_overlap_ratio=changed_line_overlap_ratio,
+        ),
+        enable_gumtree=enable_gumtree,
+    )
+
+
+def metric_result_to_feature_row(metric_result: MetricResult) -> dict[str, object]:
+    """Convert a metric result into the model feature-row representation."""
+    return asdict(metric_result)
 
 
 def _normalize_lines_by_file(lines_by_file: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -1549,8 +1631,8 @@ def _write_scores(output_path: Path, examples: list[LabeledExample], metric_resu
                     "gumtree_update_ratio": f"{metric_result.gumtree_update_ratio:.6f}",
                     "gumtree_move_ratio": f"{metric_result.gumtree_move_ratio:.6f}",
                     "gumtree_error": metric_result.gumtree_error,
-                    "file_overlap_ratio": f"{example.file_overlap_ratio:.6f}",
-                    "changed_line_overlap_ratio": f"{example.changed_line_overlap_ratio:.6f}",
+                    "file_overlap_ratio": f"{metric_result.file_overlap_ratio:.6f}",
+                    "changed_line_overlap_ratio": f"{metric_result.changed_line_overlap_ratio:.6f}",
                 }
             )
 

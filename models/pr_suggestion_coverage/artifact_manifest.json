@@ -1,0 +1,21 @@
+{
+  "created_at_utc": "2026-09-08T21:52:48+00:00",
+  "manifest_version": 1,
+  "model_file": "model.joblib",
+  "model_name": "random_forest",
+  "model_sha256": "6243848adace6ed6b09215071a51e1819e71d1fc4450591ec6ab68275506178d",
+  "prediction_type": null,
+  "runtime_versions": {
+    "catboost": "1.2.10",
+    "joblib": "1.6.0",
+    "lightgbm": "4.7.0",
+    "numpy": "2.5.2",
+    "pandas": "3.0.5",
+    "python": "3.14.6",
+    "scikit-learn": "1.9.0",
+    "xgboost": "3.4.1"
+  },
+  "schema_file": "feature_schema.json",
+  "schema_sha256": "16bdbadda1a43627f249ad29c606edda2bfd39539f085753fd10c3c7d2a9053a",
+  "trusted_pickle_only": true
+}

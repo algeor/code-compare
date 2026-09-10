@@ -1,4 +1,12 @@
 .DS_Store
+.env
+.env.*
+!.env.example
+.netrc
+*.key
+*.pem
+credentials.json
+*_credentials.json
 .idea/
 .jupyter-runtime/
 .jupyter-data/
@@ -18,3 +26,5 @@ build/
 dist/
 
 data/embeddings/cache/
+**/test_labels.private.jsonl
+**/assignment_manifest.private.json

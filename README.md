@@ -16,6 +16,63 @@ pyproject.toml # package metadata and dependency groups
 uv.lock        # exact cross-platform dependency lock
 ```
 
+Research documentation:
+
+- `docs/graduation-codebase-review.md`: end-to-end review and remediation verdict.
+- `docs/data-card.md`: dataset composition, provenance, risks, and prohibited uses.
+- `docs/annotation-guide.md`: required protocol for a future human benchmark.
+- `docs/model-card.md`: intended use, results, limitations, and artifact safety.
+- `docs/reproducibility.md`: locked installation, validation, and rebuild commands.
+
+## Graduation-Grade Evidence Pipeline
+
+The repository now contains the enforcement pipeline for a new scientifically valid dataset. It deliberately rejects the current LLM-assisted corpus as confirmatory evidence.
+
+1. Recollect suggestions with timestamps, review anchors, immutable revisions, and hashed before/final file snapshots:
+
+   ```bash
+   uv run --locked --extra collection pr-suggestion-collect ...
+   ```
+
+2. Build a provenance-complete, label-free example JSONL and create blinded double-annotation packets:
+
+   ```bash
+   uv run --locked pr-suggestion-prepare-annotations \
+     --examples data/benchmark-source/examples.jsonl \
+     --annotator reviewer-a --annotator reviewer-b \
+     --output-dir /secure/annotation-packets
+   ```
+
+3. Freeze independent annotations, adjudications, and explicit splits:
+
+   ```bash
+   uv run --locked pr-suggestion-freeze-benchmark \
+     --examples data/benchmark-source/examples.jsonl \
+     --annotations /secure/annotations.jsonl \
+     --adjudications /secure/adjudications.jsonl \
+     --splits /secure/splits.csv \
+     --output-dir /secure/frozen-benchmark
+   ```
+
+4. Fit uncertainty only from a dedicated non-test calibration table:
+
+   ```bash
+   uv run --locked --extra train pr-suggestion-calibrate-uncertainty \
+     --model-dir models/pr_suggestion_coverage_regression \
+     --calibration-data /secure/calibration_features.csv
+   ```
+
+5. Consume the private test labels once:
+
+   ```bash
+   uv run --locked --extra train pr-suggestion-evaluate-frozen \
+     --benchmark-dir /secure/frozen-benchmark \
+     --model-dir models/pr_suggestion_coverage_regression \
+     --output-dir /secure/confirmatory-evaluation
+   ```
+
+`pr-suggestion-freeze-benchmark` requires verified chronology, two distinct annotators, adjudication, PR/duplicate-safe splits, and private test labels. `pr-suggestion-evaluate-frozen` writes a consumption receipt and refuses a second confirmatory run.
+
 ## Main Dataset
 
 Current processed dataset:
@@ -84,6 +141,7 @@ The training notebook combines the internal labeled dataset with the cleaned Hug
 ```text
 models/pr_suggestion_coverage/model.joblib
 models/pr_suggestion_coverage/feature_schema.json
+models/pr_suggestion_coverage/artifact_manifest.json
 models/pr_suggestion_coverage/evaluation_report.json
 ```
 
@@ -109,6 +167,7 @@ Regression artifacts are saved to:
 ```text
 models/pr_suggestion_coverage_regression/model.joblib
 models/pr_suggestion_coverage_regression/feature_schema.json
+models/pr_suggestion_coverage_regression/artifact_manifest.json
 models/pr_suggestion_coverage_regression/evaluation_report.json
 ```
 
