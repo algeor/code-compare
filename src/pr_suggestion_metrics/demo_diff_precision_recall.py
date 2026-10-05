@@ -13,6 +13,7 @@ from pr_suggestion_metrics.model_inference import predict_coverage_from_diffs
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DATASET = _REPOSITORY_ROOT / "data" / "external" / "github_codereview" / "dataset" / "dataset.jsonl"
 _DEFAULT_EXAMPLE_ID = "4cd17d7210f1d44c"
+_DEFAULT_MODEL_DIR = _REPOSITORY_ROOT / "models" / "pr_suggestion_coverage_regression"
 
 
 def _load_example(path: Path, example_id: str) -> dict[str, object]:
@@ -34,6 +35,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=_DEFAULT_DATASET)
     parser.add_argument("--example-id", default=_DEFAULT_EXAMPLE_ID)
+    parser.add_argument("--model-dir", type=Path, default=_DEFAULT_MODEL_DIR)
     return parser.parse_args()
 
 
@@ -43,19 +45,24 @@ def main() -> None:
     draft_diff = str(example["suggested_diff"])
     final_diff = str(example["landed_diff"])
     result = compare_diffs(draft_diff, final_diff)
-    prediction = predict_coverage_from_diffs(draft_diff, final_diff, example_id=args.example_id)
+    prediction = predict_coverage_from_diffs(
+        draft_diff,
+        final_diff,
+        example_id=args.example_id,
+        model_dir=args.model_dir,
+    )
 
     print(f"example: {args.example_id}")
     print(f"repository: {example.get('repo', 'unknown')}")
     print(f"pull request: {example.get('pr_url', 'unknown')}")
-    print(f"reference percentage: {example.get('expected_landed_percentage', 'unknown')}%")
+    print(f"exploratory reference percentage: {example.get('expected_landed_percentage', 'unknown')}%")
     print(f"model percentage: {prediction['model_predicted_percentage']}%")
     print()
     print("Diff Precision/Recall")
     print(f"  token: precision={_percentage(result.token.precision)}% recall={_percentage(result.token.recall)}%")
     print(f"  file:  precision={_percentage(result.file.precision)}% recall={_percentage(result.file.recall)}%")
     print(f"  line:  precision={_percentage(result.line.precision)}% recall={_percentage(result.line.recall)}%")
-    print(f"  aggregate F1: {_percentage(result.aggregate_f1)}%")
+    print("  diagnostics only; no aggregate coverage score")
 
 
 if __name__ == "__main__":

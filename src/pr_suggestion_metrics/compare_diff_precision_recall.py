@@ -45,7 +45,6 @@ class ComparisonRow:
     file_recall: int
     line_precision: int
     line_recall: int
-    aggregate_diff_f1: int
 
 
 def _load_dataset_by_id(path: Path) -> dict[str, dict[str, object]]:
@@ -88,7 +87,6 @@ def build_comparison_rows() -> tuple[list[ComparisonRow], int]:
                 file_recall=round(result.file.recall * 100),
                 line_precision=round(result.line.precision * 100),
                 line_recall=round(result.line.recall * 100),
-                aggregate_diff_f1=round(result.aggregate_f1 * 100),
             )
         )
     return comparison_rows, int(held_out_rows["group_id"].nunique())
@@ -102,9 +100,8 @@ def summarize(rows: list[ComparisonRow], pull_request_count: int) -> dict[str, o
         metric_name: metrics(reference, np.asarray([getattr(row, metric_name) for row in rows], dtype=float))
         for metric_name in _DIFF_METRIC_NAMES
     }
-    aggregate_metrics = metrics(reference, np.asarray([row.aggregate_diff_f1 for row in rows], dtype=float))
     return {
-        "comparison": "saved percentage model vs Diff Precision/Recall",
+        "comparison": "saved percentage model with Diff Precision/Recall diagnostics",
         "output_contract": "all values are 0-100 integer percentages; no categorical buckets",
         "benchmark": {
             "held_out_rows": len(rows),
@@ -118,13 +115,10 @@ def summarize(rows: list[ComparisonRow], pull_request_count: int) -> dict[str, o
             "definition": {
                 "precision": "how much of the draft was kept; overlap / draft",
                 "recall": "how much of the final diff was already in the draft; overlap / final",
-                "levels": ["raw word tokens", "changed file set", "stripped added/removed line occurrences"],
-                "aggregate_percentage": "equal-weight mean of token F1, file F1, and line F1",
+                "levels": ["changed-code word tokens", "changed file set", "path-aware changed-line occurrences"],
             },
-            "primary_comparison_metric": "aggregate_diff_f1",
-            "primary_reason": "It balances precision and recall at all three levels without allowing token counts to dominate.",
+            "role": "diagnostics only; these values are not semantic coverage estimates",
             "metrics_against_reference_percentage": diff_metrics,
-            "aggregate_diff_f1_metrics": aggregate_metrics,
         },
         "percentage_model": {
             "artifact": "models/pr_suggestion_coverage_regression/model.joblib",
@@ -138,18 +132,6 @@ def summarize(rows: list[ComparisonRow], pull_request_count: int) -> dict[str, o
             "weight_selection": "repeated pull-request-grouped out-of-fold validation",
             "disagreement_rule": "fall back to the stable baseline when component disagreement exceeds 20 points",
             "metrics": model_metrics,
-        },
-        "primary_comparison": {
-            "aggregate_diff_f1": aggregate_metrics,
-            "percentage_model": model_metrics,
-            "mae_improvement_points": aggregate_metrics["percentage_mae"] - model_metrics["percentage_mae"],
-            "within_10_improvement_percentage_points": (
-                model_metrics["within_10_points"] - aggregate_metrics["within_10_points"]
-            ),
-            "dangerous_error_reduction_percentage_points": (
-                aggregate_metrics["dangerous_error_rate"] - model_metrics["dangerous_error_rate"]
-            ),
-            "winner": "percentage_model",
         },
     }
 
@@ -187,20 +169,14 @@ def main() -> None:
     args.summary_output.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     write_rows(args.rows_output, rows)
 
-    primary = summary["primary_comparison"]
-    aggregate = primary["aggregate_diff_f1"]  # type: ignore[index]
-    model = primary["percentage_model"]  # type: ignore[index]
+    model = summary["percentage_model"]["metrics"]  # type: ignore[index]
     print(f"held-out rows={len(rows)}, pull requests={pull_request_count}")
-    print(
-        f"aggregate Diff P/R: MAE={aggregate['percentage_mae']:.2f}, "
-        f"within-10={aggregate['within_10_points']:.1%}, "
-        f"dangerous={aggregate['dangerous_error_rate']:.1%}"
-    )
     print(
         f"percentage model: MAE={model['percentage_mae']:.2f}, "
         f"within-10={model['within_10_points']:.1%}, "
         f"dangerous={model['dangerous_error_rate']:.1%}"
     )
+    print("Diff precision/recall values are diagnostics only; no aggregate score is produced.")
     print(f"wrote summary: {args.summary_output}")
     print(f"wrote rows: {args.rows_output}")
 

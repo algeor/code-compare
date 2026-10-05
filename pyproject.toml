@@ -44,15 +44,21 @@ notebooks = [
     "matplotlib>=3.10,<4",
     "seaborn>=0.13,<0.14",
 ]
-test = ["pytest>=8.3,<10"]
+test = [
+    "httpx>=0.28,<1",
+    "pydantic-settings>=2.7,<3",
+    "pytest>=8.3,<10",
+]
 lint = ["ruff>=0.9,<1"]
 typecheck = [
     "mypy>=1.14,<2",
     "pandas-stubs>=2.2,<4",
 ]
 dev = [
+    "httpx>=0.28,<1",
     "mypy>=1.14,<2",
     "pandas-stubs>=2.2,<4",
+    "pydantic-settings>=2.7,<3",
     "pytest>=8.3,<10",
     "ruff>=0.9,<1",
 ]
@@ -60,6 +66,8 @@ dev = [
 [project.scripts]
 pr-suggestion-audit-labels = "pr_suggestion_metrics.audit_semantic_labels:main"
 pr-suggestion-build-dataset = "pr_suggestion_metrics.build_dataset:main"
+pr-suggestion-build-features = "pr_suggestion_metrics.benchmark.build_features:main"
+pr-suggestion-plan-splits = "pr_suggestion_metrics.benchmark.plan_splits:main"
 pr-suggestion-calibrate-uncertainty = "pr_suggestion_metrics.uncertainty:main"
 pr-suggestion-collect = "pr_suggestion_metrics.collect_pr_code_changes:main"
 pr-suggestion-evaluate = "pr_suggestion_metrics.evaluate_metrics:main"
@@ -68,6 +76,7 @@ pr-suggestion-freeze-benchmark = "pr_suggestion_metrics.freeze_benchmark:main"
 pr-suggestion-label-batches = "pr_suggestion_metrics.semantic_labeling_batches:main"
 pr-suggestion-prepare-annotations = "pr_suggestion_metrics.prepare_annotation_packets:main"
 pr-suggestion-prepare-parsers = "pr_suggestion_metrics.prepare_structural_parsers:main"
+pr-suggestion-train = "pr_suggestion_metrics.modeling.train:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pr_suggestion_metrics"]

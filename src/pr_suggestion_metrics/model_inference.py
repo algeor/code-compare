@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 import json
+import warnings
+from hashlib import sha256
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import joblib
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel, Field
 
 from pr_suggestion_metrics.feature_preprocessing import coerce_boolean_series, coerce_numeric_series
-from pr_suggestion_metrics.diff_semantics import analyze_change_coverage
+from pr_suggestion_metrics.diff_semantics import ChangeCoverageEvidence, analyze_change_coverage
 from pr_suggestion_metrics.model_artifacts import verify_model_manifest
 from pr_suggestion_metrics.uncertainty import apply_conformal_intervals, load_uncertainty_calibration
 
 
-_DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "pr_suggestion_coverage"
-_DEFAULT_REGRESSION_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "pr_suggestion_coverage_regression"
 _PERCENTAGE_BUCKETS = (
     "0",
     "1-10",
@@ -34,6 +35,39 @@ _PERCENTAGE_BUCKETS = (
 )
 
 
+class CoverageUncertainty(BaseModel):
+    """Stable uncertainty payload included for predictions and abstentions."""
+
+    status: Literal["calibrated", "unavailable"]
+    lower: int | None = None
+    upper: int | None = None
+    coverage: float | None = None
+    reason: str | None = None
+
+
+class CoverageResult(BaseModel):
+    """Versioned result contract for raw-diff coverage inference."""
+
+    result_schema_version: Literal["1.0"] = "1.0"
+    metric_name: Literal["suggestion_coverage_percentage"] = "suggestion_coverage_percentage"
+    status: Literal["predicted", "abstained"]
+    example_id: str | None = None
+    model_name: str | None = None
+    model_predicted_percentage: int | None = Field(default=None, ge=0, le=100)
+    model_raw_percentage: float | None = Field(default=None, ge=0, le=100)
+    heuristic_coverage_score: int | None = Field(default=None, ge=0, le=100)
+    change_coverage_evidence: ChangeCoverageEvidence
+    uncertainty: CoverageUncertainty
+    applicability_reasons: list[str] = Field(default_factory=list)
+    input_hashes: dict[str, str]
+    artifact_hashes: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+    def __getitem__(self, key: str) -> Any:
+        """Provide transitional dictionary-style access for existing callers."""
+        return getattr(self, key)
+
+
 def percentage_bucket(value: int | float) -> str:
     """Map a percentage to the shared reporting bucket scheme."""
     percentage = max(0, min(100, int(round(value))))
@@ -44,7 +78,7 @@ def percentage_bucket(value: int | float) -> str:
     return f"{lower_bound}-{upper_bound}"
 
 
-def load_model_bundle(model_dir: Path = _DEFAULT_MODEL_DIR) -> tuple[Any, dict[str, Any]]:
+def load_model_bundle(model_dir: Path) -> tuple[Any, dict[str, Any]]:
     """Verify and load a trusted local estimator and its feature schema.
 
     Args:
@@ -102,7 +136,7 @@ def prepare_model_features(rows: pd.DataFrame | Sequence[Mapping[str, Any]], sch
 
 def predict_coverage_labels(
     rows: pd.DataFrame | Sequence[Mapping[str, Any]],
-    model_dir: Path = _DEFAULT_MODEL_DIR,
+    model_dir: Path,
 ) -> pd.DataFrame:
     """Predict coverage labels for metric rows using the saved sklearn model.
 
@@ -113,6 +147,11 @@ def predict_coverage_labels(
     Returns:
         DataFrame with `model_prediction` and probability columns when available.
     """
+    warnings.warn(
+        "predict_coverage_labels is deprecated; use the percentage API instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     model, schema = load_model_bundle(model_dir)
     features = prepare_model_features(rows, schema)
     predictions = model.predict(features)
@@ -129,7 +168,7 @@ def predict_coverage_labels(
 
 def predict_coverage_percentages(
     rows: pd.DataFrame | Sequence[Mapping[str, Any]],
-    model_dir: Path = _DEFAULT_REGRESSION_MODEL_DIR,
+    model_dir: Path,
 ) -> pd.DataFrame:
     """Predict 0-100 coverage percentages.
 
@@ -140,25 +179,40 @@ def predict_coverage_percentages(
     Returns:
         DataFrame with the model's `model_predicted_percentage` output.
     """
+    predictions = _percentage_prediction_frame(rows, model_dir=model_dir)
+    return predictions[["model_predicted_percentage"]]
+
+
+def _percentage_prediction_frame(
+    rows: pd.DataFrame | Sequence[Mapping[str, Any]],
+    *,
+    model_dir: Path,
+) -> pd.DataFrame:
+    """Return clipped raw and rounded predictions for calibration and public results."""
     model, schema = load_model_bundle(model_dir)
     features = prepare_model_features(rows, schema)
     raw_predictions = np.asarray(model.predict(features), dtype=float)
     clipped_predictions = np.clip(raw_predictions, 0, 100)
-    rounded_predictions = np.rint(clipped_predictions).astype(int)
-    return pd.DataFrame({"model_predicted_percentage": rounded_predictions}, index=features.index)
+    return pd.DataFrame(
+        {
+            "model_raw_percentage": clipped_predictions,
+            "model_predicted_percentage": np.rint(clipped_predictions).astype(int),
+        },
+        index=features.index,
+    )
 
 
 def predict_coverage_with_uncertainty(
     rows: pd.DataFrame | Sequence[Mapping[str, Any]],
-    model_dir: Path = _DEFAULT_REGRESSION_MODEL_DIR,
+    model_dir: Path,
     *,
     calibration_path: Path | None = None,
 ) -> pd.DataFrame:
     """Predict percentages with intervals from a matching split-conformal calibration artifact."""
-    predictions = predict_coverage_percentages(rows, model_dir=model_dir)
+    predictions = _percentage_prediction_frame(rows, model_dir=model_dir)
     calibration = load_uncertainty_calibration(model_dir, calibration_path)
     intervals = apply_conformal_intervals(
-        predictions["model_predicted_percentage"].to_numpy(dtype=float),
+        predictions["model_raw_percentage"].to_numpy(dtype=float),
         calibration.residual_quantile,
     )
     result = predictions.copy()
@@ -173,9 +227,9 @@ def predict_coverage_from_diffs(
     merged_pr_diff: str,
     *,
     example_id: str | None = None,
-    model_dir: Path = _DEFAULT_REGRESSION_MODEL_DIR,
+    model_dir: Path,
     enable_gumtree: bool = False,
-) -> dict[str, Any]:
+) -> CoverageResult:
     """Predict coverage directly from one supported suggestion and merged-PR diff pair.
 
     The current public boundary intentionally abstains on deletions, replacements,
@@ -189,16 +243,20 @@ def predict_coverage_from_diffs(
 
     support_issues = raw_diff_support_issues(suggested_diff)
     deterministic_evidence = analyze_change_coverage(suggested_diff, merged_pr_diff)
+    input_hashes = {
+        "suggested_diff_sha256": sha256(suggested_diff.encode("utf-8")).hexdigest(),
+        "merged_pr_diff_sha256": sha256(merged_pr_diff.encode("utf-8")).hexdigest(),
+    }
     if support_issues:
-        return {
-            "example_id": example_id,
-            "status": "abstained",
-            "model_predicted_percentage": None,
-            "heuristic_coverage_score": None,
-            "change_coverage_evidence": deterministic_evidence.model_dump(mode="json"),
-            "uncertainty": {"status": "unavailable", "reason": "model abstained"},
-            "warnings": support_issues,
-        }
+        return CoverageResult(
+            example_id=example_id,
+            status="abstained",
+            change_coverage_evidence=deterministic_evidence,
+            uncertainty=CoverageUncertainty(status="unavailable", reason="model abstained"),
+            applicability_reasons=support_issues,
+            input_hashes=input_hashes,
+            warnings=support_issues,
+        )
 
     metric_result = score_diff_pair(suggested_diff, merged_pr_diff, enable_gumtree=enable_gumtree)
     feature_row = metric_result_to_feature_row(metric_result)
@@ -207,27 +265,35 @@ def predict_coverage_from_diffs(
     calibration_path = model_dir / "uncertainty_calibration.json"
     if calibration_path.is_file():
         prediction = predict_coverage_with_uncertainty([feature_row], model_dir=model_dir)
-        uncertainty = {
-            "status": "calibrated",
-            "lower": int(prediction.iloc[0]["interval_lower"]),
-            "upper": int(prediction.iloc[0]["interval_upper"]),
-            "coverage": float(prediction.iloc[0]["interval_coverage"]),
-        }
+        uncertainty = CoverageUncertainty(
+            status="calibrated",
+            lower=int(prediction.iloc[0]["interval_lower"]),
+            upper=int(prediction.iloc[0]["interval_upper"]),
+            coverage=float(prediction.iloc[0]["interval_coverage"]),
+        )
     else:
-        prediction = predict_coverage_percentages([feature_row], model_dir=model_dir)
-        uncertainty = {
-            "status": "unavailable",
-            "reason": "no matching held-out uncertainty calibration artifact",
-        }
-    return {
-        "example_id": example_id,
-        "status": "predicted",
-        "model_predicted_percentage": int(prediction.iloc[0]["model_predicted_percentage"]),
-        "heuristic_coverage_score": metric_result.predicted_percentage,
-        "change_coverage_evidence": deterministic_evidence.model_dump(mode="json"),
-        "uncertainty": uncertainty,
-        "warnings": [
+        prediction = _percentage_prediction_frame([feature_row], model_dir=model_dir)
+        uncertainty = CoverageUncertainty(
+            status="unavailable",
+            reason="no matching held-out uncertainty calibration artifact",
+        )
+    manifest = verify_model_manifest(model_dir)
+    return CoverageResult(
+        example_id=example_id,
+        status="predicted",
+        model_name=str(manifest["model_name"]),
+        model_predicted_percentage=int(prediction.iloc[0]["model_predicted_percentage"]),
+        model_raw_percentage=float(prediction.iloc[0]["model_raw_percentage"]),
+        heuristic_coverage_score=metric_result.predicted_percentage,
+        change_coverage_evidence=deterministic_evidence,
+        uncertainty=uncertainty,
+        input_hashes=input_hashes,
+        artifact_hashes={
+            "model_sha256": str(manifest["model_sha256"]),
+            "schema_sha256": str(manifest["schema_sha256"]),
+        },
+        warnings=[
             "Experimental estimate from PR-diff overlap; it does not establish causal adoption or persistence "
             "in the final repository state."
         ],
-    }
+    )

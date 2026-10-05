@@ -10,6 +10,7 @@ import numpy as np
 from pr_suggestion_metrics.uncertainty import (
     UncertaintyCalibration,
     apply_conformal_intervals,
+    clustered_conformal_residual_quantile,
     conformal_residual_quantile,
     load_uncertainty_calibration,
 )
@@ -25,6 +26,19 @@ class UncertaintyTest(unittest.TestCase):
 
         self.assertEqual(quantile, 10.0)
         np.testing.assert_array_equal(intervals, np.array([[0, 12], [40, 60], [88, 100]], dtype=float))
+
+    def test_clustered_quantile_uses_independent_group_maxima(self) -> None:
+        actual = np.array([0, 0, 50, 50], dtype=float)
+        predicted = np.array([1, 20, 52, 53], dtype=float)
+
+        quantile = clustered_conformal_residual_quantile(
+            actual,
+            predicted,
+            ["pr-1", "pr-1", "pr-2", "pr-2"],
+            alpha=0.5,
+        )
+
+        self.assertEqual(quantile, 20.0)
 
     def test_calibration_rejects_model_hash_mismatch(self) -> None:
         source_model_dir = Path(__file__).resolve().parents[1] / "models" / "pr_suggestion_coverage_regression"

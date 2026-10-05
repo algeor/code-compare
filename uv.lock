@@ -2397,8 +2397,10 @@ collection = [
     { name = "sqlalchemy-hana" },
 ]
 dev = [
+    { name = "httpx" },
     { name = "mypy" },
     { name = "pandas-stubs" },
+    { name = "pydantic-settings" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -2422,6 +2424,8 @@ structural = [
     { name = "tree-sitter-language-pack" },
 ]
 test = [
+    { name = "httpx" },
+    { name = "pydantic-settings" },
     { name = "pytest" },
 ]
 train = [
@@ -2441,6 +2445,8 @@ requires-dist = [
     { name = "code-diff", marker = "extra == 'structural'", specifier = ">=0.1.3,<0.2" },
     { name = "datasets", marker = "extra == 'notebooks'", specifier = ">=3.3,<6" },
     { name = "httpx", marker = "extra == 'collection'", specifier = ">=0.28,<1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
+    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28,<1" },
     { name = "ipykernel", marker = "extra == 'notebooks'", specifier = ">=6.29,<8" },
     { name = "joblib", specifier = ">=1.5,<2" },
     { name = "lightgbm", marker = "extra == 'train'", specifier = ">=4.5,<5" },
@@ -2453,6 +2459,8 @@ requires-dist = [
     { name = "pandas-stubs", marker = "extra == 'typecheck'", specifier = ">=2.2,<4" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "pydantic-settings", marker = "extra == 'collection'", specifier = ">=2.7,<3" },
+    { name = "pydantic-settings", marker = "extra == 'dev'", specifier = ">=2.7,<3" },
+    { name = "pydantic-settings", marker = "extra == 'test'", specifier = ">=2.7,<3" },
     { name = "pygments", marker = "extra == 'structural'", specifier = ">=2.18,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3,<10" },

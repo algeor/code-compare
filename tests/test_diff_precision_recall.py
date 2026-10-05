@@ -1,10 +1,18 @@
 """Tests for the draft/final diff precision and recall metrics."""
 
-from pr_suggestion_metrics.diff_precision_recall import changed_files, changed_lines, compare_diffs, word_tokens
+from pr_suggestion_metrics.diff_precision_recall import (
+    changed_files,
+    changed_lines,
+    compare_diffs,
+    raw_diff_word_tokens,
+    word_tokens,
+)
 
 
 def test_token_precision_and_recall_use_draft_and_final_denominators() -> None:
-    result = compare_diffs("+alpha beta beta", "+alpha beta gamma gamma")
+    draft = "--- a/app.py\n+++ b/app.py\n@@ -0,0 +1 @@\n+alpha beta beta\n"
+    final = "--- a/app.py\n+++ b/app.py\n@@ -0,0 +1 @@\n+alpha beta gamma gamma\n"
+    result = compare_diffs(draft, final)
 
     assert result.token.matched_count == 2
     assert result.token.precision == 2 / 3
@@ -42,14 +50,14 @@ def test_line_overlap_preserves_duplicate_occurrences() -> None:
     assert result.line.recall == 1.0
 
 
-def test_line_overlap_counts_changed_blank_lines_after_stripping() -> None:
+def test_line_overlap_ignores_changed_blank_lines_after_stripping() -> None:
     draft = "--- a/app.py\n+++ b/app.py\n@@\n+   \n"
     final = "--- a/app.py\n+++ b/app.py\n@@\n+\n"
 
     result = compare_diffs(draft, final)
 
-    assert result.line.precision == 1.0
-    assert result.line.recall == 1.0
+    assert result.line.draft_count == 0
+    assert result.line.final_count == 0
 
 
 def test_line_parser_ignores_changes_outside_hunks() -> None:
@@ -62,8 +70,8 @@ def test_line_parser_preserves_header_like_content_inside_hunk() -> None:
     diff = "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n--- removed heading\n+++ added heading\n"
 
     assert changed_lines(diff) == {
-        ("removed", "-- removed heading"): 1,
-        ("added", "++ added heading"): 1,
+        ("removed", "notes.txt", "-- removed heading"): 1,
+        ("added", "notes.txt", "++ added heading"): 1,
     }
 
 
@@ -93,15 +101,13 @@ def test_extractors_ignore_headers_and_normalize_paths() -> None:
     diff = "--- a/app.py\n+++ b/app.py\n@@\n+value = 1\n"
 
     assert changed_files(diff) == {"app.py"}
-    assert changed_lines(diff) == {("added", "value = 1"): 1}
-    assert word_tokens(diff)["app"] == 2
+    assert changed_lines(diff) == {("added", "app.py", "value = 1"): 1}
+    assert word_tokens(diff)["app"] == 0
+    assert raw_diff_word_tokens(diff)["app"] == 2
 
 
-def test_aggregate_f1_weights_token_file_and_line_levels_equally() -> None:
-    draft = "--- a/app.py\n+++ b/app.py\n@@\n+fix\n"
-    final = draft + "--- a/test.py\n+++ b/test.py\n@@\n+test\n"
+def test_line_overlap_requires_matching_file_identity() -> None:
+    draft = "--- a/app.py\n+++ b/app.py\n@@ -0,0 +1 @@\n+fix\n"
+    final = "--- a/test.py\n+++ b/test.py\n@@ -0,0 +1 @@\n+fix\n"
 
-    result = compare_diffs(draft, final)
-
-    expected = (result.token.f1 + result.file.f1 + result.line.f1) / 3
-    assert result.aggregate_f1 == expected
+    assert compare_diffs(draft, final).line.matched_count == 0

@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class FileSnapshot(BaseModel):
@@ -28,10 +28,32 @@ class FileSnapshot(BaseModel):
         return self
 
 
+class FileProvenance(BaseModel):
+    """Suggestion-time and final-state evidence for one affected file."""
+
+    suggested_path: str
+    final_path: str | None
+    relation: Literal["same", "renamed", "copied", "deleted", "unknown"] = "unknown"
+    suggestion_base_snapshot: FileSnapshot | None = None
+    final_state_snapshot: FileSnapshot | None = None
+
+    def validation_issues(self) -> list[str]:
+        """Return missing evidence for this file transition."""
+        issues: list[str] = []
+        if self.suggestion_base_snapshot is None:
+            issues.append(f"missing suggestion-time snapshot for {self.suggested_path}")
+        if self.relation != "deleted" and self.final_state_snapshot is None:
+            final_path = self.final_path or self.suggested_path
+            issues.append(f"missing final-state snapshot for {final_path}")
+        if self.relation == "renamed" and (self.final_path is None or self.final_path == self.suggested_path):
+            issues.append(f"invalid rename mapping for {self.suggested_path}")
+        return issues
+
+
 class SuggestionProvenance(BaseModel):
     """Immutable source metadata needed to interpret one suggestion/merge pair."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     source_kind: Literal["github_review_comment", "github_issue_comment", "hdlf", "inspection_api", "unknown"]
     suggestion_id: str
     comment_url: str | None = None
@@ -57,6 +79,7 @@ class SuggestionProvenance(BaseModel):
     compared_diff_source: str | None = None
     suggestion_base_snapshot: FileSnapshot | None = None
     final_state_snapshot: FileSnapshot | None = None
+    files: list[FileProvenance] = Field(default_factory=list)
     collection_errors: list[str] = Field(default_factory=list)
 
     def validation_issues(self) -> list[str]:
@@ -74,14 +97,19 @@ class SuggestionProvenance(BaseModel):
                 issues.append("missing review-comment commit anchor")
             if self.path is None:
                 issues.append("missing review-comment file path")
+        if self.source_kind == "github_issue_comment":
+            issues.append("confirmatory benchmark supports inline review suggestions only")
         if self.compared_diff_base_sha is None or self.compared_diff_head_sha is None:
             issues.append("missing immutable revisions for compared PR diff")
         if self.merge_commit_sha is None:
             issues.append("missing merge commit SHA")
-        if self.suggestion_base_snapshot is None:
-            issues.append("missing suggestion-time target file snapshot")
-        if self.final_state_snapshot is None:
-            issues.append("missing final merged file snapshot")
+        if self.files:
+            issues.extend(issue for file_evidence in self.files for issue in file_evidence.validation_issues())
+        else:
+            if self.suggestion_base_snapshot is None:
+                issues.append("missing suggestion-time target file snapshot")
+            if self.final_state_snapshot is None:
+                issues.append("missing final merged file snapshot")
         issues.extend(f"collection error: {error}" for error in self.collection_errors)
         return issues
 
@@ -89,6 +117,20 @@ class SuggestionProvenance(BaseModel):
     def is_temporally_verified(self) -> bool:
         """Return whether required chronology and immutable revision evidence is present."""
         return not self.validation_issues()
+
+
+class BenchmarkCandidate(BaseModel):
+    """Label-free, provenance-complete input accepted by benchmark tooling."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    example_id: str
+    repo: str
+    pr_url: str
+    pr_number: int
+    suggested_diff: str
+    landed_diff: str
+    suggestion_provenance: SuggestionProvenance
 
 
 class UnitCredit(float, Enum):

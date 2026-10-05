@@ -70,7 +70,7 @@ The classifier artifact reports 80.2% accuracy and 0.741 macro-F1 over a 743-row
 
 ## 7. Public Inference Contract
 
-`predict_coverage_percentages` accepts complete metric-feature rows and returns a bounded integer percentage.
+`predict_coverage_percentages` accepts complete metric-feature rows plus an explicit trusted `model_dir` and returns a bounded integer percentage.
 
 `predict_coverage_from_diffs` accepts raw diffs only when the suggestion is:
 
@@ -79,9 +79,9 @@ The classifier artifact reports 80.2% accuracy and 0.741 macro-F1 over a 743-row
 - pure addition;
 - not a rename, deletion, or replacement.
 
-It abstains before model loading on unsupported suggestions. A successful result includes a warning that PR-diff overlap does not establish causality or final-state persistence.
+It requires an explicit trusted `model_dir` and abstains before model loading on unsupported suggestions. It returns the same versioned `CoverageResult` shape for predictions and abstentions, including raw and rounded estimates, uncertainty state, applicability reasons, exact evidence, and input/artifact hashes.
 
-The API now returns exact normalized change-unit evidence for additions, deletions, replacements, renames, moves, and multi-file/multi-hunk suggestions. This evidence is explicitly not semantic equivalence. Split-conformal interval support is implemented and cryptographically bound to model/schema bytes, but the checked-in model has no valid held-out calibration artifact; its uncertainty status therefore remains `unavailable`. Out-of-distribution detection and model versioning in every response remain open.
+The API now returns exact normalized change-unit evidence for additions, deletions, replacements, renames, moves, and multi-file/multi-hunk suggestions. This evidence is explicitly not semantic equivalence. Grouped split-conformal interval support is implemented and cryptographically bound to model/schema bytes, but the checked-in model has no valid held-out calibration artifact; its uncertainty status therefore remains `unavailable`. Out-of-distribution detection remains open.
 
 ## 8. Known Failure Modes
 

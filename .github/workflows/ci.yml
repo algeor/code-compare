@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Test minimal supported install
+        run: uv run --locked --extra test pytest -q
+      - name: Lint and type-check
+        run: |
+          uv run --locked --extra dev ruff check src tests
+          uv run --locked --extra dev mypy \
+            src/pr_suggestion_metrics/diff \
+            src/pr_suggestion_metrics/diff_precision_recall.py \
+            src/pr_suggestion_metrics/diff_semantics.py \
+            src/pr_suggestion_metrics/model_inference.py \
+            src/pr_suggestion_metrics/uncertainty.py \
+            src/pr_suggestion_metrics/benchmark \
+            src/pr_suggestion_metrics/modeling \
+            src/pr_suggestion_metrics/scientific_contracts.py \
+            src/pr_suggestion_metrics/freeze_benchmark.py \
+            src/pr_suggestion_metrics/prepare_annotation_packets.py
+      - name: Test all optional integrations
+        run: uv run --locked --all-extras pytest -q
+      - name: Build wheel
+        run: uv build
+      - name: Smoke-test installed wheel outside checkout
+        run: |
+          uv venv /tmp/pr-suggestion-wheel
+          uv pip install --python /tmp/pr-suggestion-wheel/bin/python dist/*.whl
+          cd /tmp
+          /tmp/pr-suggestion-wheel/bin/python - <<'PY'
+          import inspect
+          from pr_suggestion_metrics import CoverageResult, predict_coverage_from_diffs
+
+          assert inspect.signature(predict_coverage_from_diffs).parameters["model_dir"].default is inspect.Parameter.empty
+          assert CoverageResult.model_fields["result_schema_version"].default == "1.0"
+          PY

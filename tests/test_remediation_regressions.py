@@ -13,7 +13,11 @@ from unittest.mock import patch
 import pandas as pd
 
 from pr_suggestion_metrics.build_dataset import DatasetRow, DiffStats, _write_labels_csv
-from pr_suggestion_metrics.collect_pr_code_changes import CandidateRow, _extract_comment_diff_suggestions
+from pr_suggestion_metrics.collect_pr_code_changes import (
+    CandidateRow,
+    _extract_comment_diff_suggestions,
+    _final_path_for_suggested_path,
+)
 from pr_suggestion_metrics.evaluate_metrics import _DEFAULT_DATASET_DIR, _DEFAULT_OUTPUT_PATH, _write_scores
 from pr_suggestion_metrics.model_inference import load_model_bundle, predict_coverage_from_diffs, prepare_model_features
 from pr_suggestion_metrics.private_collection_adapter import load_hdlf_adapter
@@ -70,6 +74,15 @@ class OptionalCollectionDependencyTest(unittest.TestCase):
 
 
 class ScientificEvidenceContractTest(unittest.TestCase):
+    def test_final_path_resolves_rename(self) -> None:
+        merged_diff = """diff --git a/src/old.py b/src/new.py
+similarity index 100%
+rename from src/old.py
+rename to src/new.py
+"""
+
+        self.assertEqual(_final_path_for_suggested_path("src/old.py", merged_diff), ("src/new.py", "renamed"))
+
     def test_file_snapshot_rejects_changed_content(self) -> None:
         with self.assertRaisesRegex(ValueError, "content hash mismatch"):
             FileSnapshot(
@@ -321,13 +334,22 @@ class RawDiffInferenceRegressionTest(unittest.TestCase):
 +print("landed")
 """
 
-        result = predict_coverage_from_diffs(suggestion_diff, suggestion_diff, example_id="raw-example")
+        model_dir = Path(__file__).resolve().parents[1] / "models" / "pr_suggestion_coverage_regression"
+        result = predict_coverage_from_diffs(
+            suggestion_diff,
+            suggestion_diff,
+            example_id="raw-example",
+            model_dir=model_dir,
+        )
 
         self.assertEqual(result["example_id"], "raw-example")
         self.assertEqual(result["status"], "predicted")
         self.assertIsInstance(result["model_predicted_percentage"], int)
         self.assertGreaterEqual(result["model_predicted_percentage"], 0)
         self.assertLessEqual(result["model_predicted_percentage"], 100)
+        self.assertIsInstance(result["model_raw_percentage"], float)
+        self.assertEqual(result.result_schema_version, "1.0")
+        self.assertTrue(result.input_hashes)
         self.assertTrue(result["warnings"])
 
     def test_replacement_suggestion_abstains_before_loading_model(self) -> None:

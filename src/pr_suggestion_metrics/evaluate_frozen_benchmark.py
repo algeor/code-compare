@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from pr_suggestion_metrics.diff.parser import parse_unified_diff
 from pr_suggestion_metrics.model_artifacts import sha256_file, verify_model_manifest
 from pr_suggestion_metrics.model_inference import predict_coverage_from_diffs
 
@@ -44,29 +46,121 @@ def _metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     }
 
 
-def _verify_benchmark_artifacts(benchmark_dir: Path, manifest: dict[str, Any]) -> tuple[Path, Path]:
+def _grouped_bootstrap_intervals(
+    actual: np.ndarray,
+    predicted: np.ndarray,
+    groups: np.ndarray,
+    *,
+    iterations: int = 2_000,
+    seed: int = 42,
+) -> dict[str, dict[str, float]]:
+    """Return percentile confidence intervals after resampling independent groups."""
+    unique_groups = np.unique(groups)
+    if not len(actual) or not len(unique_groups):
+        return {}
+    random = np.random.default_rng(seed)
+    sampled_metrics: dict[str, list[float]] = defaultdict(list)
+    for _ in range(iterations):
+        sampled_groups = random.choice(unique_groups, size=len(unique_groups), replace=True)
+        positions = np.concatenate([np.flatnonzero(groups == group) for group in sampled_groups])
+        for name, value in _metrics(actual[positions], predicted[positions]).items():
+            sampled_metrics[name].append(value)
+    return {
+        name: {
+            "lower_95": float(np.quantile(values, 0.025)),
+            "upper_95": float(np.quantile(values, 0.975)),
+        }
+        for name, values in sampled_metrics.items()
+    }
+
+
+def _edit_type(diff_text: str) -> str:
+    parsed = parse_unified_diff(diff_text)
+    operations: set[str] = {line.operation for line in parsed.changed_lines}
+    if any(file_diff.rename_from or file_diff.rename_to for file_diff in parsed.files):
+        operations.add("rename")
+    return "+".join(sorted(operations)) or "empty"
+
+
+def _suggestion_size(diff_text: str) -> str:
+    unit_count = sum(bool(line.text.strip()) for line in parse_unified_diff(diff_text).changed_lines)
+    if unit_count <= 3:
+        return "small"
+    if unit_count <= 10:
+        return "medium"
+    return "large"
+
+
+def _subgroup_metrics(
+    estimated: list[dict[str, Any]],
+    input_by_id: dict[str, dict[str, Any]],
+    label_by_id: dict[str, float],
+) -> dict[str, dict[str, dict[str, float] | int]]:
+    dimensions: dict[str, dict[str, list[tuple[float, float]]]] = {
+        "repository": defaultdict(list),
+        "edit_type": defaultdict(list),
+        "suggestion_size": defaultdict(list),
+    }
+    for prediction in estimated:
+        example_id = str(prediction["example_id"])
+        source = input_by_id[example_id]
+        pair = (label_by_id[example_id], float(prediction["model_predicted_percentage"]))
+        dimensions["repository"][str(source.get("repo", "unknown"))].append(pair)
+        dimensions["edit_type"][_edit_type(str(source["suggested_diff"]))].append(pair)
+        dimensions["suggestion_size"][_suggestion_size(str(source["suggested_diff"]))].append(pair)
+    return {
+        dimension: {
+            name: {
+                "rows": len(values),
+                **_metrics(
+                    np.asarray([value[0] for value in values]),
+                    np.asarray([value[1] for value in values]),
+                ),
+            }
+            for name, values in sorted(grouped_values.items())
+        }
+        for dimension, grouped_values in dimensions.items()
+    }
+
+
+def _verify_benchmark_artifacts(
+    benchmark_dir: Path,
+    manifest: dict[str, Any],
+    private_labels_path: Path | None = None,
+) -> tuple[Path, Path]:
     artifact_hashes = manifest.get("artifact_sha256")
     if not isinstance(artifact_hashes, dict):
         raise ValueError("Benchmark manifest is missing artifact_sha256")
     test_inputs_path = benchmark_dir / "test_inputs.jsonl"
-    private_labels_path = benchmark_dir / "test_labels.private.jsonl"
+    resolved_private_labels_path = private_labels_path or benchmark_dir / "test_labels.private.jsonl"
     expected_test_hash = artifact_hashes.get("test")
     expected_label_hash = artifact_hashes.get("private_test_labels")
     if sha256_file(test_inputs_path) != expected_test_hash:
         raise ValueError("Frozen test inputs do not match the benchmark manifest")
-    if sha256_file(private_labels_path) != expected_label_hash:
+    if sha256_file(resolved_private_labels_path) != expected_label_hash:
         raise ValueError("Private test labels do not match the benchmark manifest")
-    return test_inputs_path, private_labels_path
+    return test_inputs_path, resolved_private_labels_path
 
 
-def evaluate_frozen_benchmark(*, benchmark_dir: Path, model_dir: Path, output_dir: Path) -> dict[str, Any]:
+def evaluate_frozen_benchmark(
+    *,
+    benchmark_dir: Path,
+    model_dir: Path,
+    output_dir: Path,
+    private_labels_path: Path | None = None,
+    receipt_path: Path | None = None,
+) -> dict[str, Any]:
     """Evaluate once, reporting abstention and intervals without tuning on test labels."""
-    receipt_path = benchmark_dir / RECEIPT_FILENAME
-    if receipt_path.exists():
-        raise RuntimeError(f"Confirmatory test was already consumed: {receipt_path}")
+    resolved_receipt_path = receipt_path or benchmark_dir / RECEIPT_FILENAME
+    if resolved_receipt_path.exists():
+        raise RuntimeError(f"Confirmatory test was already consumed: {resolved_receipt_path}")
     benchmark_manifest_path = benchmark_dir / "benchmark_manifest.json"
     benchmark_manifest = json.loads(benchmark_manifest_path.read_text(encoding="utf-8"))
-    test_inputs_path, private_labels_path = _verify_benchmark_artifacts(benchmark_dir, benchmark_manifest)
+    test_inputs_path, resolved_private_labels_path = _verify_benchmark_artifacts(
+        benchmark_dir,
+        benchmark_manifest,
+        private_labels_path,
+    )
     model_manifest = verify_model_manifest(model_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
 
@@ -79,23 +173,33 @@ def evaluate_frozen_benchmark(*, benchmark_dir: Path, model_dir: Path, output_di
             example_id=str(row["example_id"]),
             model_dir=model_dir,
         )
-        predictions.append(prediction)
+        predictions.append(prediction.model_dump(mode="json"))
     predictions_path = output_dir / "predictions.jsonl"
     predictions_path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in predictions),
         encoding="utf-8",
     )
 
-    private_labels = _read_jsonl(private_labels_path)
+    private_labels = _read_jsonl(resolved_private_labels_path)
     label_by_id = {str(row["example_id"]): float(row["coverage_unrounded"]) for row in private_labels}
     if set(label_by_id) != {str(row["example_id"]) for row in test_rows}:
         raise ValueError("Private labels and frozen test inputs have different example IDs")
 
     estimated = [row for row in predictions if row.get("status") == "predicted"]
     estimated_ids = [str(row["example_id"]) for row in estimated]
+    input_by_id = {str(row["example_id"]): row for row in test_rows}
     actual = np.array([label_by_id[example_id] for example_id in estimated_ids], dtype=float)
     predicted = np.array([float(row["model_predicted_percentage"]) for row in estimated], dtype=float)
     point_metrics = _metrics(actual, predicted) if len(estimated) else None
+    groups = np.asarray(
+        [
+            f"{input_by_id[example_id].get('repo', 'unknown')}#{input_by_id[example_id].get('pr_number', example_id)}"
+            for example_id in estimated_ids
+        ],
+        dtype=object,
+    )
+    confidence_intervals = _grouped_bootstrap_intervals(actual, predicted, groups) if len(estimated) else {}
+    subgroup_metrics = _subgroup_metrics(estimated, input_by_id, label_by_id)
 
     calibrated = [row for row in estimated if row.get("uncertainty", {}).get("status") == "calibrated"]
     interval_coverage = None
@@ -121,6 +225,8 @@ def evaluate_frozen_benchmark(*, benchmark_dir: Path, model_dir: Path, output_di
         "abstained_rows": len(test_rows) - len(estimated),
         "prediction_coverage": len(estimated) / len(test_rows) if test_rows else 0.0,
         "point_metrics_on_estimated_rows": point_metrics,
+        "grouped_bootstrap_95_percent_intervals": confidence_intervals,
+        "subgroup_metrics": subgroup_metrics,
         "calibrated_interval_rows": len(calibrated),
         "empirical_interval_coverage": interval_coverage,
         "mean_interval_width": mean_interval_width,
@@ -128,6 +234,7 @@ def evaluate_frozen_benchmark(*, benchmark_dir: Path, model_dir: Path, output_di
         "model_sha256": model_manifest["model_sha256"],
         "schema_sha256": model_manifest["schema_sha256"],
         "predictions_sha256": sha256_file(predictions_path),
+        "private_labels_stored_outside_benchmark": resolved_private_labels_path.parent != benchmark_dir,
         "warnings": [
             "Metrics cover only non-abstained rows and must be reported with prediction coverage.",
             "This receipt prevents accidental repeated local evaluation; governance must protect private labels externally.",
@@ -141,7 +248,8 @@ def evaluate_frozen_benchmark(*, benchmark_dir: Path, model_dir: Path, output_di
         "model_sha256": report["model_sha256"],
         "evaluation_report_sha256": sha256_file(report_path),
     }
-    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    resolved_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
 
@@ -151,6 +259,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark-dir", type=Path, required=True)
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--private-labels", type=Path)
+    parser.add_argument("--receipt", type=Path)
     return parser.parse_args()
 
 
@@ -161,6 +271,8 @@ def main() -> int:
         benchmark_dir=args.benchmark_dir,
         model_dir=args.model_dir,
         output_dir=args.output_dir,
+        private_labels_path=args.private_labels,
+        receipt_path=args.receipt,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

@@ -97,11 +97,16 @@ Feature-row inference over all 279 internal examples:
 
 ```bash
 uv run --locked --extra train python - <<'PY'
+from pathlib import Path
+
 import pandas as pd
 from pr_suggestion_metrics.model_inference import predict_coverage_percentages
 
 rows = pd.read_csv("reports/metric_scores.csv")
-predictions = predict_coverage_percentages(rows)
+predictions = predict_coverage_percentages(
+    rows,
+    model_dir=Path("models/pr_suggestion_coverage_regression"),
+)
 assert len(predictions) == 279
 assert predictions["model_predicted_percentage"].between(0, 100).all()
 print(predictions.describe())
@@ -159,6 +164,13 @@ A reliable confirmatory run must start from an immutable data release, frozen hu
 The implementation now enforces that standard for newly collected evidence:
 
 ```bash
+# Create deterministic PR/repository/near-duplicate-safe assignments.
+uv run --locked pr-suggestion-plan-splits \
+  --examples data/benchmark-source/examples.jsonl \
+  --output /secure/splits.csv \
+  --report /secure/split-report.json \
+  --policy repository_disjoint
+
 # Create blinded packets. Existing labels and model-derived fields are rejected.
 uv run --locked pr-suggestion-prepare-annotations \
   --examples data/benchmark-source/examples.jsonl \
@@ -174,6 +186,16 @@ uv run --locked pr-suggestion-freeze-benchmark \
   --split-policy repository_disjoint \
   --output-dir /secure/frozen-benchmark
 
+# Build one canonical feature table from frozen non-test rows.
+uv run --locked pr-suggestion-build-features \
+  --benchmark-dir /secure/frozen-benchmark \
+  --output-dir /secure/frozen-features
+
+# Select on development and train without exposing test rows.
+uv run --locked pr-suggestion-train \
+  --features /secure/frozen-features/features.csv \
+  --model-dir /secure/model
+
 # Calibrate intervals from a dedicated non-test table with sufficient independent groups.
 uv run --locked --extra train pr-suggestion-calibrate-uncertainty \
   --model-dir models/pr_suggestion_coverage_regression \
@@ -182,8 +204,10 @@ uv run --locked --extra train pr-suggestion-calibrate-uncertainty \
 # Evaluate private test labels once. A receipt blocks accidental repeated use.
 uv run --locked --extra train pr-suggestion-evaluate-frozen \
   --benchmark-dir /secure/frozen-benchmark \
+  --private-labels /protected-evaluator/test_labels.private.jsonl \
+  --receipt /protected-evaluator/receipts/model-v1.json \
   --model-dir models/pr_suggestion_coverage_regression \
   --output-dir /secure/confirmatory-evaluation
 ```
 
-The current 279-row internal corpus cannot enter this workflow because it lacks the required original review anchors and immutable suggestion-time/final-state snapshots. Recollect it after restoring valid access to `github.tools.sap`, then obtain annotations from real independent human reviewers. An LLM-generated replacement would reproduce the original validity defect.
+The current 279-row internal corpus cannot enter this workflow because it lacks the required original review anchors and immutable suggestion-time/final-state snapshots.

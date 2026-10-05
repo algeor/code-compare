@@ -16,6 +16,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from pr_suggestion_metrics.diff.parser import parse_unified_diff
+
 
 Label = Literal["0%", "partial", "mostly", "100%"]
 PercentageBucket = Literal[
@@ -326,42 +328,23 @@ def _parse_label(raw_label: str) -> Label:
 
 def _added_lines_by_file_from_diff(diff_text: str) -> dict[str, list[str]]:
     added_lines_by_file: dict[str, list[str]] = {}
-    current_file: str | None = None
-    for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            current_file = line.removeprefix("+++ b/")
-            added_lines_by_file.setdefault(current_file, [])
-            continue
-        if line.startswith("+++"):
-            current_file = None
-            continue
-        if line.startswith("diff --git"):
-            current_file = None
-            continue
-        if current_file is not None and line.startswith("+"):
-            added_lines_by_file[current_file].append(line[1:])
+    for line in parse_unified_diff(diff_text).changed_lines:
+        if line.operation == "addition" and line.path is not None:
+            added_lines_by_file.setdefault(line.path, []).append(line.text)
     return added_lines_by_file
 
 
 def _added_hunks_by_file_from_diff(diff_text: str) -> dict[str, list[list[str]]]:
     added_hunks_by_file: dict[str, list[list[str]]] = {}
-    current_file: str | None = None
-    current_hunk: list[str] | None = None
-    for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            current_file = line.removeprefix("+++ b/")
-            added_hunks_by_file.setdefault(current_file, [])
-            continue
-        if line.startswith("+++") or line.startswith("diff --git"):
-            current_file = None
-            current_hunk = None
-            continue
-        if line.startswith("@@") and current_file is not None:
-            current_hunk = []
-            added_hunks_by_file[current_file].append(current_hunk)
-            continue
-        if current_file is not None and current_hunk is not None and line.startswith("+"):
-            current_hunk.append(line[1:])
+    for file_diff in parse_unified_diff(diff_text).files:
+        hunks: dict[int, list[str]] = {}
+        for line in file_diff.lines:
+            if line.operation == "addition" and line.path is not None:
+                hunks.setdefault(line.hunk_index, []).append(line.text)
+        for hunk_index in sorted(hunks):
+            path = file_diff.new_path or file_diff.old_path
+            if path is not None:
+                added_hunks_by_file.setdefault(path, []).append(hunks[hunk_index])
     return added_hunks_by_file
 
 
@@ -1196,12 +1179,9 @@ def raw_diff_support_issues(suggested_diff: str) -> list[str]:
     issues: list[str] = []
     added_lines_by_file = _added_lines_by_file_from_diff(suggested_diff)
     files_with_additions = [path for path, lines in added_lines_by_file.items() if _non_empty_normalized_lines(lines)]
-    removed_lines = [
-        line
-        for line in suggested_diff.splitlines()
-        if line.startswith("-") and not line.startswith("---") and line[1:].strip()
-    ]
-    hunk_count = sum(line.startswith("@@") for line in suggested_diff.splitlines())
+    parsed = parse_unified_diff(suggested_diff)
+    removed_lines = [line for line in parsed.changed_lines if line.operation == "deletion" and line.text.strip()]
+    hunk_count = parsed.hunk_count
 
     if not suggested_diff.strip():
         issues.append("suggestion diff is empty")
@@ -1213,7 +1193,7 @@ def raw_diff_support_issues(suggested_diff: str) -> list[str]:
         issues.append("multi-file suggestions are not yet supported by raw inference")
     if hunk_count > 1:
         issues.append("multi-hunk suggestions are not yet supported by raw inference")
-    if "rename from " in suggested_diff or "rename to " in suggested_diff:
+    if any(file_diff.rename_from or file_diff.rename_to for file_diff in parsed.files):
         issues.append("renamed suggestion files are not yet supported")
     return issues
 
@@ -1229,14 +1209,14 @@ def score_diff_pair(suggested_diff: str, merged_pr_diff: str, *, enable_gumtree:
     suggested_files = set(suggested_lines_by_file)
     landed_files = set(landed_lines_by_file)
     suggested_lines = {
-        line.strip()
-        for lines in suggested_lines_by_file.values()
+        (path, line.strip())
+        for path, lines in suggested_lines_by_file.items()
         for line in lines
         if line.strip()
     }
     landed_lines = {
-        line.strip()
-        for lines in landed_lines_by_file.values()
+        (path, line.strip())
+        for path, lines in landed_lines_by_file.items()
         for line in lines
         if line.strip()
     }

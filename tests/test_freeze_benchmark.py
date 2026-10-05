@@ -71,6 +71,7 @@ class FreezeBenchmarkTest(unittest.TestCase):
         annotations = []
         adjudications = []
         splits = []
+        suggestion_lines = {1: "return value", 2: "raise Error()", 3: "print(value)"}
         for day, split in ((1, "train"), (2, "development"), (3, "test")):
             example_id = f"example-{day}"
             examples.append(
@@ -79,8 +80,8 @@ class FreezeBenchmarkTest(unittest.TestCase):
                     "repo": f"host/owner/repo-{day}",
                     "pr_url": f"https://host/owner/repo-{day}/pull/{day}",
                     "pr_number": day,
-                    "suggested_diff": f"--- a/a.py\n+++ b/a.py\n@@\n+return {day}",
-                    "landed_diff": f"--- a/a.py\n+++ b/a.py\n@@\n+return {day}",
+                    "suggested_diff": f"--- a/a.py\n+++ b/a.py\n@@\n+{suggestion_lines[day]}",
+                    "landed_diff": f"--- a/a.py\n+++ b/a.py\n@@\n+{suggestion_lines[day]}",
                     "suggestion_provenance": _provenance(day),
                 }
             )
@@ -122,7 +123,7 @@ class FreezeBenchmarkTest(unittest.TestCase):
             private_label = json.loads((output_dir / "test_labels.private.jsonl").read_text())
             self.assertNotIn("coverage_percentage", test_input)
             self.assertEqual(private_label["coverage_percentage"], 100)
-            self.assertEqual(manifest["counts"], {"train": 1, "development": 1, "test": 1})
+            self.assertEqual(manifest["counts"], {"train": 1, "development": 1, "calibration": 0, "test": 1})
             self.assertIn("private_test_labels", manifest["artifact_sha256"])
 
     def test_freeze_rejects_single_annotator(self) -> None:
@@ -139,6 +140,57 @@ class FreezeBenchmarkTest(unittest.TestCase):
                     output_dir=root / "frozen",
                     split_policy="repository_disjoint",
                 )
+
+    def test_freeze_rejects_duplicate_annotator_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+            duplicate = json.loads(paths["annotations"].read_text().splitlines()[0])
+            with paths["annotations"].open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(duplicate) + "\n")
+
+            with self.assertRaisesRegex(ValueError, "Duplicate annotation record"):
+                freeze_benchmark(
+                    examples_path=paths["examples"],
+                    annotations_path=paths["annotations"],
+                    adjudications_path=paths["adjudications"],
+                    splits_path=paths["splits"],
+                    output_dir=root / "frozen",
+                    split_policy="repository_disjoint",
+                )
+
+    def test_freeze_quarantines_abstained_example(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+            annotation_rows = [json.loads(line) for line in paths["annotations"].read_text().splitlines()]
+            annotation_rows[0].update(decision="abstain", abstention_reasons=["ambiguous evidence"], units=[])
+            paths["annotations"].write_text(
+                "".join(json.dumps(row) + "\n" for row in annotation_rows),
+                encoding="utf-8",
+            )
+            adjudication_rows = [
+                json.loads(line)
+                for line in paths["adjudications"].read_text().splitlines()
+                if json.loads(line)["example_id"] != "example-1"
+            ]
+            paths["adjudications"].write_text(
+                "".join(json.dumps(row) + "\n" for row in adjudication_rows),
+                encoding="utf-8",
+            )
+
+            manifest = freeze_benchmark(
+                examples_path=paths["examples"],
+                annotations_path=paths["annotations"],
+                adjudications_path=paths["adjudications"],
+                splits_path=paths["splits"],
+                output_dir=root / "frozen",
+                split_policy="repository_disjoint",
+            )
+
+            abstained = [json.loads(line) for line in (root / "frozen" / "abstained.jsonl").read_text().splitlines()]
+            self.assertEqual(manifest["abstained_count"], 1)
+            self.assertEqual(abstained[0]["example_id"], "example-1")
 
 
 if __name__ == "__main__":

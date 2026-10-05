@@ -1,398 +1,175 @@
 # Semantic PR Suggestion Coverage
 
-This repository contains research data, notebooks, and reusable code for estimating semantic overlap between code-review suggestions and merged pull-request changes. The current score is an experimental model prediction, not proof that a suggestion caused code to be adopted.
+Research tooling for estimating how much of a code-review suggestion appears in a merged pull request.
 
-## Layout
+## Current Status
 
-```text
-data/          # raw, interim, processed, external, and embedding data
-docs/          # review, method, paper, and reproducibility notes
-models/        # trained and experimental model artifacts
-notebooks/     # collection, preparation, evaluation, and analysis notebooks
-reports/       # generated score reports and diagnostics
-src/           # reusable Python package
-tests/         # focused regression and model tests
-pyproject.toml # package metadata and dependency groups
-uv.lock        # exact cross-platform dependency lock
-```
+The package provides two explicitly separate outputs:
 
-Research documentation:
+- **Exact evidence:** path-aware, one-to-one normalized change-unit matching.
+- **Experimental estimate:** a learned percentage for supported raw-diff inputs.
 
-- `docs/team-codebase-review.md`: end-to-end review and remediation verdict.
-- `docs/data-card.md`: dataset composition, provenance, risks, and prohibited uses.
-- `docs/annotation-guide.md`: required protocol for a future human benchmark.
-- `docs/model-card.md`: intended use, results, limitations, and artifact safety.
-- `docs/reproducibility.md`: locked installation, validation, and rebuild commands.
+Neither output proves causality or final-state semantic equivalence. Unsupported edit shapes return a typed abstention instead of an invented score.
 
-## Validation Evidence Pipeline
-
-The repository now contains the enforcement pipeline for a new scientifically valid dataset. It deliberately rejects the current LLM-assisted corpus as confirmatory evidence.
-
-1. Recollect suggestions with timestamps, review anchors, immutable revisions, and hashed before/final file snapshots:
-
-   ```bash
-   uv run --locked --extra collection pr-suggestion-collect ...
-   ```
-
-2. Build a provenance-complete, label-free example JSONL and create blinded double-annotation packets:
-
-   ```bash
-   uv run --locked pr-suggestion-prepare-annotations \
-     --examples data/benchmark-source/examples.jsonl \
-     --annotator reviewer-a --annotator reviewer-b \
-     --output-dir /secure/annotation-packets
-   ```
-
-3. Freeze independent annotations, adjudications, and explicit splits:
-
-   ```bash
-   uv run --locked pr-suggestion-freeze-benchmark \
-     --examples data/benchmark-source/examples.jsonl \
-     --annotations /secure/annotations.jsonl \
-     --adjudications /secure/adjudications.jsonl \
-     --splits /secure/splits.csv \
-     --output-dir /secure/frozen-benchmark
-   ```
-
-4. Fit uncertainty only from a dedicated non-test calibration table:
-
-   ```bash
-   uv run --locked --extra train pr-suggestion-calibrate-uncertainty \
-     --model-dir models/pr_suggestion_coverage_regression \
-     --calibration-data /secure/calibration_features.csv
-   ```
-
-5. Consume the private test labels once:
-
-   ```bash
-   uv run --locked --extra train pr-suggestion-evaluate-frozen \
-     --benchmark-dir /secure/frozen-benchmark \
-     --model-dir models/pr_suggestion_coverage_regression \
-     --output-dir /secure/confirmatory-evaluation
-   ```
-
-`pr-suggestion-freeze-benchmark` requires verified chronology, two distinct annotators, adjudication, PR/duplicate-safe splits, and private test labels. `pr-suggestion-evaluate-frozen` writes a consumption receipt and refuses a second confirmatory run.
-
-## Main Dataset
-
-Current processed dataset:
-
-```text
-data/processed/pr_suggestion_coverage/dataset/
-```
-
-Important files:
-
-- `dataset.jsonl`: ML-ready examples with `suggested_diff` and `landed_diff`.
-- `labels.csv`: current LLM-assisted target labels keyed by `example_id`; these are not validated ground truth.
-- `llm_labels.jsonl`: detailed label reasoning.
-- `review_examples/`: per-example markdown review files.
-- `supervised_training.jsonl`: training-friendly joined records.
-
-Labels:
-
-- `0%`
-- `partial`
-- `mostly`
-- `100%`
-
-## Notebook Order
-
-Install the locked environment from the repository root:
+## Quick Start
 
 ```bash
-uv sync --locked --all-extras
-uv run --locked --all-extras python -m ipykernel install --prefix .venv --name code-compare --display-name code-compare
+uv sync --locked --extra test
+uv run --locked --extra test pytest -q
 ```
 
-Use the `code-compare` kernel for notebooks.
-
-Verify the local structural parsers used by the AST scoring step:
-
-```bash
-uv run --locked --extra structural pr-suggestion-prepare-parsers
-```
-
-Expected languages: Python through stdlib `ast`, plus Go, C++, Rust, Java, TypeScript, JavaScript, C, and HTML through the locked `tree-sitter-language-pack` dependency.
-
-Run notebooks in this order when rebuilding from scratch:
-
-1. `notebooks/01_collect/closed_pr_comment_pair_collection.ipynb`
-2. `notebooks/02_prepare/data_preparation.ipynb`
-3. `notebooks/03_evaluate/pr_suggestion_metric_evaluation.ipynb`
-4. `notebooks/04_visualize/metric_score_visualization.ipynb`
-5. `notebooks/05_external/import_hf_github_codereview.ipynb` if refreshing the external dataset
-6. `notebooks/06_train/train_metric_classifier.ipynb`
-7. `notebooks/07_visualize/model_performance_dashboard.ipynb`
-8. `notebooks/08_train/train_regression_coverage_model.ipynb`
-
-External dataset import notebook:
-
-```text
-notebooks/05_external/import_hf_github_codereview.ipynb
-```
-
-It imports `ronantakizawa/github-codereview` into a separate weak-label dataset under `data/external/github_codereview/`. Keep it separate from the internal LLM-assisted dataset.
-
-## Supervised Model
-
-The training notebook combines the internal labeled dataset with the cleaned Hugging Face code review dataset, trains several sklearn classifiers, compares them against the current rule-based metric label, and saves the best trained model to:
-
-```text
-models/pr_suggestion_coverage/model.joblib
-models/pr_suggestion_coverage/feature_schema.json
-models/pr_suggestion_coverage/artifact_manifest.json
-models/pr_suggestion_coverage/evaluation_report.json
-```
-
-The split is source-aware and PR-group-aware: each dataset source contributes validation rows, and examples from the same PR stay on one side of the split.
-
-Use the saved model from code like this:
+Run inference with an explicit trusted model directory:
 
 ```python
-import pandas as pd
+from pathlib import Path
 
-from pr_suggestion_metrics.model_inference import predict_coverage_labels
+from pr_suggestion_metrics import predict_coverage_from_diffs
 
-metric_rows = pd.read_csv("reports/metric_scores.csv")
-predictions = predict_coverage_labels(metric_rows)
+result = predict_coverage_from_diffs(
+    suggested_diff,
+    merged_pr_diff,
+    model_dir=Path("models/pr_suggestion_coverage_regression"),
+)
+
+if result.status == "predicted":
+    print(result.model_predicted_percentage)
+else:
+    print(result.applicability_reasons)
 ```
 
-The model input is still a deterministic metric row derived from `suggestion + merged diff/code`; the application does not need labels at prediction time.
+The result is a versioned `CoverageResult` containing the raw and rounded estimate, uncertainty status, exact evidence, input hashes, artifact hashes, and warnings.
 
-For granular `0-100` coverage, use the percentage regressor. The model returns an integer percentage directly. Buckets are optional reporting metadata derived after inference and are not a model target.
+## AI Reviewer Evaluation
 
-Regression artifacts are saved to:
-
-```text
-models/pr_suggestion_coverage_regression/model.joblib
-models/pr_suggestion_coverage_regression/feature_schema.json
-models/pr_suggestion_coverage_regression/artifact_manifest.json
-models/pr_suggestion_coverage_regression/evaluation_report.json
-```
-
-Use the regression model from code like this:
+Coverage measures whether a suggestion appears in merged code. It cannot say what the AI reviewer got wrong. Review quality is scored separately against atomic findings verified by tests, static analysis, specifications, or human review:
 
 ```python
-import pandas as pd
+from pr_suggestion_metrics import ReviewAssessmentUnit, evaluate_ai_review
 
-from pr_suggestion_metrics.model_inference import predict_coverage_percentages
+evaluation = evaluate_ai_review(
+    "review-42",
+    [
+        ReviewAssessmentUnit(
+            unit_id="unsafe-fix",
+            criterion="fix_safety",
+            verdict="partially_correct",
+            weight=2,
+            ai_review_part="Catch every Exception and return None.",
+            expected="Catch ValueError only and preserve unexpected failures.",
+            explanation="The proposed fix hides unrelated defects.",
+            evidence=["tests/test_parser.py::test_unexpected_error_propagates"],
+            evidence_source="test",
+            mistake_code="unsafe_fix",
+        )
+    ],
+)
 
-metric_rows = pd.read_csv("reports/metric_scores.csv")
-predictions = predict_coverage_percentages(metric_rows)
+print(evaluation.score_percentage)
+for deduction in evaluation.deductions:
+    print(deduction.mistake_code, deduction.points_lost, deduction.explanation)
 ```
 
-Retrain and tune the percentage model from the repository root:
+Every point below 100 maps to a concrete deduction such as an incorrect diagnosis, missed issue, wrong location, wrong severity, unsafe fix, weak rationale, or vague guidance. Use `summarize_ai_reviewer` to find recurring reviewer mistakes across many comments.
+
+A local model may draft assessment units, but tests, static analysis, specifications, or humans must verify them. The merged PR is outcome context, not correctness ground truth.
+
+## Capability Matrix
+
+| Edit shape | Exact evidence | Learned estimator |
+|---|---:|---:|
+| Single-file addition | Yes | Yes |
+| Multiple hunks | Yes | Abstains |
+| Multiple files | Yes | Abstains |
+| Deletion or replacement | Yes | Abstains |
+| Rename or cross-file move | Yes | Abstains |
+| Final-state semantic equivalence | No | No |
+
+## Metric Vocabulary
+
+- `suggestion_coverage_percentage`: primary learned estimate.
+- `exact_change_unit_coverage_percentage`: transparent exact-match evidence.
+- `final_diff_recall`: PR-scope diagnostic.
+- `coverage_bucket`: display-only derivative.
+
+Token, file, and line precision/recall are diagnostics. The project does not combine them into an aggregate coverage score.
+
+## Benchmark Pipeline
+
+Build label-free benchmark candidates while preparing the normal dataset:
 
 ```bash
-uv run --locked --extra train python \
-  -m pr_suggestion_metrics.train_percentage_regressor \
-  --internal-scores reports/metric_scores.csv \
-  --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
-  --hf-scores data/external/github_codereview/metric_scores.csv \
-  --hf-labels data/external/github_codereview/dataset/labels.csv \
-  --hf-audit data/labeling_batches/hf_semantic_percentage_outputs/audit_report.jsonl \
-  --model-dir models/pr_suggestion_coverage_regression
+uv run --locked pr-suggestion-build-dataset INPUT.jsonl --output-dir OUTPUT_DIR
 ```
 
-The trainer keeps the existing model unless the tuned candidate improves internal holdout percentage MAE.
-
-### Two-stage percentage model
-
-Suggestion coverage has strong endpoint clusters: many examples are exactly `0` or `100`, while the remaining examples need a granular percentage. A single regressor tends to pull endpoint predictions toward the middle.
-
-The two-stage model handles these cases separately:
-
-1. CatBoost classifies each example as `0`, `intermediate`, or `100`.
-2. A second CatBoost model estimates the exact percentage only for intermediate examples.
-3. The two predictions are combined into one bounded percentage. Buckets are never returned by inference.
-
-Run the guarded experiment from the repository root:
+Create deterministic leakage-resistant split assignments:
 
 ```bash
-uv run --locked --extra train python \
-  -m pr_suggestion_metrics.train_two_stage_percentage \
-  --internal-scores reports/metric_scores.csv \
-  --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
-  --hf-scores data/external/github_codereview/metric_scores.csv \
-  --hf-labels data/external/github_codereview/dataset/labels.csv \
-  --hf-audit data/labeling_batches/hf_semantic_percentage_outputs/audit_report.jsonl \
-  --model-dir models/pr_suggestion_coverage_regression
+uv run --locked pr-suggestion-plan-splits \
+  --examples OUTPUT_DIR/benchmark_candidates.jsonl \
+  --output /secure/splits.csv \
+  --report /secure/split-report.json \
+  --policy repository_disjoint
 ```
 
-The two-stage model is deployed only when holdout MAE and RMSE improve without increasing dangerous endpoint errors.
-
-Run its focused tests with:
+After annotation and adjudication, freeze the benchmark:
 
 ```bash
-uv run --locked --extra train --extra test python -m pytest -q
+uv run --locked pr-suggestion-freeze-benchmark \
+  --examples OUTPUT_DIR/benchmark_candidates.jsonl \
+  --annotations /secure/annotations.jsonl \
+  --adjudications /secure/adjudications.jsonl \
+  --splits /secure/splits.csv \
+  --output-dir /secure/frozen-benchmark
 ```
 
-### Out-of-fold ensemble
-
-The ensemble blends the Random Forest's stronger large-error behavior with the two-stage model's stronger close-range accuracy. Its blend weight is selected only from repeated PR-grouped out-of-fold predictions, so the final holdout remains untouched during tuning.
+Generate canonical model-ready features from non-test splits:
 
 ```bash
-uv run --locked --extra train python \
-  -m pr_suggestion_metrics.train_percentage_ensemble \
-  --internal-scores reports/metric_scores.csv \
-  --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
-  --hf-scores data/external/github_codereview/metric_scores.csv \
-  --hf-labels data/external/github_codereview/dataset/labels.csv \
-  --hf-audit data/labeling_batches/hf_semantic_percentage_outputs/audit_report.jsonl \
-  --model-dir models/pr_suggestion_coverage_regression
+uv run --locked pr-suggestion-build-features \
+  --benchmark-dir /secure/frozen-benchmark \
+  --output-dir /secure/frozen-features
 ```
 
-The ensemble replaces the deployed model only when holdout MAE and within-10 accuracy improve, dangerous errors do not increase, and any RMSE regression stays below 2%. Its public inference output remains one integer percentage.
-
-### Advanced model comparison
-
-The advanced benchmark compares direct CatBoost MAE/Huber models, LightGBM L1/Huber models, and XGBoost absolute-error/Pseudo-Huber models. It then uses repeated grouped out-of-fold predictions to choose a non-negative blend of the strongest model from each family, the Random Forest baseline, and the two-stage model.
-
-On macOS, LightGBM also requires `brew install libomp`.
+Select and train one supported model without reading test rows:
 
 ```bash
-uv run --locked --extra train python \
-  -m pr_suggestion_metrics.train_advanced_percentage_models \
-  --internal-scores reports/metric_scores.csv \
-  --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
-  --hf-scores data/external/github_codereview/metric_scores.csv \
-  --hf-labels data/external/github_codereview/dataset/labels.csv \
-  --hf-audit data/labeling_batches/hf_semantic_percentage_outputs/audit_report.jsonl \
-  --model-dir models/pr_suggestion_coverage_regression
+uv run --locked pr-suggestion-train \
+  --features /secure/frozen-features/features.csv \
+  --model-dir /secure/model
 ```
 
-### Frozen embedding experiments
+Abstained examples are preserved in dedicated artifacts. Calibration uses raw predictions and independent-group residuals.
 
-Frozen embeddings compare the meaning of a suggestion with a small set of likely landed hunks. They are converted into scalar cosine-similarity features and added to the existing tabular metrics. Embedding vectors are cached by model revision and text hash.
-
-The tested UniXcoder and CodeBERT candidates improved repeated grouped development metrics but worsened the final internal holdout. A leave-one-repository-out evaluation over 2,500 rows from 29 external repositories found only a tiny, uncertain 0.022-point MAE improvement for the guarded blend, while RMSE worsened by 0.175 points and within-10 accuracy fell by 0.76 percentage points. They are therefore saved as research artifacts under `models/pr_suggestion_coverage_embeddings/` and are **not** used by the current percentage artifact.
-
-Generate the pinned feature tables:
-
-```bash
-HF_HOME="$HOME/.cache/huggingface" uv run --locked --extra train --extra embeddings python \
-  -m pr_suggestion_metrics.generate_embedding_features \
-  --dataset internal=data/processed/pr_suggestion_coverage/dataset/dataset.jsonl \
-  --dataset hf_github_codereview=data/external/github_codereview/dataset/dataset.jsonl \
-  --model-id microsoft/unixcoder-base \
-  --revision 5604afdc964f6c53782a6813140ade5216b99006 \
-  --alias unixcoder_encoder \
-  --input-prefix '<encoder-only> </s> ' \
-  --output data/embeddings/unixcoder_encoder_features.csv \
-  --cache data/embeddings/cache/unixcoder.sqlite3
-```
-
-Use the same command with `microsoft/codebert-base`, revision `3b0952feddeffad0063f274080e3c23d75e7eb39`, alias `codebert`, and no input prefix for CodeBERT.
-
-Compare single and combined embedding feature sets:
-
-```bash
-uv run --locked --extra train --extra embeddings python \
-  -m pr_suggestion_metrics.train_embedding_percentage_models \
-  --internal-scores reports/metric_scores.csv \
-  --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
-  --hf-scores data/external/github_codereview/metric_scores.csv \
-  --hf-labels data/external/github_codereview/dataset/labels.csv \
-  --hf-audit data/labeling_batches/hf_semantic_percentage_outputs/audit_report.jsonl \
-  --base-model-dir models/pr_suggestion_coverage_regression \
-  --embedding-features unixcoder=data/embeddings/unixcoder_features.csv \
-  --embedding-features unixcoder_encoder=data/embeddings/unixcoder_encoder_features.csv \
-  --embedding-features codebert=data/embeddings/codebert_features.csv \
-  --output-dir models/pr_suggestion_coverage_embeddings
-```
-
-Evaluate transfer to unseen repositories:
-
-```bash
-uv run --locked --extra train --extra embeddings python \
-  -m pr_suggestion_metrics.evaluate_repository_held_out_embeddings \
-  --internal-scores reports/metric_scores.csv \
-  --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
-  --hf-scores data/external/github_codereview/metric_scores.csv \
-  --hf-labels data/external/github_codereview/dataset/labels.csv \
-  --hf-audit data/labeling_batches/hf_semantic_percentage_outputs/audit_report.jsonl \
-  --base-model-dir models/pr_suggestion_coverage_regression \
-  --embedding-model-dir models/pr_suggestion_coverage_embeddings \
-  --embedding-features unixcoder=data/embeddings/unixcoder_features.csv \
-  --embedding-features unixcoder_encoder=data/embeddings/unixcoder_encoder_features.csv \
-  --embedding-features codebert=data/embeddings/codebert_features.csv \
-  --output-dir models/pr_suggestion_coverage_embeddings/repository_held_out \
-  --resume
-```
-
-The completed report and one-prediction-per-example table are stored in `models/pr_suggestion_coverage_embeddings/repository_held_out/`.
-
-Jina was not executed because its checkpoint required repository-provided Python and the safe built-in loader did not match the checkpoint architecture. The pipeline rejects missing model weights rather than silently evaluating a partially initialized model.
-
-Visual model diagnostics live in:
+## Repository Layout
 
 ```text
-notebooks/07_visualize/model_performance_dashboard.ipynb
+data/          research datasets and small fixtures
+docs/          method, model, data, and reproducibility notes
+models/        trusted local research artifacts
+notebooks/     historical and exploratory analyses
+reports/       generated evaluation outputs
+src/           reusable Python package
+tests/         regression, benchmark, metric, and model tests
 ```
 
-The notebook also exports PNG charts to:
+Key documents:
 
-```text
-reports/model_performance_dashboard/
-```
+- `docs/data-card.md`
+- `docs/model-card.md`
+- `docs/annotation-guide.md`
+- `docs/reproducibility.md`
+- `docs/pr-suggestion-diff-metrics.md`
 
-The preparation notebook writes rebuilt artifacts to `dataset_candidate/` first so the current `dataset/labels.csv` is not overwritten accidentally.
-
-## Script Evaluation
-
-Run the reusable evaluator from the repo root:
+## Development
 
 ```bash
-uv run --locked --extra structural pr-suggestion-evaluate
+uv run --locked --extra dev ruff check src tests
+uv run --locked --extra dev mypy \
+  src/pr_suggestion_metrics/diff \
+  src/pr_suggestion_metrics/benchmark \
+  src/pr_suggestion_metrics/modeling \
+  src/pr_suggestion_metrics/model_inference.py
+uv build
 ```
 
-It writes per-example scores to:
-
-```text
-reports/pr_suggestion_metric_scores.csv
-```
-
-Score CSVs include both coarse labels and granular percentage buckets:
-
-```text
-expected_landed_percentage
-expected_percentage_bucket
-predicted_percentage
-predicted_percentage_bucket
-```
-
-Buckets use `0` as its own bucket, then ten-point ranges: `1-10`, `11-20`, ..., `91-100`.
-
-## Metric Strategy
-
-Use the clone-detection framing described in:
-
-```text
-docs/pr-suggestion-diff-metrics.md
-```
-
-The current recommended stack is:
-
-```text
-exact normalized match
--> line recall
--> token recall
--> identifier-normalized token recall
--> GumTree / local Tree-sitter / AST features
--> embeddings for borderline cases
--> supervised classifier once features are stable
-```
-
-P1 language support is documented in:
-
-```text
-docs/p1-language-support-plan.md
-docs/p1-language-support-implementation.md
-```
-
-Current P1 behavior:
-
-- Jupyter Notebook files are compared by extracted code-cell source instead of raw `.ipynb` JSON.
-- HTML, Groovy, HCL, Shell, TypeScript, C, and JavaScript use language-aware tokenization when Pygments supports the file.
-- TypeScript, JavaScript, C, and HTML also have optional local Tree-sitter structural scoring.
+`uv.lock` is the dependency source of truth. Model files are intentionally not bundled in the wheel; callers must provide an explicit trusted `model_dir`.

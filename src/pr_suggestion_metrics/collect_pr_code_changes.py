@@ -23,7 +23,8 @@ from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 from pr_suggestion_metrics.private_collection_adapter import load_database_adapter, load_hdlf_adapter
-from pr_suggestion_metrics.scientific_contracts import FileSnapshot, SuggestionProvenance
+from pr_suggestion_metrics.diff.parser import parse_unified_diff
+from pr_suggestion_metrics.scientific_contracts import FileProvenance, FileSnapshot, SuggestionProvenance
 
 OutputFormat = Literal["table", "json", "csv", "jsonl"]
 
@@ -1448,6 +1449,22 @@ def _diff_has_renames(diff_text: str) -> bool:
     return "\nrename from " in diff_text or "\nrename to " in diff_text
 
 
+def _final_path_for_suggested_path(
+    path: str,
+    merged_pr_diff: str,
+) -> tuple[str | None, Literal["same", "renamed", "deleted"]]:
+    """Resolve a suggestion-time path through merged-PR rename/delete metadata."""
+    for file_diff in parse_unified_diff(merged_pr_diff).files:
+        if file_diff.old_path != path and file_diff.new_path != path:
+            continue
+        if file_diff.new_path is None:
+            return None, "deleted"
+        if file_diff.old_path is not None and file_diff.old_path != file_diff.new_path:
+            return file_diff.new_path, "renamed"
+        return file_diff.new_path, "same"
+    return path, "same"
+
+
 def _diff_touches_config(diff_text: str) -> bool:
     """Return True when changed paths look like config files."""
     config_suffixes = (
@@ -1561,37 +1578,70 @@ async def _collect_pairs(
                     }
                 )
                 snapshot_errors: list[str] = []
-                path = suggestion.provenance.path
                 base_revision = suggestion.provenance.original_commit_sha or suggestion.provenance.comment_commit_sha
                 final_revision = pr_json.get("merge_commit_sha")
-                if path and base_revision:
-                    cache_key = (repo.hostname, repo.owner, repo.repo, path, base_revision)
-                    try:
-                        if cache_key not in snapshot_cache:
-                            snapshot_cache[cache_key] = await _fetch_file_snapshot(
-                                client,
-                                repo=repo,
-                                token=token,
-                                path=path,
-                                revision_sha=base_revision,
+                parsed_suggestion = parse_unified_diff(suggestion.diff_text)
+                candidate_paths = [suggestion.provenance.path]
+                candidate_paths.extend(file_diff.canonical_path for file_diff in parsed_suggestion.files)
+                suggested_paths = list(dict.fromkeys(path for path in candidate_paths if path))
+                file_provenance: list[FileProvenance] = []
+                for suggested_path in suggested_paths:
+                    final_path, relation = _final_path_for_suggested_path(suggested_path, pr_diff)
+                    suggestion_snapshot: FileSnapshot | None = None
+                    final_snapshot: FileSnapshot | None = None
+                    if base_revision:
+                        cache_key = (repo.hostname, repo.owner, repo.repo, suggested_path, base_revision)
+                        try:
+                            if cache_key not in snapshot_cache:
+                                snapshot_cache[cache_key] = await _fetch_file_snapshot(
+                                    client,
+                                    repo=repo,
+                                    token=token,
+                                    path=suggested_path,
+                                    revision_sha=base_revision,
+                                )
+                            suggestion_snapshot = snapshot_cache[cache_key]
+                        except (httpx.HTTPError, ValueError) as exc:
+                            snapshot_errors.append(
+                                f"suggestion-time snapshot for {suggested_path}: {type(exc).__name__}: {exc}"
                             )
-                        provenance_data["suggestion_base_snapshot"] = snapshot_cache[cache_key].model_dump(mode="json")
-                    except (httpx.HTTPError, ValueError) as exc:
-                        snapshot_errors.append(f"suggestion-time snapshot: {type(exc).__name__}: {exc}")
-                if path and isinstance(final_revision, str):
-                    cache_key = (repo.hostname, repo.owner, repo.repo, path, final_revision)
-                    try:
-                        if cache_key not in snapshot_cache:
-                            snapshot_cache[cache_key] = await _fetch_file_snapshot(
-                                client,
-                                repo=repo,
-                                token=token,
-                                path=path,
-                                revision_sha=final_revision,
+                    if final_path and isinstance(final_revision, str):
+                        cache_key = (repo.hostname, repo.owner, repo.repo, final_path, final_revision)
+                        try:
+                            if cache_key not in snapshot_cache:
+                                snapshot_cache[cache_key] = await _fetch_file_snapshot(
+                                    client,
+                                    repo=repo,
+                                    token=token,
+                                    path=final_path,
+                                    revision_sha=final_revision,
+                                )
+                            final_snapshot = snapshot_cache[cache_key]
+                        except (httpx.HTTPError, ValueError) as exc:
+                            snapshot_errors.append(
+                                f"final-state snapshot for {final_path}: {type(exc).__name__}: {exc}"
                             )
-                        provenance_data["final_state_snapshot"] = snapshot_cache[cache_key].model_dump(mode="json")
-                    except (httpx.HTTPError, ValueError) as exc:
-                        snapshot_errors.append(f"final-state snapshot: {type(exc).__name__}: {exc}")
+                    file_provenance.append(
+                        FileProvenance(
+                            suggested_path=suggested_path,
+                            final_path=final_path,
+                            relation=relation,
+                            suggestion_base_snapshot=suggestion_snapshot,
+                            final_state_snapshot=final_snapshot,
+                        )
+                    )
+                provenance_data["files"] = [item.model_dump(mode="json") for item in file_provenance]
+                if len(file_provenance) == 1:
+                    provenance_data["suggestion_base_snapshot"] = (
+                        file_provenance[0].suggestion_base_snapshot.model_dump(mode="json")
+                        if file_provenance[0].suggestion_base_snapshot
+                        else None
+                    )
+                    provenance_data["final_state_snapshot"] = (
+                        file_provenance[0].final_state_snapshot.model_dump(mode="json")
+                        if file_provenance[0].final_state_snapshot
+                        else None
+                    )
                 provenance_data["collection_errors"] = snapshot_errors
                 provenance = SuggestionProvenance.model_validate(provenance_data)
 

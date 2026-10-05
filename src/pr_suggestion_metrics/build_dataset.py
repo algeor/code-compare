@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from pr_suggestion_metrics.scientific_contracts import SuggestionProvenance
+from pr_suggestion_metrics.scientific_contracts import BenchmarkCandidate, SuggestionProvenance
 
 HumanLabel = Literal["0%", "partial", "mostly", "100%"]
 PercentageBucket = Literal[
@@ -275,7 +275,29 @@ def _dataset_row(pair: RawPair) -> DatasetRow:
 
 def _write_jsonl(path: Path, rows: list[DatasetRow]) -> None:
     """Write dataset rows as JSONL."""
-    path.write_text("".join(row.model_dump_json(exclude_none=False) + "\n" for row in rows), encoding="utf-8")
+    path.write_text("".join(row.model_dump_json(exclude_none=True) + "\n" for row in rows), encoding="utf-8")
+
+
+def _write_benchmark_candidates(path: Path, rows: list[DatasetRow]) -> int:
+    """Write the dedicated label- and feature-free benchmark candidate contract."""
+    candidates: list[BenchmarkCandidate] = []
+    for row in rows:
+        provenance = row.suggestion_provenance
+        if provenance is None or not provenance.is_temporally_verified:
+            continue
+        candidates.append(
+            BenchmarkCandidate(
+                example_id=row.example_id,
+                repo=row.repo,
+                pr_url=row.pr_url,
+                pr_number=row.pr_number,
+                suggested_diff=row.suggested_diff,
+                landed_diff=row.landed_diff,
+                suggestion_provenance=provenance,
+            )
+        )
+    path.write_text("".join(candidate.model_dump_json() + "\n" for candidate in candidates), encoding="utf-8")
+    return len(candidates)
 
 
 def _write_labels_csv(path: Path, rows: list[DatasetRow]) -> None:
@@ -378,9 +400,11 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _write_jsonl(args.output_dir / "dataset.jsonl", rows)
+    candidate_count = _write_benchmark_candidates(args.output_dir / "benchmark_candidates.jsonl", rows)
     _write_labels_csv(args.output_dir / "labels.csv", rows)
     _write_summary(args.output_dir / "README.md", rows, len(pairs))
     print(f"Wrote {len(rows)} dataset row(s) to {args.output_dir}")
+    print(f"Wrote {candidate_count} provenance-complete benchmark candidate(s)")
     return 0
 
 

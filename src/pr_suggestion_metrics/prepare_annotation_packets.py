@@ -67,10 +67,14 @@ def prepare_annotation_packets(
 
     raw_examples = _read_jsonl(examples_path)
     for raw_example in raw_examples:
-        forbidden = sorted(_FORBIDDEN_KEYS & raw_example.keys())
+        forbidden = sorted(key for key in _FORBIDDEN_KEYS & raw_example.keys() if raw_example[key] is not None)
         if forbidden:
             raise ValueError(f"Annotation source contains forbidden label/model fields: {forbidden}")
-    examples = [BenchmarkExample.model_validate(row) for row in raw_examples]
+    cleaned_examples = [
+        {key: value for key, value in row.items() if not (key in _FORBIDDEN_KEYS and value is None)}
+        for row in raw_examples
+    ]
+    examples = [BenchmarkExample.model_validate(row) for row in cleaned_examples]
     if len({example.example_id for example in examples}) != len(examples):
         raise ValueError("Example IDs must be unique")
     for example in examples:

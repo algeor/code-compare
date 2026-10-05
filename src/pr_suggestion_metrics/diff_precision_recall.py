@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-import shlex
 from collections import Counter
 from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TypeVar
+
+from pr_suggestion_metrics.diff.parser import parse_unified_diff
 
 
 _WORD_TOKEN_PATTERN = re.compile(r"\w+", flags=re.UNICODE)
@@ -34,111 +35,47 @@ class PrecisionRecall:
 
 @dataclass(frozen=True)
 class DiffPrecisionRecallResult:
-    """Precision and recall for raw tokens, changed files, and changed lines."""
+    """Precision and recall for changed-code tokens, files, and path-aware lines."""
 
     token: PrecisionRecall
     file: PrecisionRecall
     line: PrecisionRecall
 
-    @property
-    def aggregate_f1(self) -> float:
-        """Return the equal-weight mean of token, file, and line F1 scores."""
-        return (self.token.f1 + self.file.f1 + self.line.f1) / 3
-
-
 def word_tokens(diff_text: str) -> Counter[str]:
-    """Return case-sensitive word-token occurrences from the raw unified diff."""
+    """Return tokens from non-blank changed code, excluding diff syntax and context."""
+    parsed = parse_unified_diff(diff_text)
+    return Counter(
+        token
+        for line in parsed.changed_lines
+        if line.text.strip()
+        for token in _WORD_TOKEN_PATTERN.findall(line.text)
+    )
+
+
+def raw_diff_word_tokens(diff_text: str) -> Counter[str]:
+    """Return legacy raw-diff tokens for explicitly named diagnostics only."""
     return Counter(_WORD_TOKEN_PATTERN.findall(diff_text))
 
 
 def changed_files(diff_text: str) -> set[str]:
     """Return canonical repository-relative paths from a unified diff."""
-    files: set[str] = set()
-    old_path: str | None = None
-    new_path: str | None = None
-    inside_hunk = False
-
-    def record_current_path() -> None:
-        canonical_path = new_path or old_path
-        if canonical_path is not None:
-            files.add(canonical_path)
-
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git "):
-            record_current_path()
-            old_path, new_path = _parse_git_header_paths(line)
-            inside_hunk = False
-            continue
-        if line.startswith("--- ") and _looks_like_diff_path(line[4:]):
-            record_current_path()
-            old_path = _normalize_diff_path(line[4:])
-            new_path = None
-            inside_hunk = False
-            continue
-        if not inside_hunk and line.startswith("+++ "):
-            new_path = _normalize_diff_path(line[4:])
-            continue
-        if line.startswith("@@"):
-            inside_hunk = True
-
-    record_current_path()
-    return files
+    return {
+        file_diff.canonical_path
+        for file_diff in parse_unified_diff(diff_text).files
+        if file_diff.canonical_path is not None
+    }
 
 
-def changed_lines(diff_text: str) -> Counter[tuple[str, str]]:
-    """Return stripped added and removed line occurrences, including polarity."""
-    lines: Counter[tuple[str, str]] = Counter()
-    old_path: str | None = None
-    new_path: str | None = None
-    inside_hunk = False
-
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git "):
-            old_path, new_path = _parse_git_header_paths(line)
-            inside_hunk = False
+def changed_lines(diff_text: str) -> Counter[tuple[str, str, str]]:
+    """Return path-aware, non-blank changed-line occurrences with polarity."""
+    lines: Counter[tuple[str, str, str]] = Counter()
+    for line in parse_unified_diff(diff_text).changed_lines:
+        normalized = line.text.strip()
+        if not normalized or line.path is None:
             continue
-        if line.startswith("--- ") and _looks_like_diff_path(line[4:]):
-            old_path = _normalize_diff_path(line[4:])
-            new_path = None
-            inside_hunk = False
-            continue
-        if not inside_hunk and line.startswith("+++ "):
-            new_path = _normalize_diff_path(line[4:])
-            continue
-        if line.startswith("@@"):
-            inside_hunk = True
-            continue
-        if not inside_hunk or line.startswith("\\"):
-            continue
-        if line.startswith("+") and new_path is not None:
-            lines[("added", line[1:].strip())] += 1
-        elif line.startswith("-") and old_path is not None:
-            lines[("removed", line[1:].strip())] += 1
+        operation = "added" if line.operation == "addition" else "removed"
+        lines[(operation, line.path, normalized)] += 1
     return lines
-
-
-def _parse_git_header_paths(line: str) -> tuple[str | None, str | None]:
-    try:
-        parts = shlex.split(line)
-    except ValueError:
-        return None, None
-    if len(parts) < 4:
-        return None, None
-    return _normalize_diff_path(parts[2]), _normalize_diff_path(parts[3])
-
-
-def _looks_like_diff_path(path: str) -> bool:
-    cleaned = path.strip()
-    return cleaned == "/dev/null" or cleaned.startswith(("a/", "b/"))
-
-
-def _normalize_diff_path(path: str) -> str | None:
-    cleaned = path.strip()
-    if cleaned == "/dev/null":
-        return None
-    if cleaned.startswith(("a/", "b/")):
-        return cleaned[2:]
-    return cleaned
 
 
 def _counter_precision_recall(draft: Counter[_Item], final: Counter[_Item]) -> PrecisionRecall:
@@ -166,7 +103,7 @@ def _set_precision_recall(draft: Collection[_Item], final: Collection[_Item]) ->
 
 
 def compare_diffs(draft_diff: str, final_diff: str) -> DiffPrecisionRecallResult:
-    """Compare raw unified diffs at token, changed-file, and changed-line levels.
+    """Compare unified diffs at changed-code token, file, and changed-line levels.
 
     Precision uses the draft as denominator: how much of the draft was kept.
     Recall uses the final diff as denominator: how much of the final was already

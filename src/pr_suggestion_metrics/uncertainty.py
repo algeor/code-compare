@@ -23,7 +23,7 @@ class UncertaintyCalibration(BaseModel):
 
     manifest_version: int = 1
     created_at_utc: str
-    method: str = "split_conformal_absolute_residual"
+    method: str = "grouped_split_conformal_max_residual"
     alpha: float = Field(gt=0.0, lt=1.0)
     residual_quantile: float = Field(ge=0.0)
     calibration_rows: int = Field(ge=1)
@@ -55,6 +55,30 @@ def conformal_residual_quantile(
     residuals = np.sort(np.abs(actual_array - predicted_array))
     rank = min(len(residuals), math.ceil((len(residuals) + 1) * (1.0 - alpha)))
     return float(residuals[rank - 1])
+
+
+def clustered_conformal_residual_quantile(
+    actual: np.ndarray | list[float],
+    predicted: np.ndarray | list[float],
+    groups: np.ndarray | list[object],
+    *,
+    alpha: float,
+) -> float:
+    """Calibrate over independent groups using each group's maximum residual."""
+    actual_array = np.asarray(actual, dtype=float)
+    predicted_array = np.asarray(predicted, dtype=float)
+    group_array = np.asarray(groups, dtype=object)
+    if len(group_array) != len(actual_array):
+        raise ValueError("groups must have the same length as actual and predicted")
+    group_residuals = [
+        float(np.max(np.abs(actual_array[group_array == group] - predicted_array[group_array == group])))
+        for group in dict.fromkeys(group_array.tolist())
+    ]
+    return conformal_residual_quantile(
+        np.zeros(len(group_residuals), dtype=float),
+        group_residuals,
+        alpha=alpha,
+    )
 
 
 def apply_conformal_intervals(predicted: np.ndarray | list[float], residual_quantile: float) -> np.ndarray:
@@ -90,7 +114,7 @@ def write_uncertainty_calibration(
     minimum_groups: int = 20,
 ) -> Path:
     """Fit and write calibration from a dedicated, non-test feature table."""
-    from pr_suggestion_metrics.model_inference import predict_coverage_percentages
+    from pr_suggestion_metrics.model_inference import _percentage_prediction_frame
 
     rows = pd.read_csv(calibration_path)
     missing = [column for column in (target_column, group_column) if column not in rows.columns]
@@ -107,8 +131,13 @@ def write_uncertainty_calibration(
     actual = pd.to_numeric(rows[target_column], errors="raise").to_numpy(dtype=float)
     if np.any((actual < 0) | (actual > 100)):
         raise ValueError("Calibration targets must be between 0 and 100")
-    predictions = predict_coverage_percentages(rows, model_dir=model_dir)["model_predicted_percentage"].to_numpy()
-    quantile = conformal_residual_quantile(actual, predictions, alpha=alpha)
+    predictions = _percentage_prediction_frame(rows, model_dir=model_dir)["model_raw_percentage"].to_numpy()
+    quantile = clustered_conformal_residual_quantile(
+        actual,
+        predictions,
+        rows[group_column].astype(str).to_numpy(),
+        alpha=alpha,
+    )
     manifest = verify_model_manifest(model_dir)
     calibration = UncertaintyCalibration(
         created_at_utc=datetime.now(UTC).isoformat(),

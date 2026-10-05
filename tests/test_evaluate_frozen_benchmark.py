@@ -5,11 +5,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pr_suggestion_metrics.evaluate_frozen_benchmark import evaluate_frozen_benchmark
+import numpy as np
+
+from pr_suggestion_metrics.evaluate_frozen_benchmark import _grouped_bootstrap_intervals, evaluate_frozen_benchmark
 from pr_suggestion_metrics.model_artifacts import sha256_file
 
 
 class EvaluateFrozenBenchmarkTest(unittest.TestCase):
+    def test_grouped_bootstrap_returns_metric_intervals(self) -> None:
+        intervals = _grouped_bootstrap_intervals(
+            np.array([0.0, 10.0, 90.0, 100.0]),
+            np.array([5.0, 15.0, 85.0, 95.0]),
+            np.array(["pr-1", "pr-1", "pr-2", "pr-2"], dtype=object),
+            iterations=50,
+            seed=7,
+        )
+
+        self.assertIn("mae", intervals)
+        self.assertLessEqual(intervals["mae"]["lower_95"], intervals["mae"]["upper_95"])
+
     def test_confirmatory_test_can_only_be_consumed_once(self) -> None:
         model_dir = Path(__file__).resolve().parents[1] / "models" / "pr_suggestion_coverage_regression"
         suggestion = """diff --git a/example.py b/example.py

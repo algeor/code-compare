@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from pr_suggestion_metrics.diff.parser import parse_unified_diff
+
 
 ChangeKind = Literal["addition", "deletion", "rename"]
-_DIFF_HEADER = re.compile(r"^diff --git a/(.*?) b/(.*)$")
-
-
 class ChangeUnit(BaseModel):
     """One changed line or rename operation extracted from a unified diff."""
 
@@ -21,6 +19,10 @@ class ChangeUnit(BaseModel):
     path: str
     text: str
     hunk_index: int
+    old_path: str | None = None
+    new_path: str | None = None
+    source_line: int | None = None
+    target_line: int | None = None
 
 
 class ChangeUnitMatch(BaseModel):
@@ -55,12 +57,19 @@ def _normalize_change_text(text: str) -> str:
 def extract_change_units(diff_text: str, *, prefix: str) -> list[ChangeUnit]:
     """Extract additions, deletions, and explicit renames from a unified diff."""
     units: list[ChangeUnit] = []
-    old_path = "unknown"
-    new_path = "unknown"
-    rename_from: str | None = None
-    hunk_index = 0
+    parsed = parse_unified_diff(diff_text)
 
-    def append_unit(kind: ChangeKind, path: str, text: str) -> None:
+    def append_unit(
+        kind: ChangeKind,
+        path: str,
+        text: str,
+        *,
+        hunk_index: int,
+        old_path: str | None,
+        new_path: str | None,
+        source_line: int | None = None,
+        target_line: int | None = None,
+    ) -> None:
         normalized = _normalize_change_text(text)
         if not normalized:
             return
@@ -71,40 +80,35 @@ def extract_change_units(diff_text: str, *, prefix: str) -> list[ChangeUnit]:
                 path=path,
                 text=normalized,
                 hunk_index=hunk_index,
+                old_path=old_path,
+                new_path=new_path,
+                source_line=source_line,
+                target_line=target_line,
             )
         )
 
-    for line in diff_text.splitlines():
-        header = _DIFF_HEADER.match(line)
-        if header:
-            old_path, new_path = header.groups()
-            rename_from = None
-            continue
-        if line.startswith("--- "):
-            value = line[4:].strip()
-            old_path = value[2:] if value.startswith("a/") else value
-            continue
-        if line.startswith("+++ "):
-            value = line[4:].strip()
-            new_path = value[2:] if value.startswith("b/") else value
-            continue
-        if line.startswith("rename from "):
-            rename_from = line.removeprefix("rename from ").strip()
-            continue
-        if line.startswith("rename to "):
-            rename_to = line.removeprefix("rename to ").strip()
-            if rename_from:
-                append_unit("rename", rename_to, f"{rename_from} -> {rename_to}")
-            old_path, new_path = rename_from or old_path, rename_to
-            rename_from = None
-            continue
-        if line.startswith("@@"):
-            hunk_index += 1
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            append_unit("addition", new_path, line[1:])
-        elif line.startswith("-") and not line.startswith("---"):
-            append_unit("deletion", old_path, line[1:])
+    for file_diff in parsed.files:
+        if file_diff.rename_from and file_diff.rename_to:
+            append_unit(
+                "rename",
+                file_diff.rename_to,
+                f"{file_diff.rename_from} -> {file_diff.rename_to}",
+                hunk_index=0,
+                old_path=file_diff.rename_from,
+                new_path=file_diff.rename_to,
+            )
+        for line in file_diff.changed_lines:
+            path = line.path or "unknown"
+            append_unit(
+                "addition" if line.operation == "addition" else "deletion",
+                path,
+                line.text,
+                hunk_index=line.hunk_index,
+                old_path=line.old_path,
+                new_path=line.new_path,
+                source_line=line.old_line_number,
+                target_line=line.new_line_number,
+            )
     return units
 
 
