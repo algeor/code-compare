@@ -159,6 +159,7 @@ Key documents:
 - `docs/annotation-guide.md`
 - `docs/reproducibility.md`
 - `docs/pr-suggestion-diff-metrics.md`
+- `docs/migration-1808e1c.md`
 
 ## Development
 
