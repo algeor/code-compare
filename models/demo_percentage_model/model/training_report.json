@@ -1,0 +1,74 @@
+{
+  "calibration_rows_reserved": 50,
+  "candidate_results": [
+    {
+      "development_metrics": {
+        "dangerous_error_rate": 0.02,
+        "percentage_mae": 16.38,
+        "percentage_rmse": 27.101660465735304,
+        "r2": 0.41563151099472007,
+        "within_10_points": 0.58,
+        "within_5_points": 0.52
+      },
+      "model_name": "random_forest"
+    },
+    {
+      "development_metrics": {
+        "dangerous_error_rate": 0.02,
+        "percentage_mae": 16.24,
+        "percentage_rmse": 26.347675419285096,
+        "r2": 0.44769420685164696,
+        "within_10_points": 0.54,
+        "within_5_points": 0.44
+      },
+      "model_name": "extra_trees"
+    },
+    {
+      "development_metrics": {
+        "dangerous_error_rate": 0.02,
+        "percentage_mae": 18.52,
+        "percentage_rmse": 28.983443549723347,
+        "r2": 0.33166384546767147,
+        "within_10_points": 0.5,
+        "within_5_points": 0.34
+      },
+      "model_name": "gradient_boosting"
+    }
+  ],
+  "development_rows": 50,
+  "feature_columns": [
+    "line_recall",
+    "token_recall",
+    "identifier_normalized_token_recall",
+    "literal_normalized_token_recall",
+    "identifier_and_literal_normalized_token_recall",
+    "best_added_line_overlap",
+    "best_hunk_token_recall",
+    "best_hunk_token_precision",
+    "best_hunk_token_f1",
+    "best_hunk_identifier_normalized_recall",
+    "best_hunk_literal_normalized_recall",
+    "best_hunk_identifier_and_literal_normalized_recall",
+    "best_hunk_contiguous_line_ratio",
+    "best_hunk_token_lcs_recall",
+    "best_hunk_size_ratio",
+    "meaningful_anchor_recall",
+    "meaningful_anchor_count",
+    "best_hunk_size",
+    "candidate_hunk_count",
+    "structural_similarity",
+    "structural_node_recall",
+    "exact_normalized_match",
+    "structural_available",
+    "suggestion_language",
+    "tokenizer",
+    "best_hunk_candidate_type",
+    "structural_engine",
+    "structural_language"
+  ],
+  "features_sha256": "22bd8ad2500025315f529eb0221b8db59381eba43ac58f4b56ad67dea40bbc47",
+  "normalization_policy_version": "1.0",
+  "schema_version": "1.0",
+  "selected_model": "extra_trees",
+  "train_rows": 177
+}

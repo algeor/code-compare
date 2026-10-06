@@ -1,0 +1,8 @@
+{
+  "candidates": [
+    "random_forest",
+    "extra_trees",
+    "gradient_boosting"
+  ],
+  "random_state": 42
+}
