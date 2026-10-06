@@ -12,7 +12,7 @@ def test_analyze_for_demo_returns_summary_and_raw_payload() -> None:
     assert "<div class=\"result-cards\">" in summary
     assert "<span>Status</span><strong>✅ Predicted</strong>" in summary
     assert "<span>Uncertainty</span><strong>N/A</strong>" in summary
-    assert "Extra merged PR lines are ignored" in summary
+    assert "All scored suggestion change lines were found" in summary
     assert "**Input fingerprint:**" in summary
     assert "## Versions" in summary
     assert "weak local Phase 5-derived labels" in summary

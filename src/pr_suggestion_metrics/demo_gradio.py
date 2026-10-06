@@ -54,7 +54,11 @@ def analyze_for_demo(
         explanation_version=result.model_versions["explanation_model_version"],
         explanation_summary=result.explanation.summary,
         input_fingerprint=input_fingerprint,
-        ignores_extra_merged_lines=evidence.matched_units == evidence.total_suggested_units,
+        scope_note=_scope_note(
+            suggested_diff,
+            merged_pr_diff,
+            all_scored_units_matched=evidence.matched_units == evidence.total_suggested_units,
+        ),
     )
     return summary, json.dumps(
         _json_payload(result.model_dump(mode="json"), input_fingerprint=input_fingerprint),
@@ -75,20 +79,15 @@ def _summary_markdown(
     explanation_version: str,
     explanation_summary: str,
     input_fingerprint: str,
-    ignores_extra_merged_lines: bool,
+    scope_note: str,
 ) -> str:
     badge = "✅ Predicted" if status == "predicted" else "⚠️ Abstained"
-    scope_note = (
-        "All suggested units were found. Extra merged PR lines are ignored because coverage measures suggestion adoption."
-        if ignores_extra_merged_lines
-        else "Some suggested units were not found in the merged PR diff."
-    )
     return f"""## Result
 
 <div class="result-cards">
   <div class="result-card"><span>Status</span><strong>{badge}</strong></div>
   <div class="result-card"><span>Coverage</span><strong>{percentage_text}</strong></div>
-  <div class="result-card"><span>Exact Evidence</span><strong>{matched_units}/{total_units}</strong></div>
+  <div class="result-card"><span>Scored Changes</span><strong>{matched_units}/{total_units}</strong></div>
   <div class="result-card"><span>Uncertainty</span><strong>{uncertainty_text}</strong></div>
 </div>
 
@@ -113,6 +112,35 @@ def _uncertainty_text(status: str, lower: int | None, upper: int | None) -> str:
     if status == "calibrated" and lower is not None and upper is not None:
         return f"{lower}–{upper}%"
     return "N/A"
+
+
+def _scope_note(suggested_diff: str, merged_pr_diff: str, *, all_scored_units_matched: bool) -> str:
+    base = (
+        "All scored suggestion change lines were found in the merged PR diff."
+        if all_scored_units_matched
+        else "Some scored suggestion change lines were not found in the merged PR diff."
+    )
+    suggested_plain_lines = _plain_unscored_lines(suggested_diff)
+    merged_plain_lines = _plain_unscored_lines(merged_pr_diff)
+    if suggested_plain_lines or merged_plain_lines:
+        if suggested_plain_lines != merged_plain_lines:
+            return f"{base} Plain/context lines differ and are not included in this percentage."
+        return f"{base} Plain/context lines are displayed but are not included in this percentage."
+    return f"{base} Extra merged PR lines are not counted against suggestion coverage."
+
+
+def _plain_unscored_lines(diff_text: str) -> list[str]:
+    plain_lines: list[str] = []
+    for line in diff_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if line.startswith(("diff --git", "index ", "@@", "--- ", "+++ ", "+", "-", " ", "\\")):
+            continue
+        if stripped.startswith(("new file mode", "deleted file mode", "rename from", "rename to", "similarity index")):
+            continue
+        plain_lines.append(stripped)
+    return plain_lines
 
 
 def _input_fingerprint(suggested_diff: str, merged_pr_diff: str) -> str:
