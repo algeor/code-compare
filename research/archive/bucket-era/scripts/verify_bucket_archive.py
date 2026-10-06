@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-ARCHIVE_ROOT = REPOSITORY_ROOT / "research" / "archive" / "bucket-era"
+ARCHIVE_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ARCHIVE_ROOT / "archive_manifest.json"
+TOOLING_DIRECTORIES = {"scripts"}
 
 
 def _section_inventory(section: str) -> dict[str, Any]:
@@ -44,7 +44,9 @@ def main() -> int:
             failures.append(f"{section}: expected {expected}, received {actual}")
 
     unexpected_sections = sorted(
-        path.name for path in ARCHIVE_ROOT.iterdir() if path.is_dir() and path.name not in expected_sections
+        path.name
+        for path in ARCHIVE_ROOT.iterdir()
+        if path.is_dir() and path.name not in expected_sections and path.name not in TOOLING_DIRECTORIES
     )
     if unexpected_sections:
         failures.append(f"unexpected sections: {unexpected_sections}")

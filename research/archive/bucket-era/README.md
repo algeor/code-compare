@@ -28,7 +28,7 @@ These files are retained for research provenance only. Do not copy their bucket 
 Verify the archive from the repository root:
 
 ```bash
-python3 scripts/verify_bucket_archive.py
+python3 research/archive/bucket-era/scripts/verify_bucket_archive.py
 ```
 
 CI runs the same verifier so accidental edits, additions, or removals fail closed until the manifest is intentionally updated.

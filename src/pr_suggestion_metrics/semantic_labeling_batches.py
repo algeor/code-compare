@@ -35,7 +35,7 @@ LABEL_COLUMNS = [
     "landed_files",
 ]
 
-_DEFAULT_PROMPT_PATH = _REPOSITORY_ROOT / "docs" / "prompts" / "llm_semantic_percentage_labeling_prompt.md"
+_DEFAULT_PROMPT_PATH = _REPOSITORY_ROOT / "research" / "prompts" / "llm_semantic_percentage_labeling_prompt.md"
 
 
 @dataclass(frozen=True)
