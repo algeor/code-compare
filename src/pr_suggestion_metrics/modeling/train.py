@@ -17,6 +17,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from pr_suggestion_metrics.feature_preprocessing import coerce_boolean_series, coerce_numeric_series
+from pr_suggestion_metrics.features.policy import NORMALIZATION_POLICY_VERSION
 from pr_suggestion_metrics.model_artifacts import sha256_file, write_model_manifest
 from pr_suggestion_metrics.modeling.common import (
     BOOLEAN_FEATURES,
@@ -42,7 +43,7 @@ _SUPPORTED_CANDIDATES = {"random_forest", "extra_trees", "gradient_boosting"}
 
 
 def _validate_training_rows(rows: pd.DataFrame) -> pd.DataFrame:
-    required = {"split", "coverage_percentage", "group_id"}
+    required = {"split", "coverage_percentage", "group_id", "normalization_policy_version"}
     missing = sorted(required - set(rows.columns))
     if missing:
         raise ValueError(f"Feature table is missing required columns: {missing}")
@@ -71,6 +72,15 @@ def _validate_training_rows(rows: pd.DataFrame) -> pd.DataFrame:
     if not np.isfinite(targets).all() or np.any((targets < 0) | (targets > 100)):
         raise ValueError("Feature table coverage_percentage values must be finite and between 0 and 100")
     validated["coverage_percentage"] = targets
+
+    policy_versions = validated["normalization_policy_version"].astype("string").str.strip()
+    if policy_versions.isna().any() or not policy_versions.eq(NORMALIZATION_POLICY_VERSION).all():
+        received = sorted(policy_versions.dropna().unique().tolist())
+        raise ValueError(
+            "Feature table normalization_policy_version must contain only "
+            f"{NORMALIZATION_POLICY_VERSION!r}; received {received}"
+        )
+    validated["normalization_policy_version"] = policy_versions.astype(str)
 
     split_counts = validated.groupby("group_id", sort=False)["split"].nunique()
     overlapping_groups = split_counts[split_counts > 1].index.tolist()
@@ -224,10 +234,11 @@ def train_from_frozen_features(
     model_dir.mkdir(parents=True, exist_ok=False)
     joblib.dump(final_model, model_dir / "model.joblib")
     schema = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "model_name": selected_name,
         "prediction_type": "percentage_regression",
         "prediction_output": "0-100 raw and rounded percentage",
+        "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
         "selection_policy": "lowest development MAE; test rows inaccessible to trainer",
         "numeric_features": numeric,
         "boolean_features": boolean,
@@ -243,6 +254,7 @@ def train_from_frozen_features(
     report = {
         "schema_version": "1.0",
         "features_sha256": sha256_file(features_path),
+        "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
         "train_rows": len(train_rows),
         "development_rows": len(development_rows),
         "calibration_rows_reserved": int(rows["split"].eq("calibration").sum()),

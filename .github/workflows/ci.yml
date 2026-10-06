@@ -37,5 +37,5 @@ jobs:
           from pr_suggestion_metrics import CoverageResult, predict_coverage_from_diffs
 
           assert inspect.signature(predict_coverage_from_diffs).parameters["model_dir"].default is inspect.Parameter.empty
-          assert CoverageResult.model_fields["result_schema_version"].default == "1.0"
+          assert CoverageResult.model_fields["result_schema_version"].default == "1.1"
           PY

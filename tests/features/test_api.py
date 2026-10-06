@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from pr_suggestion_metrics import evaluate_metrics
 from pr_suggestion_metrics.features import (
     MetricResult,
+    RawDiffAssessment,
+    assess_raw_diff,
     metric_result_to_feature_row,
     raw_diff_support_issues,
     score_diff_pair,
@@ -59,3 +61,52 @@ def test_structural_node_types_is_public() -> None:
     assert error == ""
     assert engine == "python_ast"
     assert "Assign" in nodes
+
+
+def test_raw_diff_assessment_composes_parser_and_shape_support() -> None:
+    malformed_replacement = """--- a/example.py
++++ b/example.py
+@@ -1,1 +1,2 @@
+-old
++new
+"""
+
+    assessment = assess_raw_diff(malformed_replacement)
+
+    assert isinstance(assessment, RawDiffAssessment)
+    assert assessment.status == "invalid"
+    assert [diagnostic.code for diagnostic in assessment.diagnostics] == ["incomplete_hunk"]
+    assert assessment.support_issues == (
+        "suggestion deletions and replacements are not yet supported",
+    )
+    assert raw_diff_support_issues(malformed_replacement) == list(assessment.reasons)
+
+
+def test_suggestion_fragment_bare_hunk_is_valid_and_scoreable() -> None:
+    fragment = """--- a/example.py
++++ b/example.py
+@@
++value = 1
+"""
+
+    assessment = assess_raw_diff(fragment)
+    result = score_diff_pair(fragment, SUGGESTED_DIFF)
+
+    assert assessment.status == "valid"
+    assert assessment.dialect == "suggestion_fragment"
+    assert assessment.diagnostics == ()
+    assert result.predicted_percentage == 100
+
+
+def test_merged_diff_uses_strict_git_unified_dialect() -> None:
+    bare_fragment = """--- a/example.py
++++ b/example.py
+@@
++value = 1
+"""
+
+    assessment = assess_raw_diff(bare_fragment, source="merged_pr_diff")
+
+    assert assessment.status == "invalid"
+    assert assessment.dialect == "git_unified"
+    assert [diagnostic.code for diagnostic in assessment.diagnostics] == ["malformed_hunk_header"]

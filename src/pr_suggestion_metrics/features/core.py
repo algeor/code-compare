@@ -13,6 +13,7 @@ from pr_suggestion_metrics.features import lexical as _lexical
 from pr_suggestion_metrics.features import matching as _matching
 from pr_suggestion_metrics.features import scoring as _scoring
 from pr_suggestion_metrics.features.scoring import (
+    assess_raw_diff,
     metric_result_to_feature_row,
     raw_diff_support_issues,
     score_diff_pair,
@@ -21,6 +22,9 @@ from pr_suggestion_metrics.features.scoring import (
 
 CandidateHunk = _contracts.CandidateHunk
 MetricResult = _contracts.MetricResult
+RawDiffAssessment = _contracts.RawDiffAssessment
+RawDiffAssessmentStatus = _contracts.RawDiffAssessmentStatus
+RawDiffSource = _contracts.RawDiffSource
 ScoringExample = _contracts.ScoringExample
 ScoringInput = _contracts.ScoringInput
 TokenizedText = _contracts.TokenizedText
@@ -28,6 +32,10 @@ _score_example = score_example
 
 __all__ = [
     "MetricResult",
+    "RawDiffAssessment",
+    "RawDiffAssessmentStatus",
+    "RawDiffSource",
+    "assess_raw_diff",
     "metric_result_to_feature_row",
     "raw_diff_support_issues",
     "score_diff_pair",

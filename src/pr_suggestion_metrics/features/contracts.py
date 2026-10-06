@@ -3,7 +3,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
+
+from pr_suggestion_metrics.diff.parser import DiffDiagnostic, DiffDialect
+
+
+RawDiffAssessmentStatus = Literal["valid", "invalid", "valid_but_unsupported"]
+RawDiffSource = Literal["suggested_diff", "merged_pr_diff"]
+
+
+@dataclass(frozen=True)
+class RawDiffAssessment:
+    """Feature-level validity and applicability assessment for one raw diff."""
+
+    source: RawDiffSource
+    dialect: DiffDialect
+    status: RawDiffAssessmentStatus
+    diagnostics: tuple[DiffDiagnostic, ...]
+    support_issues: tuple[str, ...]
+
+    @property
+    def reasons(self) -> tuple[str, ...]:
+        """Return stable parser and shape-support reasons for compatibility APIs."""
+        diagnostic_reasons = tuple(
+            f"{self.source} is invalid [{diagnostic.code}]: {diagnostic.message}"
+            for diagnostic in self.diagnostics
+        )
+        return diagnostic_reasons + self.support_issues
 
 class ScoringInput(Protocol):
     """Narrow input contract required by deterministic scoring."""

@@ -15,8 +15,10 @@ from pydantic import BaseModel, Field
 
 from pr_suggestion_metrics.feature_preprocessing import coerce_boolean_series, coerce_numeric_series
 from pr_suggestion_metrics.diff_semantics import ChangeCoverageEvidence, analyze_change_coverage
+from pr_suggestion_metrics.features.policy import NORMALIZATION_POLICY_VERSION, NormalizationPolicyVersion
 from pr_suggestion_metrics.model_artifacts import verify_model_manifest
 from pr_suggestion_metrics.percentages import round_bounded_percentage
+from pr_suggestion_metrics.features.contracts import RawDiffAssessment
 from pr_suggestion_metrics.uncertainty import apply_conformal_intervals, load_uncertainty_calibration
 
 
@@ -51,11 +53,17 @@ def _validate_feature_schema(schema: Any) -> dict[str, Any]:
         raise ValueError("Feature schema feature_columns must match the typed feature lists")
 
     schema_version = validated.get("schema_version")
-    if schema_version is not None and schema_version != "1.0":
+    if schema_version != "1.1":
         raise ValueError(f"Unsupported feature schema version: {schema_version!r}")
     model_name = validated.get("model_name")
     if model_name is not None and (not isinstance(model_name, str) or not model_name.strip()):
         raise ValueError("Feature schema model_name must be a non-empty string when present")
+    normalization_policy_version = validated.get("normalization_policy_version")
+    if normalization_policy_version != NORMALIZATION_POLICY_VERSION:
+        raise ValueError(
+            "Feature schema normalization_policy_version must match the runtime policy "
+            f"{NORMALIZATION_POLICY_VERSION!r}; received {normalization_policy_version!r}"
+        )
     return validated
 
 
@@ -72,7 +80,8 @@ class CoverageUncertainty(BaseModel):
 class CoverageResult(BaseModel):
     """Versioned result contract for raw-diff coverage inference."""
 
-    result_schema_version: Literal["1.0"] = "1.0"
+    result_schema_version: Literal["1.1"] = "1.1"
+    normalization_policy_version: NormalizationPolicyVersion = NORMALIZATION_POLICY_VERSION
     metric_name: Literal["suggestion_coverage_percentage"] = "suggestion_coverage_percentage"
     status: Literal["predicted", "abstained"]
     example_id: str | None = None
@@ -81,6 +90,8 @@ class CoverageResult(BaseModel):
     model_raw_percentage: float | None = Field(default=None, ge=0, le=100)
     heuristic_coverage_score: int | None = Field(default=None, ge=0, le=100)
     change_coverage_evidence: ChangeCoverageEvidence
+    suggested_diff_assessment: RawDiffAssessment | None = None
+    merged_pr_diff_assessment: RawDiffAssessment | None = None
     uncertainty: CoverageUncertainty
     applicability_reasons: list[str] = Field(default_factory=list)
     input_hashes: dict[str, str]
@@ -118,6 +129,8 @@ def load_model_bundle(model_dir: Path) -> tuple[Any, dict[str, Any]]:
     schema_model_name = schema.get("model_name")
     if manifest_model_name != schema_model_name:
         raise ValueError("Model manifest model_name does not match the feature schema")
+    if manifest.get("normalization_policy_version") != schema["normalization_policy_version"]:
+        raise ValueError("Model manifest normalization policy does not match the feature schema")
     model = joblib.load(model_path)
     return model, schema
 
@@ -230,26 +243,39 @@ def predict_coverage_from_diffs(
     renames, and multi-file or multi-hunk suggestions until those semantics are modeled.
     """
     from pr_suggestion_metrics.features import (
+        assess_raw_diff,
         metric_result_to_feature_row,
-        raw_diff_support_issues,
         score_diff_pair,
     )
 
-    support_issues = raw_diff_support_issues(suggested_diff)
+    suggested_assessment = assess_raw_diff(suggested_diff)
+    merged_assessment = assess_raw_diff(merged_pr_diff, source="merged_pr_diff")
     deterministic_evidence = analyze_change_coverage(suggested_diff, merged_pr_diff)
     input_hashes = {
         "suggested_diff_sha256": sha256(suggested_diff.encode("utf-8")).hexdigest(),
         "merged_pr_diff_sha256": sha256(merged_pr_diff.encode("utf-8")).hexdigest(),
     }
-    if support_issues:
+    blocking_assessments = [
+        assessment
+        for assessment in (suggested_assessment, merged_assessment)
+        if assessment.status != "valid"
+    ]
+    applicability_reasons = [
+        reason
+        for assessment in blocking_assessments
+        for reason in assessment.reasons
+    ]
+    if blocking_assessments:
         return CoverageResult(
             example_id=example_id,
             status="abstained",
             change_coverage_evidence=deterministic_evidence,
+            suggested_diff_assessment=suggested_assessment,
+            merged_pr_diff_assessment=merged_assessment,
             uncertainty=CoverageUncertainty(status="unavailable", reason="model abstained"),
-            applicability_reasons=support_issues,
+            applicability_reasons=applicability_reasons,
             input_hashes=input_hashes,
-            warnings=support_issues,
+            warnings=applicability_reasons,
         )
 
     metric_result = score_diff_pair(suggested_diff, merged_pr_diff, enable_gumtree=enable_gumtree)
@@ -280,6 +306,8 @@ def predict_coverage_from_diffs(
         model_raw_percentage=float(prediction.iloc[0]["model_raw_percentage"]),
         heuristic_coverage_score=metric_result.predicted_percentage,
         change_coverage_evidence=deterministic_evidence,
+        suggested_diff_assessment=suggested_assessment,
+        merged_pr_diff_assessment=merged_assessment,
         uncertainty=uncertainty,
         input_hashes=input_hashes,
         artifact_hashes={

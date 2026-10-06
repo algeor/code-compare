@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from pr_suggestion_metrics.diff.parser import parse_unified_diff
-from pr_suggestion_metrics.features.contracts import MetricResult, ScoringExample, ScoringInput
+from pr_suggestion_metrics.diff.parser import DiffDialect, assess_unified_diff
+from pr_suggestion_metrics.features.contracts import (
+    MetricResult,
+    RawDiffAssessment,
+    RawDiffAssessmentStatus,
+    RawDiffSource,
+    ScoringExample,
+    ScoringInput,
+)
 from pr_suggestion_metrics.features.gumtree import gumtree_features_by_file
 from pr_suggestion_metrics.features.lexical import (
     calculate_best_added_line_overlap,
@@ -130,12 +137,12 @@ def score_example(example: ScoringInput, *, enable_gumtree: bool) -> MetricResul
         predicted_percentage=predicted_percentage,
     )
 
-def raw_diff_support_issues(suggested_diff: str) -> list[str]:
-    """Return reasons why a suggestion diff is outside the currently supported inference domain."""
+def _suggestion_shape_support_issues(suggested_diff: str) -> list[str]:
+    """Return existing suggestion-shape reasons without parser validity concerns."""
     issues: list[str] = []
     added_lines_by_file = added_lines_by_file_from_diff(suggested_diff)
     files_with_additions = [path for path, lines in added_lines_by_file.items() if non_empty_normalized_lines(lines)]
-    parsed = parse_unified_diff(suggested_diff)
+    parsed = assess_unified_diff(suggested_diff, dialect="suggestion_fragment").parsed_diff
     removed_lines = [line for line in parsed.changed_lines if line.operation == "deletion" and line.text.strip()]
     hunk_count = parsed.hunk_count
 
@@ -153,11 +160,47 @@ def raw_diff_support_issues(suggested_diff: str) -> list[str]:
         issues.append("renamed suggestion files are not yet supported")
     return issues
 
+
+def assess_raw_diff(
+    diff_text: str,
+    *,
+    source: RawDiffSource = "suggested_diff",
+) -> RawDiffAssessment:
+    """Assess parser validity and current feature applicability for one raw diff."""
+    dialect: DiffDialect = "suggestion_fragment" if source == "suggested_diff" else "git_unified"
+    parser_assessment = assess_unified_diff(diff_text, dialect=dialect)
+    support_issues = (
+        tuple(_suggestion_shape_support_issues(diff_text))
+        if source == "suggested_diff"
+        else ()
+    )
+    if not parser_assessment.is_valid:
+        status: RawDiffAssessmentStatus = "invalid"
+    elif support_issues:
+        status = "valid_but_unsupported"
+    else:
+        status = "valid"
+    return RawDiffAssessment(
+        source=source,
+        dialect=dialect,
+        status=status,
+        diagnostics=parser_assessment.diagnostics,
+        support_issues=support_issues,
+    )
+
+
+def raw_diff_support_issues(suggested_diff: str) -> list[str]:
+    """Project typed suggestion assessment reasons into the legacy list API."""
+    return list(assess_raw_diff(suggested_diff).reasons)
+
 def score_diff_pair(suggested_diff: str, merged_pr_diff: str, *, enable_gumtree: bool = False) -> MetricResult:
     """Compute deterministic model features for a supported suggestion/merged-PR diff pair."""
-    support_issues = raw_diff_support_issues(suggested_diff)
-    if support_issues:
-        raise ValueError("Unsupported suggestion diff: " + "; ".join(support_issues))
+    suggested_assessment = assess_raw_diff(suggested_diff)
+    if suggested_assessment.status != "valid":
+        raise ValueError("Unsupported suggestion diff: " + "; ".join(suggested_assessment.reasons))
+    merged_assessment = assess_raw_diff(merged_pr_diff, source="merged_pr_diff")
+    if merged_assessment.status != "valid":
+        raise ValueError("Invalid merged PR diff: " + "; ".join(merged_assessment.reasons))
 
     suggested_lines_by_file = added_lines_by_file_from_diff(suggested_diff)
     landed_lines_by_file = added_lines_by_file_from_diff(merged_pr_diff)

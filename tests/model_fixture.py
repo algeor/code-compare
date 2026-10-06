@@ -17,9 +17,10 @@ def write_percentage_model(root: Path) -> Path:
     model = DummyRegressor(strategy="constant", constant=50).fit(features, [0.0, 100.0])
     joblib.dump(model, model_dir / "model.joblib")
     schema = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "model_name": "test_percentage_regressor",
         "prediction_type": "percentage_regression",
+        "normalization_policy_version": "1.0",
         "numeric_features": ["candidate_hunk_count"],
         "boolean_features": [],
         "categorical_features": [],

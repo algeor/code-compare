@@ -5,6 +5,7 @@ from pr_suggestion_metrics.diff_precision_recall import (
     changed_lines,
     compare_diffs,
     raw_diff_word_tokens,
+    relaxed_content_word_tokens,
     word_tokens,
 )
 
@@ -17,6 +18,16 @@ def test_token_precision_and_recall_use_draft_and_final_denominators() -> None:
     assert result.token.matched_count == 2
     assert result.token.precision == 2 / 3
     assert result.token.recall == 2 / 4
+
+
+def test_token_overlap_preserves_addition_and_removal_polarity() -> None:
+    draft = "--- a/app.py\n+++ b/app.py\n@@ -1 +0,0 @@\n-alpha beta\n"
+    final = "--- a/app.py\n+++ b/app.py\n@@ -0,0 +1 @@\n+alpha beta\n"
+
+    result = compare_diffs(draft, final)
+
+    assert result.token.matched_count == 0
+    assert result.relaxed_content_token.matched_count == 2
 
 
 def test_file_precision_and_recall_compare_changed_file_sets() -> None:
@@ -102,7 +113,8 @@ def test_extractors_ignore_headers_and_normalize_paths() -> None:
 
     assert changed_files(diff) == {"app.py"}
     assert changed_lines(diff) == {("added", "app.py", "value = 1"): 1}
-    assert word_tokens(diff)["app"] == 0
+    assert word_tokens(diff)[("added", "app")] == 0
+    assert relaxed_content_word_tokens(diff)["value"] == 1
     assert raw_diff_word_tokens(diff)["app"] == 2
 
 

@@ -235,6 +235,8 @@ class DatasetSerializationRegressionTest(unittest.TestCase):
 class BooleanFeatureRegressionTest(unittest.TestCase):
     def test_inference_preserves_all_supported_boolean_forms(self) -> None:
         schema = {
+            "schema_version": "1.1",
+            "normalization_policy_version": "1.0",
             "numeric_features": [],
             "boolean_features": ["flag"],
             "categorical_features": [],
@@ -248,6 +250,8 @@ class BooleanFeatureRegressionTest(unittest.TestCase):
 
     def test_inference_rejects_ambiguous_boolean(self) -> None:
         schema = {
+            "schema_version": "1.1",
+            "normalization_policy_version": "1.0",
             "numeric_features": [],
             "boolean_features": ["flag"],
             "categorical_features": [],
@@ -281,6 +285,8 @@ class BooleanFeatureRegressionTest(unittest.TestCase):
 class NumericFeatureRegressionTest(unittest.TestCase):
     def test_inference_rejects_malformed_numeric_with_row_id(self) -> None:
         schema = {
+            "schema_version": "1.1",
+            "normalization_policy_version": "1.0",
             "numeric_features": ["token_recall"],
             "boolean_features": [],
             "categorical_features": [],
@@ -292,6 +298,8 @@ class NumericFeatureRegressionTest(unittest.TestCase):
 
     def test_inference_rejects_non_finite_numeric(self) -> None:
         schema = {
+            "schema_version": "1.1",
+            "normalization_policy_version": "1.0",
             "numeric_features": ["candidate_hunk_count"],
             "boolean_features": [],
             "categorical_features": [],
@@ -303,6 +311,8 @@ class NumericFeatureRegressionTest(unittest.TestCase):
 
     def test_inference_rejects_ratio_outside_unit_interval(self) -> None:
         schema = {
+            "schema_version": "1.1",
+            "normalization_policy_version": "1.0",
             "numeric_features": ["token_recall"],
             "boolean_features": [],
             "categorical_features": [],
@@ -314,6 +324,8 @@ class NumericFeatureRegressionTest(unittest.TestCase):
 
     def test_feature_preparation_preserves_dataframe_index(self) -> None:
         schema = {
+            "schema_version": "1.1",
+            "normalization_policy_version": "1.0",
             "numeric_features": ["candidate_hunk_count"],
             "boolean_features": [],
             "categorical_features": [],
@@ -327,6 +339,8 @@ class NumericFeatureRegressionTest(unittest.TestCase):
 
     def test_percentage_inference_rejects_non_finite_model_output(self) -> None:
         schema = {
+            "schema_version": "1.1",
+            "normalization_policy_version": "1.0",
             "numeric_features": ["candidate_hunk_count"],
             "boolean_features": [],
             "categorical_features": [],
@@ -364,7 +378,7 @@ class RawDiffInferenceRegressionTest(unittest.TestCase):
         self.assertGreaterEqual(result["model_predicted_percentage"], 0)
         self.assertLessEqual(result["model_predicted_percentage"], 100)
         self.assertIsInstance(result["model_raw_percentage"], float)
-        self.assertEqual(result.result_schema_version, "1.0")
+        self.assertEqual(result.result_schema_version, "1.1")
         self.assertTrue(result.input_hashes)
         self.assertTrue(result["warnings"])
 
@@ -389,6 +403,13 @@ class RawDiffInferenceRegressionTest(unittest.TestCase):
 
 
 class ModelArtifactIntegrityRegressionTest(unittest.TestCase):
+    def test_model_artifact_uses_current_manifest_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_dir = write_percentage_model(Path(temporary_directory))
+            manifest = json.loads((model_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["manifest_version"], 2)
+
     def test_model_load_rejects_schema_tampering_before_unpickling(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             model_dir = write_percentage_model(Path(temporary_directory))
@@ -417,6 +438,36 @@ class ModelArtifactIntegrityRegressionTest(unittest.TestCase):
 
             with patch("pr_suggestion_metrics.model_inference.joblib.load") as joblib_load:
                 with self.assertRaisesRegex(ValueError, "must match the typed feature lists"):
+                    load_model_bundle(model_dir)
+
+            joblib_load.assert_not_called()
+
+    def test_model_load_rejects_incompatible_normalization_policy_before_unpickling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_dir = write_percentage_model(Path(temporary_directory))
+            schema_path = model_dir / "feature_schema.json"
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            schema["normalization_policy_version"] = "0.9"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            write_model_manifest(model_dir)
+
+            with patch("pr_suggestion_metrics.model_inference.joblib.load") as joblib_load:
+                with self.assertRaisesRegex(ValueError, "must match the runtime policy"):
+                    load_model_bundle(model_dir)
+
+            joblib_load.assert_not_called()
+
+    def test_model_load_rejects_obsolete_feature_schema_before_unpickling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_dir = write_percentage_model(Path(temporary_directory))
+            schema_path = model_dir / "feature_schema.json"
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            schema["schema_version"] = "1.0"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            write_model_manifest(model_dir)
+
+            with patch("pr_suggestion_metrics.model_inference.joblib.load") as joblib_load:
+                with self.assertRaisesRegex(ValueError, "Unsupported feature schema version"):
                     load_model_bundle(model_dir)
 
             joblib_load.assert_not_called()

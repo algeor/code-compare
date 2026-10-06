@@ -14,7 +14,7 @@ from typing import Any
 
 
 MANIFEST_FILENAME = "artifact_manifest.json"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 _RUNTIME_PACKAGES = (
     "catboost",
     "joblib",
@@ -66,6 +66,7 @@ def write_model_manifest(model_dir: Path) -> Path:
         "schema_sha256": sha256_file(schema_path),
         "model_name": schema.get("model_name"),
         "prediction_type": schema.get("prediction_type"),
+        "normalization_policy_version": schema.get("normalization_policy_version"),
         "runtime_versions": _runtime_versions(),
     }
     manifest_path = model_dir / MANIFEST_FILENAME

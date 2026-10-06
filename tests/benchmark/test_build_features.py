@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -59,9 +60,11 @@ def test_builds_features_and_records_unsupported_rows(tmp_path: Path) -> None:
         rows = list(csv.DictReader(stream))
     abstentions = [json.loads(line) for line in (output_dir / "feature_abstentions.jsonl").read_text().splitlines()]
     assert [row["example_id"] for row in rows] == ["supported"]
+    assert rows[0]["normalization_policy_version"] == "1.0"
     assert abstentions[0]["example_id"] == "unsupported"
     assert manifest["feature_rows"] == 1
     assert manifest["abstained_rows"] == 1
+    assert manifest["normalization_policy_version"] == "1.0"
     assert manifest["benchmark_manifest_sha256"] == sha256_file(benchmark_manifest_path)
 
 
@@ -82,6 +85,47 @@ def test_rejects_tampered_split_before_creating_output(tmp_path: Path) -> None:
         raise AssertionError("Expected tampered split rejection")
 
     assert not output_dir.exists()
+
+
+def test_invalid_merged_diff_is_preserved_as_sourced_abstention(tmp_path: Path) -> None:
+    benchmark_dir = tmp_path / "benchmark"
+    benchmark_dir.mkdir()
+    invalid = {
+        "example_id": "invalid-merged",
+        "repo": "host/owner/repo",
+        "pr_url": "https://host/owner/repo/pull/1",
+        "pr_number": 1,
+        "suggested_diff": "--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+return value\n",
+        "landed_diff": "--- a/a.py\n+++ b/a.py\n@@ -0,0 +1,2 @@\n+return value\n",
+        "coverage_percentage": 100,
+        "coverage_unrounded": 100.0,
+    }
+    (benchmark_dir / "train.jsonl").write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+    (benchmark_dir / "development.jsonl").write_text("", encoding="utf-8")
+    (benchmark_dir / "calibration.jsonl").write_text("", encoding="utf-8")
+    _write_benchmark_manifest(benchmark_dir)
+    output_dir = tmp_path / "features"
+
+    with patch("pr_suggestion_metrics.benchmark.build_features.score_diff_pair") as score_diff_pair:
+        manifest = build_frozen_feature_tables(benchmark_dir=benchmark_dir, output_dir=output_dir)
+
+    abstentions = [json.loads(line) for line in (output_dir / "feature_abstentions.jsonl").read_text().splitlines()]
+    assert manifest["feature_rows"] == 0
+    assert manifest["abstained_rows"] == 1
+    assert abstentions == [
+        {
+            "example_id": "invalid-merged",
+            "reasons": [
+                "merged_pr_diff is invalid [incomplete_hunk]: "
+                "Hunk body ended before its declared line counts were satisfied."
+            ],
+            "source": "merged_pr_diff",
+            "sources": ["merged_pr_diff"],
+            "split": "train",
+            "status": "invalid",
+        }
+    ]
+    score_diff_pair.assert_not_called()
 
 
 @pytest.mark.parametrize(

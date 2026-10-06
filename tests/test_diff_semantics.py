@@ -60,7 +60,12 @@ diff --git a/b.py b/b.py
 
         evidence = analyze_change_coverage(suggestion, landed)
 
+        self.assertEqual(evidence.strict_same_file.coverage_percentage, 0)
+        self.assertEqual(evidence.strict_same_file.matched_units, 0)
+        self.assertEqual(evidence.relaxed_cross_file.coverage_percentage, 100)
+        self.assertEqual(evidence.relaxed_cross_file.matched_units, 1)
         self.assertEqual(evidence.coverage_percentage, 100)
+        self.assertEqual(evidence.matched_units, 1)
         self.assertTrue(evidence.matches[0].moved_across_files)
 
     def test_duplicate_content_prioritizes_same_path_matches_globally(self) -> None:
@@ -89,8 +94,14 @@ diff --git a/c.py b/c.py
 
         evidence = analyze_change_coverage(suggestion, landed)
 
+        self.assertEqual(evidence.strict_same_file.coverage_percentage, 50)
+        self.assertEqual(evidence.relaxed_cross_file.coverage_percentage, 50)
         self.assertEqual(evidence.matched_units, 2)
         self.assertEqual(sum(match.moved_across_files for match in evidence.matches), 1)
+        self.assertEqual(evidence.strict_same_file.matches[0].suggested_path, "b.py")
+        self.assertEqual(evidence.strict_same_file.matches[0].landed_path, "b.py")
+        self.assertEqual(evidence.relaxed_cross_file.matches[0].suggested_path, "a.py")
+        self.assertEqual(evidence.relaxed_cross_file.matches[0].landed_path, "c.py")
         self.assertEqual(
             {(match.suggested_path, match.landed_path) for match in evidence.matches},
             {("a.py", "c.py"), ("b.py", "b.py")},
@@ -109,6 +120,37 @@ rename to new.py
         self.assertEqual(len(units), 1)
         self.assertEqual(units[0].kind, "rename")
         self.assertEqual(evidence.coverage_percentage, 100)
+
+    def test_parser_validity_is_additive_to_exact_matching_evidence(self) -> None:
+        suggestion = """--- a/app.py
++++ b/app.py
+@@
++value = 1
+"""
+        malformed_landed = """--- a/app.py
++++ b/app.py
+@@ -0,0 +1,2 @@
++value = 1
+"""
+
+        evidence = analyze_change_coverage(suggestion, malformed_landed)
+
+        self.assertIsNone(evidence.coverage_percentage)
+        self.assertIsNone(evidence.strict_same_file.coverage_percentage)
+        self.assertEqual(evidence.matched_units, 0)
+        self.assertEqual(evidence.unmatched_suggested_units[0].text, "value = 1")
+        self.assertEqual(evidence.suggested_diff_assessment.status, "valid")
+        self.assertEqual(evidence.suggested_diff_assessment.dialect, "suggestion_fragment")
+        self.assertEqual(evidence.merged_pr_diff_assessment.status, "invalid")
+        self.assertEqual(
+            [diagnostic.code for diagnostic in evidence.merged_pr_diff_assessment.diagnostics],
+            ["incomplete_hunk"],
+        )
+        self.assertTrue(any("[incomplete_hunk]" in warning for warning in evidence.warnings))
+        self.assertIn(
+            "Coverage is unavailable because at least one input diff is structurally invalid.",
+            evidence.warnings,
+        )
 
 
 if __name__ == "__main__":

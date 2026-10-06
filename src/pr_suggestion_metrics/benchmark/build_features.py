@@ -11,10 +11,11 @@ from typing import Any
 
 from pr_suggestion_metrics.artifact_io import parse_jsonl_objects
 from pr_suggestion_metrics.features import (
+    assess_raw_diff,
     metric_result_to_feature_row,
-    raw_diff_support_issues,
     score_diff_pair,
 )
+from pr_suggestion_metrics.features.policy import NORMALIZATION_POLICY_VERSION
 from pr_suggestion_metrics.model_artifacts import sha256_file
 from pr_suggestion_metrics.percentages import parse_integer_percentage, validate_continuous_percentage
 
@@ -82,9 +83,33 @@ def build_frozen_feature_tables(*, benchmark_dir: Path, output_dir: Path) -> dic
                 row["coverage_unrounded"],
                 name=f"coverage_unrounded for {example_id}",
             )
-            issues = raw_diff_support_issues(suggested_diff)
-            if issues:
-                abstentions.append({"example_id": example_id, "split": split, "reasons": issues})
+            suggested_assessment = assess_raw_diff(suggested_diff)
+            merged_assessment = assess_raw_diff(landed_diff, source="merged_pr_diff")
+            blocking_assessments = [
+                assessment
+                for assessment in (suggested_assessment, merged_assessment)
+                if assessment.status != "valid"
+            ]
+            if blocking_assessments:
+                sources = [assessment.source for assessment in blocking_assessments]
+                abstentions.append(
+                    {
+                        "example_id": example_id,
+                        "split": split,
+                        "source": sources[0] if len(sources) == 1 else "multiple_inputs",
+                        "sources": sources,
+                        "status": (
+                            "invalid"
+                            if any(assessment.status == "invalid" for assessment in blocking_assessments)
+                            else "valid_but_unsupported"
+                        ),
+                        "reasons": [
+                            reason
+                            for assessment in blocking_assessments
+                            for reason in assessment.reasons
+                        ],
+                    }
+                )
                 continue
             metric_result = score_diff_pair(suggested_diff, landed_diff)
             feature_rows.append(
@@ -97,6 +122,7 @@ def build_frozen_feature_tables(*, benchmark_dir: Path, output_dir: Path) -> dic
                     "split": split,
                     "coverage_percentage": coverage_percentage,
                     "coverage_unrounded": coverage_unrounded,
+                    "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
                     **metric_result_to_feature_row(metric_result),
                 }
             )
@@ -110,6 +136,7 @@ def build_frozen_feature_tables(*, benchmark_dir: Path, output_dir: Path) -> dic
     )
     manifest = {
         "schema_version": "1.0",
+        "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
         "source_benchmark_dir": str(benchmark_dir),
         "benchmark_manifest_sha256": benchmark_manifest_sha256,
         "input_sha256": input_hashes,

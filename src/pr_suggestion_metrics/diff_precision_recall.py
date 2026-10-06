@@ -6,13 +6,14 @@ import re
 from collections import Counter
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from pr_suggestion_metrics.diff.parser import parse_unified_diff
 
 
 _WORD_TOKEN_PATTERN = re.compile(r"\w+", flags=re.UNICODE)
 _Item = TypeVar("_Item", bound=object)
+TokenOperation = Literal["added", "removed"]
 
 
 @dataclass(frozen=True)
@@ -38,11 +39,25 @@ class DiffPrecisionRecallResult:
     """Precision and recall for changed-code tokens, files, and path-aware lines."""
 
     token: PrecisionRecall
+    relaxed_content_token: PrecisionRecall
     file: PrecisionRecall
     line: PrecisionRecall
 
-def word_tokens(diff_text: str) -> Counter[str]:
-    """Return tokens from non-blank changed code, excluding diff syntax and context."""
+
+def word_tokens(diff_text: str) -> Counter[tuple[TokenOperation, str]]:
+    """Return operation-aware tokens from non-blank changed code."""
+    parsed = parse_unified_diff(diff_text)
+    tokens: Counter[tuple[TokenOperation, str]] = Counter()
+    for line in parsed.changed_lines:
+        if not line.text.strip():
+            continue
+        operation: TokenOperation = "added" if line.operation == "addition" else "removed"
+        tokens.update((operation, token) for token in _WORD_TOKEN_PATTERN.findall(line.text))
+    return tokens
+
+
+def relaxed_content_word_tokens(diff_text: str) -> Counter[str]:
+    """Return changed-code tokens while intentionally ignoring operation polarity."""
     parsed = parse_unified_diff(diff_text)
     return Counter(
         token
@@ -111,6 +126,10 @@ def compare_diffs(draft_diff: str, final_diff: str) -> DiffPrecisionRecallResult
     """
     return DiffPrecisionRecallResult(
         token=_counter_precision_recall(word_tokens(draft_diff), word_tokens(final_diff)),
+        relaxed_content_token=_counter_precision_recall(
+            relaxed_content_word_tokens(draft_diff),
+            relaxed_content_word_tokens(final_diff),
+        ),
         file=_set_precision_recall(changed_files(draft_diff), changed_files(final_diff)),
         line=_counter_precision_recall(changed_lines(draft_diff), changed_lines(final_diff)),
     )
