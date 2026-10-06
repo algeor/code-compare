@@ -29,11 +29,7 @@ Read these in order:
 | How is the system organized? | [`architecture.md`](architecture.md) |
 | Which commands are authoritative? | [`reproducibility.md`](reproducibility.md) |
 | What has actually shipped? | [`implementation-progress.md`](implementation-progress.md) |
-| What is planned next? | [`implementation-progress.md`](implementation-progress.md) |
-| What risks define the remaining work? | [`senior-code-review.md`](senior-code-review.md) |
-| What review findings matter? | [`senior-code-review.md`](senior-code-review.md) |
-
-## Read By Role
+| What is planned next? | [`implementation-progress.md`](implementation-progress.md) |## Read By Role
 
 ### New contributor
 
@@ -61,8 +57,6 @@ Read these in order:
 ### Planning and review work
 
 - [`implementation-progress.md`](implementation-progress.md)
-- [`senior-code-review.md`](senior-code-review.md)
-
 ## Active Documents
 
 ### Front door and onboarding
@@ -93,11 +87,6 @@ Read these in order:
 - [`../data/processed/pr_suggestion_coverage/dataset/README.md`](../data/processed/pr_suggestion_coverage/dataset/README.md) — internal processed dataset snapshot summary.
 - [`../data/external/github_codereview/dataset/README.md`](../data/external/github_codereview/dataset/README.md) — external imported dataset snapshot summary.
 - [`../research/prompts/llm_semantic_percentage_labeling_prompt.md`](../research/prompts/llm_semantic_percentage_labeling_prompt.md) — active semantic-labeling prompt used by labeling utilities.
-
-### Planning and review
-
-- [`implementation-progress.md`](implementation-progress.md) — durable shipped-state log.
-- [`senior-code-review.md`](senior-code-review.md) — findings, evidence, and remediation status.
 
 ### Research reference
 

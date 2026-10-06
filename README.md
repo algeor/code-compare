@@ -229,8 +229,6 @@ If you are new, do **not** start in `research/archive/`. It is intentionally pre
 - [`docs/data-card.md`](docs/data-card.md) — where datasets came from, limits, and allowed claims.
 - [`docs/model-card.md`](docs/model-card.md) — what the model can safely do and where it fails.
 - [`docs/deployment.md`](docs/deployment.md) — demo deployment guidance.
-- [`docs/implementation-progress.md`](docs/implementation-progress.md) — shipped state and next implementation gate.
-- [`docs/senior-code-review.md`](docs/senior-code-review.md) — findings, risks, and remaining priorities.
 
 ## Public API At A Glance
 
