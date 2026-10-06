@@ -65,6 +65,7 @@ dev = [
 
 [project.scripts]
 pr-suggestion-audit-labels = "pr_suggestion_metrics.audit_semantic_labels:main"
+pr-suggestion-analyze = "pr_suggestion_metrics.analysis_service:main"
 pr-suggestion-build-dataset = "pr_suggestion_metrics.build_dataset:main"
 pr-suggestion-build-features = "pr_suggestion_metrics.benchmark.build_features:main"
 pr-suggestion-plan-splits = "pr_suggestion_metrics.benchmark.plan_splits:main"

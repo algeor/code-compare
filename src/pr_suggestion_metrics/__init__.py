@@ -9,6 +9,8 @@ from typing import Any
 _PUBLIC_EXPORTS = {
     "AIReviewerEvaluation": ("pr_suggestion_metrics.reviewer_evaluation", "AIReviewerEvaluation"),
     "AIReviewerSummary": ("pr_suggestion_metrics.reviewer_evaluation", "AIReviewerSummary"),
+    "AnalysisResult": ("pr_suggestion_metrics.analysis_service", "AnalysisResult"),
+    "AnalysisService": ("pr_suggestion_metrics.analysis_service", "AnalysisService"),
     "CoverageResult": ("pr_suggestion_metrics.model_inference", "CoverageResult"),
     "ReviewAssessmentUnit": ("pr_suggestion_metrics.reviewer_evaluation", "ReviewAssessmentUnit"),
     "ReviewDeduction": ("pr_suggestion_metrics.reviewer_evaluation", "ReviewDeduction"),
