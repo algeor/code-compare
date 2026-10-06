@@ -1,0 +1,341 @@
+{
+  "format_version": 1,
+  "source_file": "diff_checker_pairs.jsonl",
+  "description": "Readable JSON version of the diff checker example pairs.",
+  "example_count": 9,
+  "examples": [
+    {
+      "id": "exact_same_file_addition",
+      "description": "The suggestion lands exactly in the same file.",
+      "suggested_diff": "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -0,0 +1 @@\n+value = 1\n",
+      "merged_pr_diff": "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -0,0 +1 @@\n+value = 1\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 2,
+          "draft_count": 2,
+          "final_count": 2,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 2,
+          "draft_count": 2,
+          "final_count": 2,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "expected_exact_coverage_percentage": 100
+    },
+    {
+      "id": "final_has_extra_lines",
+      "description": "The final PR keeps all suggested code and adds more code around it.",
+      "suggested_diff": "diff --git a/client.py b/client.py\n--- a/client.py\n+++ b/client.py\n@@ -0,0 +1,2 @@\n+validate_config(config)\n+return build_client(config)\n",
+      "merged_pr_diff": "diff --git a/client.py b/client.py\n--- a/client.py\n+++ b/client.py\n@@ -0,0 +1,3 @@\n+validate_config(config)\n+client = build_client(config)\n+return client\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 5,
+          "draft_count": 5,
+          "final_count": 7,
+          "precision": 1.0,
+          "recall": 0.714286
+        },
+        "relaxed_content_token": {
+          "matched_count": 5,
+          "draft_count": 5,
+          "final_count": 7,
+          "precision": 1.0,
+          "recall": 0.714286
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 1,
+          "draft_count": 2,
+          "final_count": 3,
+          "precision": 0.5,
+          "recall": 0.333333
+        }
+      },
+      "expected_exact_coverage_percentage": 50
+    },
+    {
+      "id": "suggestion_has_extra_line",
+      "description": "Only part of the suggestion lands; the final PR is smaller.",
+      "suggested_diff": "diff --git a/events.py b/events.py\n--- a/events.py\n+++ b/events.py\n@@ -0,0 +1,2 @@\n+validate_request(request)\n+send_event(request)\n",
+      "merged_pr_diff": "diff --git a/events.py b/events.py\n--- a/events.py\n+++ b/events.py\n@@ -0,0 +1 @@\n+validate_request(request)\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 2,
+          "draft_count": 4,
+          "final_count": 2,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 2,
+          "draft_count": 4,
+          "final_count": 2,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 1,
+          "draft_count": 2,
+          "final_count": 1,
+          "precision": 0.5,
+          "recall": 1.0
+        }
+      },
+      "expected_exact_coverage_percentage": 50
+    },
+    {
+      "id": "same_code_moved_to_new_file",
+      "description": "The exact added line lands, but in a different file.",
+      "suggested_diff": "diff --git a/app/validators.py b/app/validators.py\n--- a/app/validators.py\n+++ b/app/validators.py\n@@ -0,0 +1 @@\n+validate_user(user)\n",
+      "merged_pr_diff": "diff --git a/app/user_validation.py b/app/user_validation.py\n--- a/app/user_validation.py\n+++ b/app/user_validation.py\n@@ -0,0 +1 @@\n+validate_user(user)\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 2,
+          "draft_count": 2,
+          "final_count": 2,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 2,
+          "draft_count": 2,
+          "final_count": 2,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "file": {
+          "matched_count": 0,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "line": {
+          "matched_count": 0,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "expected_exact_coverage_percentage": 100
+    },
+    {
+      "id": "same_text_wrong_operation",
+      "description": "The same text appears, but the suggestion removes it while the final PR adds it.",
+      "suggested_diff": "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1 +0,0 @@\n-logger.debug(\"payload\")\n",
+      "merged_pr_diff": "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -0,0 +1 @@\n+logger.debug(\"payload\")\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 0,
+          "draft_count": 3,
+          "final_count": 3,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 3,
+          "draft_count": 3,
+          "final_count": 3,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 0,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "expected_exact_coverage_percentage": 0
+    },
+    {
+      "id": "no_overlap_same_file",
+      "description": "The suggestion and final PR touch the same file but change different code.",
+      "suggested_diff": "diff --git a/auth.py b/auth.py\n--- a/auth.py\n+++ b/auth.py\n@@ -0,0 +1 @@\n+raise ValueError(\"missing token\")\n",
+      "merged_pr_diff": "diff --git a/auth.py b/auth.py\n--- a/auth.py\n+++ b/auth.py\n@@ -0,0 +1 @@\n+return None\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 0,
+          "draft_count": 4,
+          "final_count": 2,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 0,
+          "draft_count": 4,
+          "final_count": 2,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 0,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "expected_exact_coverage_percentage": 0
+    },
+    {
+      "id": "exact_rename_only",
+      "description": "The suggestion is a pure rename and the final PR performs the same rename.",
+      "suggested_diff": "diff --git a/old_name.py b/new_name.py\nsimilarity index 100%\nrename from old_name.py\nrename to new_name.py\n",
+      "merged_pr_diff": "diff --git a/old_name.py b/new_name.py\nsimilarity index 100%\nrename from old_name.py\nrename to new_name.py\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 0,
+          "draft_count": 0,
+          "final_count": 0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 0,
+          "draft_count": 0,
+          "final_count": 0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 0,
+          "draft_count": 0,
+          "final_count": 0,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "expected_exact_coverage_percentage": 100
+    },
+    {
+      "id": "duplicate_line_occurrence",
+      "description": "The same suggested line appears twice, but lands once.",
+      "suggested_diff": "diff --git a/retry.py b/retry.py\n--- a/retry.py\n+++ b/retry.py\n@@ -0,0 +1,2 @@\n+retry()\n+retry()\n",
+      "merged_pr_diff": "diff --git a/retry.py b/retry.py\n--- a/retry.py\n+++ b/retry.py\n@@ -0,0 +1 @@\n+retry()\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 1,
+          "draft_count": 2,
+          "final_count": 1,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 1,
+          "draft_count": 2,
+          "final_count": 1,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 1,
+          "draft_count": 2,
+          "final_count": 1,
+          "precision": 0.5,
+          "recall": 1.0
+        }
+      },
+      "expected_exact_coverage_percentage": 50
+    },
+    {
+      "id": "exact_replacement",
+      "description": "The suggestion replaces one line, and the final PR makes the same replacement.",
+      "suggested_diff": "diff --git a/calculator.py b/calculator.py\n--- a/calculator.py\n+++ b/calculator.py\n@@ -1 +1 @@\n-return total\n+return round(total, 2)\n",
+      "merged_pr_diff": "diff --git a/calculator.py b/calculator.py\n--- a/calculator.py\n+++ b/calculator.py\n@@ -1 +1 @@\n-return total\n+return round(total, 2)\n",
+      "expected_diff_precision_recall": {
+        "token": {
+          "matched_count": 6,
+          "draft_count": 6,
+          "final_count": 6,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "relaxed_content_token": {
+          "matched_count": 6,
+          "draft_count": 6,
+          "final_count": 6,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "file": {
+          "matched_count": 1,
+          "draft_count": 1,
+          "final_count": 1,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "line": {
+          "matched_count": 2,
+          "draft_count": 2,
+          "final_count": 2,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "expected_exact_coverage_percentage": 100
+    }
+  ]
+}
