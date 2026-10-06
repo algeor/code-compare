@@ -1,5 +1,11 @@
 # PR Suggestion Diff Diagnostics
 
+**Status:** canonical metric and diagnostic vocabulary
+
+**Audience:** API users, feature engineers, evaluators, and reviewers
+
+**Purpose:** define what each diff diagnostic measures and what it must not be used to claim
+
 ## Purpose
 
 Diff precision and recall provide transparent lexical diagnostics. They do **not** measure semantic adoption and are not combined into a product score.

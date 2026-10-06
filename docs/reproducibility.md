@@ -1,5 +1,11 @@
 # Reproducibility Guide
 
+**Status:** canonical engineering and research reproduction procedure
+
+**Audience:** contributors, reviewers, model developers, and release engineers
+
+**Purpose:** reproduce supported validation, benchmark, training, calibration, and evaluation workflows
+
 **Scope:** reproduce the checked-in engineering and exploratory evaluation artifacts. This workflow does not convert current labels into human ground truth or make the reported metrics confirmatory.
 
 ## 1. Prerequisites

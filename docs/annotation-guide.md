@@ -2,6 +2,10 @@
 
 **Status:** required protocol for a future human benchmark. It does not retroactively validate the repository's current LLM-assisted labels.
 
+**Audience:** annotators, adjudicators, and benchmark reviewers
+
+**Purpose:** define the only supported human-labeling procedure for semantic suggestion coverage
+
 ## 1. Question
 
 For a verified code-review suggestion made before merge:

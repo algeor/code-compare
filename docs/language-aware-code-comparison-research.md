@@ -1,5 +1,11 @@
 # Language-Aware Code Comparison Research
 
+**Status:** research reference; not a runtime or release contract
+
+**Audience:** feature engineers and architecture reviewers
+
+**Purpose:** compare language-aware parsing and similarity technologies that may inform implementation
+
 ## Recommendation
 
 Use a layered approach instead of building custom logic for every language.

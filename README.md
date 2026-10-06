@@ -6,7 +6,7 @@ Research tooling for estimating how much of a code-review suggestion appears in 
 
 The package provides two explicitly separate outputs:
 
-- **Exact evidence:** path-aware, one-to-one normalized change-unit matching.
+- **Deterministic evidence:** strict same-file matches separated from operation-strict, path-relaxed cross-file matches.
 - **Experimental estimate:** a learned percentage for supported raw-diff inputs.
 
 Neither output proves causality or final-state semantic equivalence. Unsupported edit shapes return a typed abstention instead of an invented score.
@@ -37,7 +37,7 @@ else:
     print(result.applicability_reasons)
 ```
 
-The result is a versioned `CoverageResult` containing the raw and rounded estimate, uncertainty status, exact evidence, input hashes, artifact hashes, and warnings.
+The result is a versioned `CoverageResult` containing the raw and rounded estimate, uncertainty status, deterministic evidence, input hashes, artifact hashes, and warnings. Result schema `1.1` embeds evidence schema `1.1` for both predictions and abstentions.
 
 ## AI Reviewer Evaluation
 
@@ -75,7 +75,7 @@ A local model may draft assessment units, but tests, static analysis, specificat
 
 ## Capability Matrix
 
-| Edit shape | Exact evidence | Learned estimator |
+| Edit shape | Deterministic evidence | Learned estimator |
 |---|---:|---:|
 | Single-file addition | Yes | Yes |
 | Multiple hunks | Yes | Abstains |
@@ -87,10 +87,13 @@ A local model may draft assessment units, but tests, static analysis, specificat
 ## Metric Vocabulary
 
 - `suggestion_coverage_percentage`: primary learned estimate.
-- `exact_change_unit_coverage_percentage`: transparent exact-match evidence.
+- `change_coverage_evidence.strict_same_file`: same operation, normalized content, and repository-relative path.
+- `change_coverage_evidence.relaxed_cross_file`: same operation and normalized content on a different path.
 - `final_diff_recall`: PR-scope diagnostic.
 
-Token, file, and line precision/recall are diagnostics. The project does not combine them into an aggregate coverage score.
+Both evidence buckets use `total_suggested_units` as their denominator. In evidence schema `1.1`, top-level `coverage_percentage`, `matched_units`, `matched_by_kind`, and `matches` remain for one compatibility cycle; they combine strict and relaxed matches and must not be interpreted as strict evidence.
+
+Token, file, and line precision/recall are diagnostics. Token overlap is operation-aware, so additions cannot match removals. The explicitly named `relaxed_content_token` diagnostic ignores operation polarity. The project does not combine these diagnostics into an aggregate coverage score.
 
 ## Benchmark Pipeline
 
@@ -153,6 +156,8 @@ tests/         regression, benchmark, metric, and model tests
 
 Key documents:
 
+- [`docs/README.md`](docs/README.md) — documentation map and source-of-truth rules.
+- [`docs/architecture.md`](docs/architecture.md) — current boundaries and target dual-model architecture.
 - `ROADMAP.md`
 - `IMPLEMENTATION_PLAN.md`
 - `docs/senior-code-review.md`

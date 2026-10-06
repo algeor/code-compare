@@ -1,7 +1,13 @@
 # Data Card: PR Suggestion Coverage Corpora
 
-**Status:** exploratory research data, not validated ground truth  
-**Snapshot reviewed:** 2026-09-08  
+**Status:** canonical data governance record; current corpora are exploratory, not validated ground truth
+
+**Audience:** researchers, annotators, reviewers, and data stewards
+
+**Purpose:** document corpus composition, provenance, limitations, permitted use, and replacement requirements
+
+**Snapshot reviewed:** 2026-09-08
+
 **Primary task:** estimate how much suggested code is represented in a merged pull-request diff
 
 ## 1. Scope

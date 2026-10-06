@@ -67,16 +67,18 @@ No active bundled model has confirmatory results. Superseded exploratory artifac
 - pure addition;
 - not a rename, deletion, or replacement.
 
-It requires an explicit trusted `model_dir` and abstains before model loading on unsupported suggestions. It returns the same versioned `CoverageResult` shape for predictions and abstentions, including raw and rounded estimates, uncertainty state, applicability reasons, exact evidence, and input/artifact hashes.
+It requires an explicit trusted `model_dir` and abstains before model loading on unsupported suggestions. It returns result schema `1.1` for both predictions and abstentions, including raw and rounded estimates, uncertainty state, applicability reasons, deterministic evidence, and input/artifact hashes.
 
-The API now returns exact normalized change-unit evidence for additions, deletions, replacements, renames, moves, and multi-file/multi-hunk suggestions. This evidence is explicitly not semantic equivalence. Grouped split-conformal interval support is implemented and cryptographically bound to model/schema bytes, but the checked-in model has no valid held-out calibration artifact; its uncertainty status therefore remains `unavailable`. Out-of-distribution detection remains open.
+Evidence schema `1.1` separates `strict_same_file` matches from `relaxed_cross_file` matches. Strict matches require the same operation, normalized content, and path. Relaxed matches still require the same operation and normalized content but permit a different path. Both bucket percentages use all suggested change units as the denominator, and strict matching runs first so a same-file candidate is never consumed by a relaxed match.
+
+For one compatibility cycle, top-level evidence fields `coverage_percentage`, `matched_units`, `matched_by_kind`, and `matches` remain combined strict-plus-relaxed values. They are not strict evidence. The API covers additions, deletions, replacements, renames, moves, and multi-file/multi-hunk suggestions, but this deterministic evidence is not semantic equivalence. Grouped split-conformal interval support is implemented and cryptographically bound to model/schema bytes, but the checked-in model has no valid held-out calibration artifact; its uncertainty status therefore remains `unavailable`. Out-of-distribution detection remains open.
 
 ## 8. Known Failure Modes
 
 - unrelated code in a large PR can look like suggestion coverage;
 - pre-existing code can be mistaken for landed code;
 - replacements, deletions, moves, renames, and multi-hunk/multi-file suggestions are not modeled by the raw API;
-- token/AST similarity can miss behaviorally equivalent code or reward superficial similarity;
+- token/AST similarity can miss behaviorally equivalent code or reward superficial similarity; strict token diagnostics preserve addition/removal polarity, while `relaxed_content_token` intentionally does not;
 - missing structural tooling changes feature availability;
 - weak and LLM-assisted targets can encode systematic bias;
 - one internal repository cannot establish broad generalization;

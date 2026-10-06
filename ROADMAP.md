@@ -1,7 +1,15 @@
 # Project Roadmap
 
-**Updated:** 2026-10-06  
-**Project:** Semantic PR Suggestion Coverage  
+**Status:** active outcome roadmap
+
+**Audience:** maintainers, researchers, and project stakeholders
+
+**Purpose:** define milestone outcomes and evidence-based release gates
+
+**Updated:** 2026-10-06
+
+**Project:** Semantic PR Suggestion Coverage
+
 **Current stage:** strong research prototype; not yet scientifically or production validated
 
 ## North Star
@@ -203,4 +211,6 @@ The project may claim a validated suggestion-coverage metric only when:
 - `docs/data-card.md` — existing corpus limitations and replacement requirements.
 - `docs/model-card.md` — current model behavior, results, and validation blockers.
 - `docs/reproducibility.md` — verified research workflow.
-- `docs/final-polish-review-2026-09-14.md` — detailed technical and scientific review.
+- `docs/senior-code-review.md` — detailed technical and scientific findings with remediation status.
+- `docs/implementation-progress.md` — durable record of completed work and the active implementation phase.
+- `docs/README.md` — canonical documentation map and lifecycle rules.

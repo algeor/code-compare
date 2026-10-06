@@ -1,5 +1,15 @@
 # Deployment
 
+**Status:** current percentage-demo guide; combined explanation deployment is planned
+
+**Audience:** demo operators and release engineers
+
+**Purpose:** deploy the supported percentage inference path without training or historical research code
+
+For the target dual-model architecture and CodeBERT explanation requirements, see
+[`explanation-model-design.md`](explanation-model-design.md). The instructions below describe the currently implemented
+percentage-only demo boundary.
+
 ## Recommended Free Option
 
 Deploy a small Gradio application on [Hugging Face Spaces](https://huggingface.co/spaces).
