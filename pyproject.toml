@@ -77,6 +77,7 @@ pr-suggestion-inventory-exploration = "pr_suggestion_metrics.benchmark.inventory
 pr-suggestion-label-batches = "pr_suggestion_metrics.semantic_labeling_batches:main"
 pr-suggestion-prepare-annotations = "pr_suggestion_metrics.prepare_annotation_packets:main"
 pr-suggestion-prepare-parsers = "pr_suggestion_metrics.prepare_structural_parsers:main"
+pr-suggestion-reconstruct-provenance = "pr_suggestion_metrics.benchmark.reconstruct_provenance:main"
 pr-suggestion-train = "pr_suggestion_metrics.modeling.train:main"
 
 [tool.hatch.build.targets.wheel]
