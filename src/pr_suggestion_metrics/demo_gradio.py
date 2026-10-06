@@ -194,12 +194,17 @@ def _json_payload(payload: dict[str, Any], *, input_fingerprint: str) -> dict[st
     return payload
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_DEMO_MODEL_DIR)
     parser.add_argument("--server-name", default="127.0.0.1")
-    parser.add_argument("--server-port", type=int, default=7860)
-    return parser.parse_args()
+    parser.add_argument(
+        "--server-port",
+        type=int,
+        default=None,
+        help="Optional fixed port. When omitted, Gradio uses the first available local port.",
+    )
+    return parser.parse_args(argv)
 
 
 def main() -> int:

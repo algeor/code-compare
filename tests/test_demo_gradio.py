@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pr_suggestion_metrics.demo_gradio import SAMPLE_MERGED_DIFF, SAMPLE_SUGGESTED_DIFF, analyze_for_demo
+from pr_suggestion_metrics.demo_gradio import SAMPLE_MERGED_DIFF, SAMPLE_SUGGESTED_DIFF, analyze_for_demo, parse_args
 
 
 EXAMPLE_PAIRS_PATH = Path(__file__).resolve().parents[1] / "data" / "examples" / "diff_checker_pairs.jsonl"
@@ -20,6 +20,18 @@ EXPECTED_DEMO_STATUS_BY_ID = {
     "duplicate_line_occurrence": "predicted",
     "exact_replacement": "abstained",
 }
+
+
+def test_parse_args_uses_auto_port_by_default() -> None:
+    args = parse_args([])
+
+    assert args.server_port is None
+
+
+def test_parse_args_accepts_fixed_server_port() -> None:
+    args = parse_args(["--server-port", "7860"])
+
+    assert args.server_port == 7860
 
 
 def _example_pairs() -> list[dict[str, object]]:

@@ -108,7 +108,7 @@ The safest current description is: this repository studies **suggestion coverage
 uv run --locked --extra demo pr-suggestion-demo
 ```
 
-The Gradio app starts locally and uses the demo artifact at `models/pr_suggestion_coverage/demo_weak_local/model`.
+The Gradio app starts locally on the first available port and uses the demo artifact at `models/pr_suggestion_coverage/demo_weak_local/model`.
 
 ### Score one diff pair from Python
 

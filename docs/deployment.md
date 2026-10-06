@@ -35,6 +35,8 @@ uv sync --locked --all-extras
 uv run --locked --extra demo pr-suggestion-demo
 ```
 
+By default, Gradio uses the first available local port.
+
 Optional explicit host and port:
 
 ```bash
