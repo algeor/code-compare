@@ -62,6 +62,7 @@ dev = [
     "pytest>=8.3,<10",
     "ruff>=0.9,<1",
 ]
+demo = ["gradio>=5,<6"]
 
 [project.scripts]
 pr-suggestion-audit-labels = "pr_suggestion_metrics.audit_semantic_labels:main"
@@ -82,6 +83,7 @@ pr-suggestion-reconstruct-provenance = "pr_suggestion_metrics.benchmark.reconstr
 pr-suggestion-select-model = "pr_suggestion_metrics.modeling.select:main"
 pr-suggestion-train = "pr_suggestion_metrics.modeling.train:main"
 pr-suggestion-train-demo = "pr_suggestion_metrics.modeling.demo_train:main"
+pr-suggestion-demo = "pr_suggestion_metrics.demo_gradio:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pr_suggestion_metrics"]
