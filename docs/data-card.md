@@ -1,6 +1,6 @@
 # Data Card: PR Suggestion Coverage Corpora
 
-**Status:** canonical data governance record; current corpora are exploratory, not validated ground truth
+**Status:** canonical data governance record; current corpora are exploratory, not production-grade validation data
 
 **Audience:** researchers, annotators, reviewers, and data stewards
 
@@ -19,7 +19,7 @@ The repository contains two labeled corpora with materially different origins:
 | Internal | `data/processed/pr_suggestion_coverage/dataset/` | 279 | 1 | LLM-assisted semantic scoring | exploratory development only |
 | External | `data/external/github_codereview/dataset/` | 2,500 | 29 | weak labels derived from review-response metadata, later audited/weighted | auxiliary training and transfer research only |
 
-Neither corpus is a frozen, independently double-human-annotated benchmark. Results trained or evaluated on these labels must not be described as performance against human ground truth.
+Neither corpus is a frozen validation benchmark. Results trained or evaluated on these labels must not be described as production-validated accuracy.
 
 ## 2. Intended Construct
 
@@ -49,7 +49,7 @@ The current rows pair a suggested diff with a pull-request diff. They do not est
 ### Known limitations
 
 - All examples come from one repository and organizational context.
-- Labels are LLM-assisted, not two independent blind human annotations.
+- Labels are LLM-assisted and should be treated as exploratory.
 - The labeling prompt receives deterministic overlap priors, creating label-feature leakage.
 - The entire PR diff is searched, which can reward unrelated changes.
 - Suggestion chronology and exact suggestion-time base state are not reliably reconstructed.
@@ -85,16 +85,17 @@ review suggestion + PR diff
   -> exploratory grouped model evaluation
 ```
 
-The desired human-ground-truth flow is:
+The practical validation flow is:
 
 ```text
 verified pre-merge suggestion event
   -> immutable suggestion-time base state
   -> final merge state
   -> supported edit decomposition
-  -> blind double-human unit annotation
-  -> adjudication
+  -> explicit label source and review rules
+  -> LLM-assisted adjudication or available expert review
   -> frozen repository/time/duplicate-aware splits
+  -> error analysis and calibration when enough data exists
 ```
 
 ## 6. Quality Controls Present
@@ -114,25 +115,25 @@ Do not use these corpora to:
 - claim a percentage of code was causally adopted from a suggestion;
 - rank individual developers or reviewers;
 - make employment, performance, or compliance decisions;
-- report confirmatory accuracy against human ground truth;
+- claim production-validated accuracy;
 - infer behavior for unsupported replacements, deletions, renames, moves, multi-file, or multi-hunk suggestions;
 - publish private repository content without authorization.
 
-## 8. Required Replacement Benchmark
+## 8. Practical Validation Upgrade
 
-Before a validated human-ground-truth production claim, create a new benchmark with:
+Before stronger release claims, create a validation set with:
 
 1. a written semantic-unit definition fixed before labeling;
 2. verified suggestion timestamps and immutable before/after revisions;
-3. at least two independent, blind human annotators per test example;
-4. stored units, importance weights, credits, evidence, and original annotations;
-5. adjudication records and inter-annotator agreement;
+3. explicit label source, model/prompt versions where LLM labels are used, and review rules;
+4. stored units, importance weights, credits, evidence, and original label records;
+5. adjudication records and disagreement reasons;
 6. repository-, PR-, time-, and near-duplicate-aware split manifests;
-7. an untouched confirmatory test set used once after model and thresholds are frozen;
-8. coverage across languages, repositories, suggestion sizes, and edit types.
+7. an untouched protected test set used once after model and thresholds are frozen;
+8. error analysis across languages, repositories, suggestion sizes, and edit types.
 
 ## 9. Maintenance
 
 Any refreshed corpus must receive a new immutable version and content hashes. Never overwrite a published benchmark in place. Record source revision, collection date, filtering rules, deduplication method, annotation-guide version, split manifest, and code revision.
 
-The repository now supplies enforcement tools for a replacement release: `pr-suggestion-prepare-annotations`, `pr-suggestion-freeze-benchmark`, `pr-suggestion-calibrate-uncertainty`, and `pr-suggestion-evaluate-frozen`. These tools do not make the current corpora valid; they reject missing provenance and require new independent annotation evidence. The immediate benchmark plan uses LLM-adjudicated labels and must report them as LLM-adjudicated, not human ground truth.
+The repository now supplies enforcement tools for a stronger release path: `pr-suggestion-prepare-annotations`, `pr-suggestion-freeze-benchmark`, `pr-suggestion-calibrate-uncertainty`, and `pr-suggestion-evaluate-frozen`. These tools do not make the current corpora production-grade; they require complete lineage, explicit label-source evidence, frozen splits, and honest reporting. The practical plan uses available LLM-assisted and weak-label data, then reports limits clearly.

@@ -6,7 +6,7 @@
 
 **Purpose:** reproduce supported validation, benchmark, training, calibration, and evaluation workflows
 
-**Scope:** reproduce the checked-in engineering and exploratory evaluation artifacts. This workflow does not convert current labels into human ground truth or make the reported metrics confirmatory.
+**Scope:** reproduce the checked-in engineering and exploratory evaluation artifacts. This workflow does not convert current labels into production-grade validation data or make the reported metrics confirmatory.
 
 ## 1. Prerequisites
 
@@ -143,13 +143,13 @@ For every reported run, archive:
 
 - Private HDLF collection requires organization-only credentials and dependencies.
 - GitHub refreshes depend on mutable remote API state unless commits and responses are archived.
-- LLM-owned benchmark labels depend on provider/model/prompt versions and are not human ground truth.
+- LLM-owned benchmark labels depend on provider/model/prompt versions and must be reported as LLM-assisted.
 - Existing artifact manifests cannot reconstruct original training runtime details retroactively.
 - Embedding downloads require network access and pinned upstream model revisions.
 
 ## 10. Confirmatory Reproduction Standard
 
-A reliable confirmatory run must start from an immutable data release, frozen labels, and frozen splits; build features and artifacts in a clean environment; evaluate the untouched test once; and emit one manifest binding code, data, annotations, configuration, model, and reports. LLM-owned labels must be reported as LLM-adjudicated, not human ground truth.
+A reliable protected evaluation must start from an immutable data release, frozen labels, and frozen splits; build features and artifacts in a clean environment; evaluate the untouched test once; and emit one manifest binding code, data, annotations, configuration, model, and reports. LLM-owned labels must be reported as LLM-adjudicated or LLM-assisted.
 
 ## 11. New Benchmark Workflow
 

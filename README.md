@@ -1,13 +1,26 @@
 # Semantic PR Suggestion Coverage
 
-Research tooling for comparing a code-review suggestion with a merged pull request.
+This project checks whether a code-review suggestion shows up in the final merged pull request.
+
+In plain words: it compares **what someone suggested** with **what actually got merged**.
 
 The project currently ships four useful building blocks:
 
-- **Deterministic evidence** for exact and path-relaxed diff matches.
-- **Experimental percentage inference** for a narrow, explicitly supported raw-diff shape.
-- **AI reviewer evaluation** for scoring review quality against independent evidence.
-- **A local demo app** that combines the percentage result with grounded explanation templates.
+- **Exact evidence:** lines or renames from the suggestion that can be found in the merged PR diff.
+- **Experimental score:** a 0-100 estimate for simple supported suggestions.
+- **AI review scoring:** a separate way to grade an AI review against known facts.
+- **Local demo app:** a small Gradio UI that shows the score, evidence, warnings, and explanation.
+
+## Plain Words
+
+| Term | Simple meaning |
+|---|---|
+| Diff | A text view of code changes: added lines, removed lines, renamed files. |
+| Merged PR | The pull request after it was accepted and merged. |
+| Coverage | How much of the suggestion appears in the merged PR diff. |
+| Evidence | The specific changed lines or renames the tool found. |
+| Benchmark | An answer key used to test whether the model is right. |
+| Abstention | The model says, "I can't score this safely," instead of guessing. |
 
 ## Start Here
 
@@ -33,29 +46,29 @@ Then read:
 
 ## What The Project Does Today
 
-### 1. Deterministic change evidence
+### 1. Exact change evidence
 
 `analyze_change_coverage` compares suggested diff units with merged diff units and reports:
 
-- `strict_same_file` matches: same path, same operation, normalized content match.
-- `relaxed_cross_file` matches: same operation and normalized content, different path allowed.
+- `strict_same_file`: same file, same kind of change, same simplified text.
+- `relaxed_cross_file`: same kind of change and same simplified text, but in a different file.
 
-This is **inspectable evidence**, not semantic proof.
+This is **evidence you can inspect**. It is not proof that the reviewer caused the change.
 
-### 2. Experimental coverage percentage
+### 2. Experimental coverage score
 
-`predict_coverage_from_diffs` produces a learned percentage only when the suggestion is:
+`predict_coverage_from_diffs` gives a learned 0-100 score only when the suggestion is simple:
 
 - one file;
 - one hunk;
 - pure addition;
 - not a rename, deletion, or replacement.
 
-Unsupported inputs return a typed **abstention** instead of a made-up score.
+If the input is too complex, the model returns **abstained**. That means: "I can't score this safely."
 
 ### 3. AI reviewer evaluation
 
-`evaluate_ai_review` scores an AI review against independently verified assessment units. Every lost point maps to a concrete deduction such as:
+`evaluate_ai_review` grades an AI review against known facts. Every lost point has a concrete reason, such as:
 
 - `incorrect_diagnosis`
 - `missed_issue`
@@ -68,24 +81,24 @@ This is separate from suggestion coverage. A merged PR does **not** prove an AI 
 
 ### 4. Grounded local demo
 
-`pr-suggestion-demo` wraps the local `AnalysisService` and shows:
+`pr-suggestion-demo` starts the local app and shows:
 
-- deterministic evidence;
+- exact evidence;
 - weak local percentage output;
-- grounded explanation templates;
+- a short explanation based on the evidence;
 - model versions and artifact hashes.
 
 ## What The Project Does Not Claim
 
-Be careful not to overstate the current system:
+Be careful not to overstate what this project can prove:
 
-- It does **not** prove causal adoption.
-- It does **not** prove final-state semantic equivalence.
+- It does **not** prove the suggestion caused the change.
+- It does **not** prove the final code behaves the same as the suggestion.
 - It does **not** ship a production-validated bundled model.
-- It does **not** treat current labels as double-human ground truth.
+- It does **not** treat current labels as production-grade validation labels.
 - It does **not** support every raw-diff shape in the learned API.
 
-The safest current description is: this repository studies **suggestion coverage/agreement**, not confirmed adoption.
+The safest current description is: this repository studies **suggestion coverage**, not confirmed adoption.
 
 ## Quick Examples
 
@@ -123,7 +136,7 @@ uv run --locked pr-suggestion-analyze \
   --merged-pr-diff /path/to/merged.diff
 ```
 
-This returns a JSON result that includes percentage output, deterministic evidence, explanation output, warnings, and artifact hashes.
+This returns JSON with the score, evidence, explanation, warnings, and artifact hashes.
 
 ### Collect paired examples from GitHub pull requests
 
@@ -147,22 +160,28 @@ python3 scripts/check_documentation.py
 uv build
 ```
 
-### Reproduce the checked-in research pipeline
+### Reproduce the checked-in research workflow
 
 Read [`docs/reproducibility.md`](docs/reproducibility.md). That document is the source of truth for:
 
 - environment setup;
 - validation commands;
-- benchmark freezing;
+- benchmark creation;
 - model selection and training;
 - calibration and protected evaluation.
 
-### Work on the benchmark pipeline
+### Work on the benchmark workflow
 
 The supported flow is:
 
 ```text
 examples -> split planning -> annotation packets -> adjudication -> frozen benchmark -> feature table -> training
+```
+
+Plain version:
+
+```text
+examples -> answer sheets -> checked dataset -> model training
 ```
 
 The main commands are:
@@ -182,8 +201,8 @@ Start with these directories:
 
 ```text
 src/pr_suggestion_metrics/   supported package code
-tests/                      active regression and contract tests
-docs/                       canonical docs and plans
+tests/                      active tests
+docs/                       current docs and plans
 models/                     demo artifact metadata and local demo model bundle
 space/                      Hugging Face Space entry point
 scripts/                    small validation helpers
@@ -193,7 +212,7 @@ Know these before you edit:
 
 ```text
 data/                       active small datasets and fixtures
-research/archive/           unsupported historical work kept for provenance
+research/archive/           unsupported historical work kept for project history
 notebooks/                  exploratory notebooks, not runtime dependencies
 reports/                    generated outputs
 ```
@@ -204,13 +223,12 @@ If you are new, do **not** start in `research/archive/`. It is intentionally pre
 
 - [`docs/getting-started.md`](docs/getting-started.md) — best first read for a new contributor.
 - [`docs/project-guide.md`](docs/project-guide.md) — history, structure, workflows, and pitfalls.
-- [`docs/README.md`](docs/README.md) — document index and source-of-truth rules.
+- [`docs/README.md`](docs/README.md) — document index and where each fact should live.
 - [`docs/architecture.md`](docs/architecture.md) — package boundaries and data flow.
-- [`docs/reproducibility.md`](docs/reproducibility.md) — exact validation, benchmark, and training commands.
-- [`docs/data-card.md`](docs/data-card.md) — dataset provenance, limitations, and allowed claims.
-- [`docs/model-card.md`](docs/model-card.md) — model contract, failure modes, and validation blockers.
+- [`docs/reproducibility.md`](docs/reproducibility.md) — exact check, benchmark, and training commands.
+- [`docs/data-card.md`](docs/data-card.md) — where datasets came from, limits, and allowed claims.
+- [`docs/model-card.md`](docs/model-card.md) — what the model can safely do and where it fails.
 - [`docs/deployment.md`](docs/deployment.md) — demo deployment guidance.
-- [`docs/implementation-progress.md`](docs/implementation-progress.md) — what has actually shipped.
 - [`docs/implementation-progress.md`](docs/implementation-progress.md) — shipped state and next implementation gate.
 - [`docs/senior-code-review.md`](docs/senior-code-review.md) — findings, risks, and remaining priorities.
 
@@ -226,14 +244,14 @@ The package exposes these main public entry points from `pr_suggestion_metrics`:
 - `evaluate_ai_review`
 - `summarize_ai_reviewer`
 
-The lazy export contract is covered by [`tests/test_public_api.py`](tests/test_public_api.py).
+The public API is checked by [`tests/test_public_api.py`](tests/test_public_api.py).
 
 ## Working Agreements
 
 - `uv.lock` is the dependency source of truth.
 - Model files are loaded only from an explicit trusted `model_dir`.
 - Supported code must not import from `research/archive/`.
-- Active behavior changes should update the relevant canonical docs, not just code.
+- Behavior changes should update the relevant docs, not just code.
 - Documentation changes should pass `python3 scripts/check_documentation.py`.
 
 ## Next Read

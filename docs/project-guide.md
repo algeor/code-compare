@@ -4,36 +4,53 @@
 
 **Audience:** contributors, maintainers, reviewers, researchers, and future agents
 
-**Purpose:** explain enough history, structure, workflows, and constraints to become effective in the project quickly
+**Purpose:** explain the project in plain language so a new reader can get useful quickly
 
 ## 1. Project In One Minute
 
-This repository studies **semantic PR suggestion coverage**: how much of a code-review suggestion is represented in a merged pull-request diff.
+This repository studies **PR suggestion coverage**.
 
-The current project is a strong research prototype. It has production-quality contracts in several places, but it is not yet a scientifically validated model release.
+Plain meaning: it checks how much of a code-review suggestion appears in the merged pull-request diff.
+
+The current project is a strong research prototype. Some parts are solid and tested. The model is still experimental.
 
 The safest claim is:
 
-> The project compares suggested diffs with merged PR diffs, returns deterministic evidence, and can produce an experimental coverage percentage for a narrow supported raw-diff shape.
+> The project compares a suggested diff with a merged PR diff, shows the matching evidence, and sometimes gives an experimental 0-100 score.
 
-Do not describe the score as proof of adoption, causality, reviewer quality, or final-state semantic equivalence.
+Do not describe the score as proof that the suggestion caused the code change.
 
-## 2. Current Building Blocks
+## 2. Plain Words
+
+| Term | Simple meaning |
+|---|---|
+| Diff | A text view of code changes. |
+| Suggestion | The code change proposed in a review comment. |
+| Merged PR diff | The code changes that actually landed in the pull request. |
+| Coverage | How much of the suggestion appears in the merged PR diff. |
+| Exact evidence | Specific changed lines or renames the tool can point to. |
+| Benchmark | An answer key used to test the model. |
+| Frozen benchmark | An answer key saved in a fixed version so results cannot quietly change. |
+| Abstention | The model refuses to guess because the input is unsupported or unsafe to score. |
+| Artifact | A saved file created by the workflow, such as a model, report, or dataset. |
+| Provenance | Where an example came from and enough history to trust it. |
+
+## 3. Current Building Blocks
 
 | Building block | Main question | Current status | Start here |
 |---|---|---|---|
-| Deterministic change evidence | Which suggested change units appear in the merged diff? | Implemented for additions, deletions, renames, moves, multi-file, and multi-hunk evidence | `diff_semantics.py`, `diff/`, `features/` |
-| Experimental percentage inference | What 0-100 score does the learned model predict? | Implemented only for single-file, single-hunk, pure-addition raw suggestions | `model_inference.py`, `model_artifacts.py`, `modeling/` |
-| Grounded explanation service | How can evidence be explained without unsupported claims? | Implemented with deterministic templates; CodeBERT provider is future work | `analysis_service.py`, `explanations/` |
-| AI reviewer evaluation | What did an AI review get right or wrong against independent evidence? | Implemented as a separate construct from coverage | `reviewer_evaluation.py` |
-| Benchmark production | How do we create leak-resistant frozen data? | Tooling implemented; valid benchmark still needs new evidence | `benchmark/`, `prepare_annotation_packets.py`, `freeze_benchmark.py` |
+| Exact evidence | Which suggested changes can we find in the merged diff? | Implemented for many diff shapes | `diff_semantics.py`, `diff/`, `features/` |
+| Experimental score | What 0-100 score does the model predict? | Implemented only for simple addition suggestions | `model_inference.py`, `model_artifacts.py`, `modeling/` |
+| Explanation service | How do we explain the answer without overclaiming? | Implemented with safe templates; smarter model is future work | `analysis_service.py`, `explanations/` |
+| AI reviewer grading | What did an AI review get right or wrong? | Implemented separately from coverage | `reviewer_evaluation.py` |
+| Benchmark tools | How do we make a better answer key? | Tools exist; better labels are still needed | `benchmark/`, `prepare_annotation_packets.py`, `freeze_benchmark.py` |
 | Demo UI | How can the current system be shown locally? | Implemented with Gradio and a weak demo model | `demo_gradio.py`, `space/app.py` |
 
-## 3. History And Pivot Points
+## 4. History And Pivot Points
 
 ### Early research era
 
-The repository began as an exploratory comparison project with notebooks, generated datasets, embedding experiments, bucket/range labels, dashboards, paper assets, and several model attempts.
+The repository started as an experiment. It had notebooks, generated datasets, old labels, dashboards, paper drafts, and several model attempts.
 
 That era produced useful research context, but its artifacts are no longer the supported path.
 
@@ -49,69 +66,80 @@ That archive preserves:
 - generated review examples;
 - migration helpers and archive manifests.
 
-Treat it as provenance, not product code. Supported modules must not import from it.
+Treat it as history, not product code. Current code must not import from it.
 
 ### Current continuous-percentage era
 
-The active project now uses continuous percentages from `0` to `100`, typed diff diagnostics, explicit abstention, versioned evidence/result schemas, deterministic artifact hashes, grouped splits, calibration tooling, and protected-evaluation receipts.
+The active project now uses scores from `0` to `100`, clear parse errors, explicit abstention, versioned result shapes, file hashes, split planning, calibration tools, and protected evaluation receipts.
 
-The main current priority is **valid evidence**, not model tuning.
+The main current priority is **better answer-key data**, not model tuning.
 
-## 4. Repository Map
+## 5. Repository Map
 
 ```text
 src/pr_suggestion_metrics/   supported Python package
-tests/                      active unit, regression, and contract tests
-docs/                       canonical docs and research references
+tests/                      active unit and regression tests
+docs/                       current docs and research references
 models/                     demo artifact metadata and local weak model bundle
 space/                      Hugging Face Space / Gradio app entry point
 scripts/                    small repository validation helpers
 data/                       active small datasets and source snapshots
 reports/                    generated outputs; read with context
 notebooks/                  exploratory notebooks, not runtime dependencies
-research/archive/           unsupported historical research preserved for provenance
+research/archive/           unsupported historical research kept for project history
 ```
 
 If you are new, start in `README.md`, this guide, `docs/architecture.md`, and `docs/reproducibility.md`. Do not start in `research/archive/` unless you are reconstructing history.
 
-## 5. Active Package Structure
+## 6. Active Package Structure
 
 ```text
 analysis_service.py          composed result for CLI, API, and demo surfaces
-diff_semantics.py            exact normalized change-unit evidence
-model_inference.py           trusted model loading and raw-diff inference
+diff_semantics.py            exact simplified change-line evidence
+model_inference.py           trusted model loading and raw-diff scoring
 reviewer_evaluation.py       separate AI review quality scoring
-artifact_io.py               strict JSONL and atomic artifact helpers
+artifact_io.py               strict JSONL and safe file-writing helpers
 percentages.py               shared percentage validation and rounding
 scientific_contracts.py      research contract types
 
 diff/                        unified-diff parsing and diagnostics
 features/                    lexical, structural, matching, and scoring features
-collection/                  GitHub collection contracts, extraction, gateway, service
-benchmark/                   split planning, provenance reconstruction, feature building
+collection/                  GitHub collection rules, extraction, gateway, service
+benchmark/                   split planning, history reconstruction, feature building
 modeling/                    training, model selection, and shared evaluation helpers
-explanations/                evidence-provider contract and grounded templates
+explanations/                evidence-provider rules and grounded templates
 cli/                         command orchestration kept outside core logic
 ```
 
 Compatibility modules such as `collect_pr_code_changes.py` and `evaluate_metrics.py` are thin shells around newer responsibility modules. New code should import from the responsibility module when possible.
 
-## 6. Main Data Flow
+## 7. Main Data Flow
 
 The intended validated path is:
 
 ```text
 verified suggestion event
-  -> provenance-complete candidate
+  -> example with enough history to trust
   -> blinded annotation packets
-  -> independent labeling and adjudication
+  -> independent labels and disagreement checks
   -> grouped split plan
   -> frozen benchmark
-  -> canonical feature table
+  -> standard feature table
   -> model selection and training
   -> calibration
   -> protected evaluation
-  -> versioned release artifact
+  -> versioned release files
+```
+
+Plain version:
+
+```text
+collect examples
+  -> make answer sheets
+  -> check disagreements
+  -> freeze the answer key
+  -> train the model
+  -> test once on protected examples
 ```
 
 The current demo path is shorter:
@@ -119,16 +147,16 @@ The current demo path is shorter:
 ```text
 suggested diff + merged PR diff
   -> raw-diff assessment
-  -> deterministic change evidence
+  -> exact change evidence
   -> model feature row when supported
   -> weak local percentage model or abstention
-  -> deterministic explanation templates
+  -> safe explanation templates
   -> AnalysisResult
 ```
 
-Unsupported raw-diff shapes should abstain rather than returning a confident-looking score.
+Unsupported raw-diff shapes should return **abstained** rather than a confident-looking guess.
 
-## 7. Commands You Should Know
+## 8. Commands You Should Know
 
 ### First setup
 
@@ -173,7 +201,7 @@ uv run --locked pr-suggestion-analyze \
 
 Use `docs/reproducibility.md` as the command source of truth.
 
-## 8. What Is Current Versus Historical
+## 9. What Is Current Versus Historical
 
 Current:
 
@@ -193,13 +221,13 @@ Historical or reference-only:
 
 The archive can explain why the project changed direction. It should not define current claims.
 
-## 9. Claims And Language Rules
+## 10. Claims And Language Rules
 
 Use these phrases:
 
 - **suggestion coverage**;
-- **semantic agreement**;
-- **deterministic evidence**;
+- **semantic agreement**, if you also explain it means "meaning-level overlap";
+- **exact evidence**;
 - **experimental percentage estimate**;
 - **LLM-assisted or weak labels**;
 - **LLM-adjudicated benchmark**, when that workflow is used.
@@ -209,20 +237,20 @@ Avoid these phrases unless new evidence really supports them:
 - **adoption**;
 - **causal impact**;
 - **validated production model**;
-- **human ground truth**, for current labels;
+- **production-grade validation labels**, for current labels;
 - **final-state semantic equivalence**, when only PR diffs were compared.
 
-## 10. Common Pitfalls
+## 11. Common Pitfalls
 
-- The deterministic evidence supports more edit shapes than the learned raw-diff API.
+- The exact evidence supports more edit shapes than the learned raw-diff API.
 - Exact text evidence is still not proof that a suggestion caused a change.
 - The current demo model is weak and local. It is useful for showing the interface, not for release claims.
-- Current corpora are exploratory and have leakage and provenance limits.
+- Current datasets are exploratory and have trust limits.
 - `joblib` model artifacts are trusted-input only, even when local hashes match.
-- Structural feature values can change when optional parser tooling is unavailable.
+- Some feature values can change when optional parser tools are missing.
 - Reports in `reports/` may be historical diagnostics; check the linked docs before citing them.
 
-## 11. Reading Path To Mastery
+## 12. Reading Path To Mastery
 
 ### First hour
 
@@ -251,14 +279,14 @@ Avoid these phrases unless new evidence really supports them:
 2. Verify whether the report references archived models or bucket-era labels.
 3. Cite the limitation beside the number.
 
-## 12. How To Extend Safely
+## 13. How To Extend Safely
 
 - Keep source collection separate from feature/model code.
 - Keep feature extraction separate from benchmark writing and training.
-- Keep runtime inference separate from training commands.
-- Version result, evidence, feature, and artifact schema changes.
+- Keep runtime scoring separate from training commands.
+- Version result, evidence, feature, and saved-file format changes.
 - Add characterization tests before moving behavior.
-- Update the canonical docs in the same change set as behavior changes.
+- Update the main docs in the same change set as behavior changes.
 - Preserve explicit abstention for unsupported or invalid inputs.
 
-The project gets stronger when uncertainty is visible. A clean abstention is better than a polished unsupported score.
+The project gets stronger when uncertainty is visible. A clean "I can't score this" is better than a polished unsupported score.

@@ -94,14 +94,14 @@ A deployable model directory must contain:
 
 Inference verifies model and schema hashes before deserializing. This catches accidental or unauthorized file changes but does not authenticate the publisher. `joblib` uses pickle semantics and can execute code while loading; load only artifacts from a trusted repository/revision.
 
-The repository intentionally does not bundle a model until a bucket-free frozen benchmark and confirmatory evaluation exist.
+The repository intentionally does not claim a production-grade model until stronger frozen validation and protected evaluation exist.
 
 ## 10. Validation Blockers
 
 The model must not be called scientifically validated until all of the following exist:
 
 1. verified suggestion-time and final-state provenance;
-2. a frozen unit-level independently annotated benchmark, with label source reported accurately;
+2. a frozen unit-level validation set, with label source reported accurately;
 3. removal of label-feature leakage;
 4. support or explicit abstention across required edit semantics;
 5. a new held-out calibration set and a generated uncertainty artifact;

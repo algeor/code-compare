@@ -52,7 +52,7 @@ live in versioned external storage with repository-held schemas, manifests, and 
 
 ```text
 source gateway
-    -> provenance-complete candidate
+    -> lineage-checked candidate
     -> blinded annotation packets
     -> independent annotation + adjudication
     -> grouped split plan
@@ -143,7 +143,7 @@ abstention reasons, and limitations.
 | Capability | Current | Future gate |
 |---|---|---|
 | Exact change evidence | Implemented | Version normalization and strict/relaxed evidence policies |
-| Percentage inference | Implemented, experimental and narrow | Human benchmark, calibration, and protected evaluation |
+| Percentage inference | Implemented, experimental and narrow | Practical validation, calibration when data supports it, and protected evaluation |
 | Grounded explanation contracts | Implemented | CodeBERT provider and grouped evidence evaluation |
 | Combined analysis service | Implemented with deterministic-template explanations | Validated release bundle and future CodeBERT provider |
 | Hugging Face showcase | Documented | Validated artifacts, Docker runtime, limits, and smoke tests |

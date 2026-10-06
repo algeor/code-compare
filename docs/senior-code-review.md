@@ -16,7 +16,7 @@ This is the live source of truth for review findings. Findings are recorded here
 
 - The repository now passes its full 128-test suite, configured Ruff checks, full active-package mypy checks, package build, and archive verification.
 - Confirmed high-severity defects were fixed in diff parsing, annotation integrity, split leakage, protected evaluation, feature provenance, label ingestion, legacy joins, resumable evaluation, and temporary credential handling.
-- The supported runtime is materially safer, but the project remains a research prototype until a provenance-complete independently annotated benchmark exists.
+- The supported runtime is materially safer, but the project remains a research prototype until stronger practical validation, calibration, and error analysis exist.
 - The next structural priority is to separate supported domain/features/modeling services from the two large collection/evaluation monoliths and legacy experiment entry points.
 
 ## Review Method
@@ -47,14 +47,14 @@ This is the live source of truth for review findings. Findings are recorded here
 
 ## Findings Log
 
-### F-001 — Scientific evidence is the release bottleneck
+### F-001 — Validation evidence is the release bottleneck
 
 - **Severity:** High
 - **Area:** product validity
 - **Status:** documented; implementation work pending real data
-- **Evidence:** the checked-in estimator is trained on reused LLM-assisted or weak labels; no provenance-complete, independently annotated frozen benchmark is present.
+- **Evidence:** the checked-in estimator is trained on reused LLM-assisted or weak labels; no frozen validation set with complete lineage, calibrated uncertainty, and protected evaluation is present.
 - **Risk:** clean code and passing tests can still produce a scientifically unsupported percentage.
-- **Action:** prioritize provenance-complete collection, blinded double annotation, adjudication, grouped splits, calibration, and one protected test evaluation.
+- **Action:** prioritize lineage-checked collection, explicit label-source records, adjudication where available, grouped splits, calibration, and one protected test evaluation.
 
 ### F-002 — Learned raw-diff support is narrower than exact evidence
 
@@ -260,7 +260,7 @@ This is the live source of truth for review findings. Findings are recorded here
 - **Area:** labeling data integrity
 - **Status:** fixed
 - **Evidence:** duplicate LLM outputs overwrote earlier rows, unknown example IDs were accepted, fractional percentages were truncated, and batch counts were wrong for empty or exact-multiple datasets.
-- **Risk:** label files could silently attach the wrong or altered ground truth to examples.
+- **Risk:** label files could silently attach the wrong or altered target value to examples.
 - **Action:** reject duplicate, missing, unknown, fractional, and out-of-range labels; compute batch counts from emitted batches.
 
 ### F-025 — Repository-held-out resume could mix stale or partial folds
@@ -377,4 +377,4 @@ This is the live source of truth for review findings. Findings are recorded here
 2. Version normalization and strict-versus-relaxed evidence contracts.
 3. Make multi-artifact benchmark workflows transactional using the new staging primitives.
 4. Replace component-count splitting with deterministic example-balanced assignment.
-5. Build a provenance-complete independently annotated benchmark under the finalized metric and artifact contracts.
+5. Build a lineage-checked validation set under the finalized metric and artifact contracts, using available labels and clear source reporting.

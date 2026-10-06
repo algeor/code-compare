@@ -133,16 +133,14 @@ Ignore unrelated PR changes. A same-file or same-topic match is not sufficient. 
 
 ## 9. Annotation Workflow
 
-The same unit, evidence, and percentage rules apply to human annotation and LLM-operated annotation. The label source must be recorded honestly in the frozen benchmark manifest. An LLM-adjudicated benchmark is useful for the next research gate, but it is not human ground truth.
+The same unit, evidence, and percentage rules apply to every label source. The label source must be recorded honestly in the frozen benchmark manifest. LLM-adjudicated labels can support the practical validation path, but they must be reported as LLM-assisted rather than production-grade validation labels.
 
-1. Train annotators on examples excluded from every experiment.
-2. Run a pilot and revise ambiguous instructions before freezing guide version 1.0.
-3. Double-annotate every confirmatory test example independently.
-4. Preserve both original records unchanged.
-5. Compute agreement before adjudication.
-6. Adjudicate disagreements using a third qualified reviewer or consensus meeting.
-7. Store adjudication separately with reasons and references to both source records.
-8. Freeze labels and hashes before model selection begins.
+1. Fix the annotation guide before labeling begins.
+2. Record the label source, prompt/model version, and review rules for every example.
+3. Preserve original label records unchanged.
+4. Adjudicate disagreements where multiple label sources exist.
+5. Store adjudication separately with reasons and references to source records.
+6. Freeze labels and hashes before model selection begins.
 
 Recommended agreement reporting:
 

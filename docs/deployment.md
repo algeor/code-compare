@@ -22,7 +22,7 @@ The app entry points are:
 - `src/pr_suggestion_metrics/demo_gradio.py` for the package CLI;
 - `space/app.py` for Hugging Face Spaces.
 
-This is a demonstration path, not a validated production service. The checked-in demo model is trained on weak local labels and must not be presented as human ground truth or release-validated science.
+This is a demonstration path, not a validated production service. The checked-in demo model is trained on weak local labels and must not be presented as production-grade validation evidence.
 
 For the target CodeBERT explanation path, see [`explanation-model-design.md`](explanation-model-design.md).
 

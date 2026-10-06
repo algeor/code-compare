@@ -4,7 +4,7 @@
 
 **Audience:** contributors, reviewers, researchers, demo operators, and future agents
 
-**Purpose:** provide a compact system architecture map for the current project
+**Purpose:** provide a compact system map for the current project
 
 ## 1. Purpose
 
@@ -12,12 +12,12 @@ The project measures how much of a code-review suggestion is represented in a me
 
 It produces:
 
-- deterministic evidence from exact diff-unit matching;
+- exact evidence from matching changed lines and renames;
 - an experimental coverage percentage for supported raw diff shapes;
-- grounded explanations based on inspectable evidence;
+- short explanations based on inspectable evidence;
 - separate AI review quality scoring against independent evidence.
 
-It does not prove causal adoption or production-validated semantic equivalence.
+It does not prove the suggestion caused the change. It also does not prove the final code behaves exactly like the suggestion.
 
 ## 2. High-Level Architecture
 
@@ -27,13 +27,13 @@ User / CLI / Demo UI
         v
 AnalysisService
         |
-        +--> diff validation + deterministic evidence
+        +--> diff checks + exact evidence
         |
         +--> feature extraction
         |
-        +--> percentage model inference
+        +--> percentage model scoring
         |
-        +--> grounded explanation templates
+        +--> safe explanation templates
         |
         v
 Versioned AnalysisResult
@@ -70,12 +70,12 @@ Core project meaning lives here.
 diff_semantics.py        exact change-unit evidence
 reviewer_evaluation.py   separate AI review scoring
 percentages.py           shared percentage validation
-scientific_contracts.py  research contracts
+scientific_contracts.py  research rules
 ```
 
 ### Diff and feature layer
 
-This layer turns diffs into validated evidence and model-ready features.
+This layer turns diffs into checked evidence and model-ready features.
 
 ```text
 diff/        unified diff parsing and diagnostics
@@ -95,7 +95,7 @@ raw suggested diff + merged PR diff
 
 ### Model runtime layer
 
-This layer loads trusted model artifacts and performs inference.
+This layer loads trusted model files and runs scoring.
 
 ```text
 model_inference.py
@@ -108,11 +108,11 @@ Rules:
 - model directory must be explicit;
 - manifest hashes are verified;
 - unsupported inputs abstain;
-- `joblib` artifacts are trusted-input only.
+- `joblib` model files are trusted-input only.
 
 ### Research pipeline layer
 
-This layer creates reproducible benchmark and training artifacts.
+This layer creates repeatable benchmark and training files.
 
 ```text
 collection/
@@ -128,7 +128,7 @@ Target flow:
 ```text
 collect candidates
  -> prepare blinded annotation packets
- -> adjudicate labels
+ -> check label disagreements
  -> freeze benchmark
  -> build feature table
  -> select/train model
@@ -155,9 +155,9 @@ docs/senior-code-review.md
 ## 4. Important Boundaries
 
 - `research/archive/` is historical only.
-- Runtime inference must not import training code.
+- Runtime scoring must not import training code.
 - Supported code must not import archived bucket-era code.
-- Deterministic evidence is not semantic proof.
+- Exact evidence is not proof that the suggestion caused the change.
 - Coverage scoring is separate from AI reviewer quality scoring.
 
 ## 5. Current Product Shape
@@ -168,18 +168,18 @@ suggested diff + merged PR diff
         v
 AnalysisService
         |
-        +--> deterministic evidence
+        +--> exact evidence
         +--> weak/demo percentage model
         +--> template explanation
         |
         v
-JSON result with hashes, warnings, evidence, score/abstention
+JSON result with hashes, warnings, evidence, score, or abstention
 ```
 
 ## 6. Future Product Shape
 
 ```text
-validated diff evidence
+checked diff evidence
         |
         +--> calibrated percentage model
         |
@@ -189,4 +189,4 @@ validated diff evidence
 stable API / CLI / hosted demo result
 ```
 
-The key next architecture goal is not more model tuning. It is better benchmark evidence: provenance-complete, independently labeled, frozen, and evaluated once.
+The key next architecture goal is not more model tuning. It is a better benchmark: examples with trustworthy history, independent labels, a frozen answer key, and one protected final test.

@@ -4,7 +4,7 @@
 
 **Audience:** new contributors, reviewers, and researchers joining the project
 
-**Purpose:** get a new person productive in the first hour without learning the whole repository at once
+**Purpose:** get a new person productive in the first hour without learning everything at once
 
 ## 1. First Hour Path
 
@@ -30,11 +30,21 @@ Then read:
 4. [`reproducibility.md`](reproducibility.md)
 5. [`implementation-progress.md`](implementation-progress.md)
 
-## 2. Mental Model
+## 2. Words You Will See
 
-This repository is easiest to understand if you think of it as **three related products plus supporting research infrastructure**.
+| Term | Simple meaning |
+|---|---|
+| Diff | A text view of code changes. |
+| Coverage | How much of the suggestion appears in the merged PR diff. |
+| Evidence | The exact lines or renames the tool found. |
+| Benchmark | The answer key used to test the model. |
+| Abstain | The model says, "I can't score this safely." |
 
-### Product A: deterministic evidence
+## 3. Mental Model
+
+This repository is easiest to understand as **three tools plus research helpers**.
+
+### Tool A: exact evidence
 
 This answers:
 
@@ -46,11 +56,11 @@ Main code:
 - `src/pr_suggestion_metrics/diff/`
 - `src/pr_suggestion_metrics/features/`
 
-### Product B: experimental percentage inference
+### Tool B: experimental percentage score
 
 This answers:
 
-> For a narrow raw-diff shape, what percentage does the learned model predict?
+> For a simple supported suggestion, what 0-100 score does the model predict?
 
 Main code:
 
@@ -59,7 +69,7 @@ Main code:
 - `src/pr_suggestion_metrics/uncertainty.py`
 - `src/pr_suggestion_metrics/modeling/`
 
-### Product C: AI reviewer evaluation
+### Tool C: AI reviewer grading
 
 This answers:
 
@@ -69,9 +79,9 @@ Main code:
 
 - `src/pr_suggestion_metrics/reviewer_evaluation.py`
 
-### Supporting infrastructure
+### Research helpers
 
-This makes the research workflow reproducible:
+These commands help create datasets, benchmarks, and training files:
 
 - `src/pr_suggestion_metrics/collection/`
 - `src/pr_suggestion_metrics/benchmark/`
@@ -79,7 +89,7 @@ This makes the research workflow reproducible:
 - `src/pr_suggestion_metrics/freeze_benchmark.py`
 - `src/pr_suggestion_metrics/build_dataset.py`
 
-## 3. Where To Read First In Code
+## 4. Where To Read First In Code
 
 Use this order if you want the smallest useful slice:
 
@@ -92,7 +102,7 @@ Use this order if you want the smallest useful slice:
 
 If you start in `research/archive/`, you will get historical context fast, but you will understand the supported system more slowly.
 
-## 4. Common Commands
+## 5. Common Commands
 
 ### Validate before and after a change
 
@@ -135,14 +145,14 @@ uv run --locked pr-suggestion-plan-splits \
 
 The full benchmark, training, and confirmatory workflow lives in [`reproducibility.md`](reproducibility.md).
 
-## 5. Where To Work By Goal
+## 6. Where To Work By Goal
 
 If your task is about one of these areas, start here:
 
 | Goal | Start in |
 |---|---|
 | Public API behavior | `src/pr_suggestion_metrics/__init__.py`, `tests/test_public_api.py` |
-| Deterministic diff matching | `diff_semantics.py`, `diff/`, `features/` |
+| Exact diff matching | `diff_semantics.py`, `diff/`, `features/` |
 | Model loading or prediction | `model_inference.py`, `model_artifacts.py` |
 | Review-quality scoring | `reviewer_evaluation.py` |
 | Data collection | `collection/`, `cli/collect.py` |
@@ -150,45 +160,45 @@ If your task is about one of these areas, start here:
 | Local demo or hosted demo | `demo_gradio.py`, `analysis_service.py`, `space/app.py` |
 | Docs or repo-wide framing | `README.md`, `docs/README.md`, the relevant card or guide |
 
-## 6. Important Project Rules
+## 7. Important Project Rules
 
 These will save you time:
 
-- The learned raw-diff API is intentionally narrow and should abstain on unsupported inputs.
-- Deterministic evidence is stronger than similarity, but it is still not causal adoption proof.
-- Current corpora are exploratory. They are not the validated benchmark the roadmap still calls for.
-- `joblib` artifacts are trusted-input only. Manifest hashes protect integrity, not publisher authenticity.
-- `research/archive/` is preserved for provenance and should not become a live dependency again.
+- The learned raw-diff API is narrow. If input is unsupported, it should say **abstained**.
+- Exact evidence is useful, but it still does not prove the suggestion caused the change.
+- Current datasets are exploratory. They are not the validated benchmark the project still needs.
+- `joblib` model files are trusted-input only. Hashes catch file changes; they do not prove who made the file.
+- `research/archive/` is history. Do not make current code depend on it again.
 - `uv.lock` is the dependency source of truth.
 
-## 7. Safe First Changes
+## 8. Safe First Changes
 
 Good first contributions usually look like one of these:
 
-- tighten or extend tests around an existing contract;
+- tighten or extend tests around existing behavior;
 - improve docs and cross-links when behavior already exists;
 - add characterization coverage before moving code;
-- improve CLI error messages without changing the underlying contract;
+- improve CLI error messages without changing what the command does;
 - cleanly extract code within an existing boundary defined in [`architecture.md`](architecture.md).
 
 Riskier changes usually need more design attention:
 
-- changing metric semantics;
+- changing what the score means;
 - widening raw-diff model support;
 - reusing archived code in active paths;
-- presenting exploratory labels or demo artifacts as validated results.
+- presenting exploratory labels or demo files as validated results.
 
-## 8. What Success Looks Like
+## 9. What Success Looks Like
 
 After onboarding, a new contributor should be able to do all of this confidently:
 
-- explain the difference between deterministic evidence and learned percentage output;
+- explain the difference between exact evidence and the learned percentage score;
 - run tests and the local demo from the repository root;
 - find the right module for a bug or feature request;
 - know which doc is authoritative for claims, data, models, and workflows;
 - avoid turning archived research artifacts into active dependencies by accident.
 
-## 9. Next Reads
+## 10. Next Reads
 
 - [`architecture.md`](architecture.md) if you are about to edit code.
 - [`project-guide.md`](project-guide.md) if you want the history, structure, and common pitfalls in one place.

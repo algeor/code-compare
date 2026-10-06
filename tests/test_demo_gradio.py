@@ -1,8 +1,29 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from pr_suggestion_metrics.demo_gradio import SAMPLE_MERGED_DIFF, SAMPLE_SUGGESTED_DIFF, analyze_for_demo
+
+
+EXAMPLE_PAIRS_PATH = Path(__file__).resolve().parents[1] / "data" / "examples" / "diff_checker_pairs.jsonl"
+EXPECTED_DEMO_STATUS_BY_ID = {
+    "exact_same_file_addition": "predicted",
+    "final_has_extra_lines": "predicted",
+    "suggestion_has_extra_line": "predicted",
+    "same_code_moved_to_new_file": "predicted",
+    "same_text_wrong_operation": "abstained",
+    "no_overlap_same_file": "predicted",
+    "exact_rename_only": "abstained",
+    "duplicate_line_occurrence": "predicted",
+    "exact_replacement": "abstained",
+}
+
+
+def _example_pairs() -> list[dict[str, object]]:
+    return [json.loads(line) for line in EXAMPLE_PAIRS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_analyze_for_demo_returns_summary_and_raw_payload() -> None:
@@ -34,3 +55,28 @@ def test_analyze_for_demo_uses_latest_inputs() -> None:
 
     assert first["demo_input_fingerprint"] != second["demo_input_fingerprint"]
     assert first["percentage"]["input_hashes"] != second["percentage"]["input_hashes"]
+
+
+@pytest.mark.parametrize("example", _example_pairs(), ids=lambda row: str(row["id"]))
+def test_analyze_for_demo_accepts_diff_checker_examples(example: dict[str, object]) -> None:
+    example_id = str(example["id"])
+    summary, raw_payload = analyze_for_demo(
+        str(example["suggested_diff"]),
+        str(example["merged_pr_diff"]),
+    )
+    payload = json.loads(raw_payload)
+    percentage = payload["percentage"]
+    evidence = percentage["change_coverage_evidence"]
+    status_badge = "✅ Predicted" if payload["status"] == "predicted" else "⚠️ Abstained"
+
+    assert payload["status"] == EXPECTED_DEMO_STATUS_BY_ID[example_id]
+    assert payload["demo_input_fingerprint"]
+    assert payload["demo_disclaimer"] == "Weak local labels only; not human validated; not release validated."
+    assert evidence["coverage_percentage"] == example["expected_exact_coverage_percentage"]
+    assert f"<span>Status</span><strong>{status_badge}</strong>" in summary
+    if payload["status"] == "predicted":
+        assert percentage["model_predicted_percentage"] is not None
+        assert percentage["model_name"] == "extra_trees"
+    else:
+        assert percentage["model_predicted_percentage"] is None
+        assert percentage["applicability_reasons"]

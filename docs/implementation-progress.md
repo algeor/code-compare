@@ -12,7 +12,7 @@ This file is the durable implementation log for shipped phases and the next impl
 - **Phase 3 — Lock metric contracts:** complete.
 - **Phase 4 — Harden benchmark production:** complete.
 - **Phase 5 — Build LLM-adjudicated benchmark v1:** next.
-- **Next gate:** collect provenance-complete candidates and run independent LLM annotation plus adjudication under the finalized metric and artifact contracts.
+- **Next gate:** collect lineage-checked candidates and run LLM-assisted adjudication under the finalized metric and artifact contracts.
 
 ## Completed
 
