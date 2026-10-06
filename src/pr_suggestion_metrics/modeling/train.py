@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import ExtraTreesRegressor, GradientBoostingRegressor, RandomForestRegressor
@@ -17,7 +18,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from pr_suggestion_metrics.feature_preprocessing import coerce_boolean_series, coerce_numeric_series
 from pr_suggestion_metrics.model_artifacts import sha256_file, write_model_manifest
-from pr_suggestion_metrics.train_percentage_regressor import (
+from pr_suggestion_metrics.modeling.common import (
     BOOLEAN_FEATURES,
     CATEGORICAL_FEATURES,
     NUMERIC_FEATURES,
@@ -36,6 +37,67 @@ _EXCLUDED_FEATURES = {
     "gumtree_available",
     "gumtree_language",
 }
+_ALLOWED_SPLITS = {"train", "development", "calibration"}
+_SUPPORTED_CANDIDATES = {"random_forest", "extra_trees", "gradient_boosting"}
+
+
+def _validate_training_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    required = {"split", "coverage_percentage", "group_id"}
+    missing = sorted(required - set(rows.columns))
+    if missing:
+        raise ValueError(f"Feature table is missing required columns: {missing}")
+
+    validated = rows.copy()
+    normalized_splits = validated["split"].astype("string").str.strip().str.lower()
+    invalid_splits = normalized_splits.isna() | ~normalized_splits.isin(_ALLOWED_SPLITS)
+    if invalid_splits.any():
+        invalid_values = sorted(validated.loc[invalid_splits, "split"].astype(str).unique().tolist())
+        raise ValueError(
+            f"Feature table contains unsupported split values: {invalid_values}; "
+            "expected only train, development, or calibration rows"
+        )
+    validated["split"] = normalized_splits.astype(str)
+
+    group_ids = validated["group_id"].astype("string").str.strip()
+    invalid_groups = group_ids.isna() | group_ids.eq("")
+    if invalid_groups.any():
+        raise ValueError("Feature table group_id values must be non-empty")
+    validated["group_id"] = group_ids.astype(str)
+
+    try:
+        targets = pd.to_numeric(validated["coverage_percentage"], errors="raise").to_numpy(dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Feature table coverage_percentage values must be numeric") from exc
+    if not np.isfinite(targets).all() or np.any((targets < 0) | (targets > 100)):
+        raise ValueError("Feature table coverage_percentage values must be finite and between 0 and 100")
+    validated["coverage_percentage"] = targets
+
+    split_counts = validated.groupby("group_id", sort=False)["split"].nunique()
+    overlapping_groups = split_counts[split_counts > 1].index.tolist()
+    if overlapping_groups:
+        preview = overlapping_groups[:5]
+        raise ValueError(f"group_id values must not cross dataset splits; overlapping groups: {preview}")
+    return validated
+
+
+def _training_config(config_path: Path | None) -> tuple[list[str], int]:
+    config = json.loads(config_path.read_text(encoding="utf-8")) if config_path else {}
+    if not isinstance(config, dict):
+        raise ValueError("Training config must be a JSON object")
+
+    candidates = config.get("candidates", ["random_forest", "extra_trees", "gradient_boosting"])
+    if not isinstance(candidates, list) or not candidates or not all(isinstance(name, str) for name in candidates):
+        raise ValueError("Training config candidates must be a non-empty list of model names")
+    if len(candidates) != len(set(candidates)):
+        raise ValueError("Training config candidates must not contain duplicates")
+    unsupported = sorted(set(candidates) - _SUPPORTED_CANDIDATES)
+    if unsupported:
+        raise ValueError(f"Unknown model candidates: {unsupported}")
+
+    random_state_value = config.get("random_state", 42)
+    if isinstance(random_state_value, bool) or not isinstance(random_state_value, int):
+        raise ValueError("Training config random_state must be an integer")
+    return candidates, random_state_value
 
 
 def _active_features(rows: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
@@ -127,37 +189,31 @@ def train_from_frozen_features(
     config_path: Path | None = None,
 ) -> dict[str, Any]:
     """Select on development only, then fit the chosen model on train+development."""
-    rows = pd.read_csv(features_path)
-    required = {"split", "coverage_percentage", "group_id"}
-    missing = sorted(required - set(rows.columns))
-    if missing:
-        raise ValueError(f"Feature table is missing required columns: {missing}")
-    if rows["split"].eq("test").any():
-        raise ValueError("The official trainer must not receive test rows")
+    rows = _validate_training_rows(pd.read_csv(features_path))
     train_rows = rows.loc[rows["split"].eq("train")].copy()
     development_rows = rows.loc[rows["split"].eq("development")].copy()
     if train_rows.empty or development_rows.empty:
         raise ValueError("Feature table must contain non-empty train and development splits")
 
-    config = json.loads(config_path.read_text(encoding="utf-8")) if config_path else {}
-    candidates = config.get("candidates", ["random_forest", "extra_trees", "gradient_boosting"])
-    random_state = int(config.get("random_state", 42))
+    candidates, random_state = _training_config(config_path)
     numeric, boolean, categorical = _active_features(train_rows)
     train_rows = _prepare(train_rows, numeric, boolean, categorical)
     development_rows = _prepare(development_rows, numeric, boolean, categorical)
     feature_columns = numeric + boolean + categorical
 
     candidate_results: list[dict[str, Any]] = []
-    fitted: dict[str, Pipeline] = {}
     for model_name in candidates:
-        model = _pipeline(str(model_name), numeric, boolean, categorical, random_state)
+        model = _pipeline(model_name, numeric, boolean, categorical, random_state)
         model.fit(train_rows[feature_columns], train_rows["coverage_percentage"])
         result = metrics(
             development_rows["coverage_percentage"].to_numpy(),
             model.predict(development_rows[feature_columns]),
         )
+        if not all(np.isfinite(value) for value in result.values()):
+            raise ValueError(
+                "Development metrics must be finite; provide enough valid development rows for model selection"
+            )
         candidate_results.append({"model_name": model_name, "development_metrics": result})
-        fitted[str(model_name)] = model
 
     selected = min(candidate_results, key=lambda item: item["development_metrics"]["percentage_mae"])
     selected_name = str(selected["model_name"])
@@ -179,7 +235,10 @@ def train_from_frozen_features(
         "feature_columns": feature_columns,
         "excluded_features": sorted(_EXCLUDED_FEATURES),
     }
-    (model_dir / "feature_schema.json").write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
+    (model_dir / "feature_schema.json").write_text(
+        json.dumps(schema, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     write_model_manifest(model_dir)
     report = {
         "schema_version": "1.0",
@@ -191,7 +250,10 @@ def train_from_frozen_features(
         "candidate_results": candidate_results,
         "feature_columns": feature_columns,
     }
-    (model_dir / "training_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    (model_dir / "training_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return report
 
 

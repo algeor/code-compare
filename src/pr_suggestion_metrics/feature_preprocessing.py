@@ -32,9 +32,11 @@ def coerce_boolean_series(
     row_ids: list[Any] | None = None,
 ) -> pd.Series:
     """Convert explicit boolean representations to integers and reject all others."""
+    if row_ids is not None and len(row_ids) != len(values):
+        raise ValueError("row_ids must have the same length as feature values")
     converted: list[int] = []
     for position, (row_index, value) in enumerate(values.items()):
-        if isinstance(value, bool):
+        if isinstance(value, bool) or type(value).__name__ == "bool_":
             converted.append(int(value))
             continue
         if isinstance(value, Real) and value in (0, 1):
@@ -60,6 +62,8 @@ def coerce_numeric_series(
     row_ids: list[Any] | None = None,
 ) -> pd.Series:
     """Convert finite numeric values and enforce known feature-domain constraints."""
+    if row_ids is not None and len(row_ids) != len(values):
+        raise ValueError("row_ids must have the same length as feature values")
     converted: list[float] = []
     for position, (row_index, value) in enumerate(values.items()):
         row_reference = _row_reference(row_index, position, row_ids)

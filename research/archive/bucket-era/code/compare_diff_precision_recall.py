@@ -11,12 +11,12 @@ from pathlib import Path
 import numpy as np
 from sklearn.model_selection import GroupShuffleSplit
 
+from pr_suggestion_metrics._paths import REPOSITORY_ROOT as _REPOSITORY_ROOT
 from pr_suggestion_metrics.diff_precision_recall import compare_diffs
 from pr_suggestion_metrics.model_inference import predict_coverage_percentages
 from pr_suggestion_metrics.train_percentage_regressor import RANDOM_STATE, metrics, prepare_features, read_source
 
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _DATASET_DIR = _REPOSITORY_ROOT / "data" / "processed" / "pr_suggestion_coverage" / "dataset"
 _SCORES_PATH = _REPOSITORY_ROOT / "reports" / "metric_scores.csv"
 _MODEL_DIR = _REPOSITORY_ROOT / "models" / "pr_suggestion_coverage_regression"

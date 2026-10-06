@@ -38,3 +38,24 @@ def test_parser_keeps_header_like_hunk_content() -> None:
         ("deletion", "-- old"),
         ("addition", "++ new"),
     ]
+
+
+def test_parser_keeps_prefixed_file_markers_as_content_inside_counted_hunk() -> None:
+    diff = "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n--- a/literal\n+++ b/literal\n"
+
+    parsed = parse_unified_diff(diff)
+
+    assert len(parsed.files) == 1
+    assert [(line.operation, line.text) for line in parsed.changed_lines] == [
+        ("deletion", "-- a/literal"),
+        ("addition", "++ b/literal"),
+    ]
+
+
+def test_parser_starts_next_header_only_file_after_counted_hunk() -> None:
+    diff = "--- a/one.py\n+++ b/one.py\n@@ -0,0 +1 @@\n+one\n--- a/two.py\n+++ b/two.py\n@@ -0,0 +1 @@\n+two\n"
+
+    parsed = parse_unified_diff(diff)
+
+    assert [file_diff.canonical_path for file_diff in parsed.files] == ["one.py", "two.py"]
+    assert [line.text for line in parsed.changed_lines] == ["one", "two"]

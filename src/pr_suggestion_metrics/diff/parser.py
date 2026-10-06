@@ -180,6 +180,8 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
     hunk_index = 0
     old_line_number = 0
     new_line_number = 0
+    remaining_old_lines: int | None = None
+    remaining_new_lines: int | None = None
 
     def finish_file() -> None:
         """Store the current non-empty file builder and clear parser state."""
@@ -203,7 +205,10 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             hunk_index = 0
             continue
 
-        if raw_line.startswith("--- ") and _is_diff_path(raw_line[4:]):
+        inside_counted_hunk = (
+            inside_hunk and remaining_old_lines is not None and remaining_new_lines is not None
+        )
+        if raw_line.startswith("--- ") and _is_diff_path(raw_line[4:]) and not inside_counted_hunk:
             if current is None:
                 current = _FileBuilder()
             elif current.lines or current.saw_file_markers:
@@ -214,7 +219,7 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             inside_hunk = False
             continue
 
-        if raw_line.startswith("+++ ") and _is_diff_path(raw_line[4:]):
+        if raw_line.startswith("+++ ") and _is_diff_path(raw_line[4:]) and not inside_counted_hunk:
             if current is None:
                 current = _FileBuilder()
             current.new_path = normalize_diff_path(raw_line[4:])
@@ -241,6 +246,14 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             hunk_index += 1
             old_line_number = int(hunk_match.group("old_start")) if hunk_match else 0
             new_line_number = int(hunk_match.group("new_start")) if hunk_match else 0
+            remaining_old_lines = (
+                int(hunk_match.group("old_count") or 1) if hunk_match else None
+            )
+            remaining_new_lines = (
+                int(hunk_match.group("new_count") or 1) if hunk_match else None
+            )
+            if remaining_old_lines == remaining_new_lines == 0:
+                inside_hunk = False
             continue
 
         if not inside_hunk or raw_line.startswith("\\"):
@@ -259,6 +272,8 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
                 )
             )
             new_line_number += 1
+            if remaining_new_lines is not None:
+                remaining_new_lines -= 1
         elif raw_line.startswith("-"):
             current.lines.append(
                 DiffLine(
@@ -272,6 +287,8 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
                 )
             )
             old_line_number += 1
+            if remaining_old_lines is not None:
+                remaining_old_lines -= 1
         elif raw_line.startswith(" "):
             current.lines.append(
                 DiffLine(
@@ -286,6 +303,13 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             )
             old_line_number += 1
             new_line_number += 1
+            if remaining_old_lines is not None:
+                remaining_old_lines -= 1
+            if remaining_new_lines is not None:
+                remaining_new_lines -= 1
+
+        if remaining_old_lines == remaining_new_lines == 0:
+            inside_hunk = False
 
     finish_file()
     return ParsedDiff(files=tuple(files))

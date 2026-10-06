@@ -13,7 +13,9 @@ from pr_suggestion_metrics.uncertainty import (
     clustered_conformal_residual_quantile,
     conformal_residual_quantile,
     load_uncertainty_calibration,
+    write_uncertainty_calibration,
 )
+from tests.model_fixture import write_percentage_model
 
 
 class UncertaintyTest(unittest.TestCase):
@@ -40,10 +42,38 @@ class UncertaintyTest(unittest.TestCase):
 
         self.assertEqual(quantile, 20.0)
 
-    def test_calibration_rejects_model_hash_mismatch(self) -> None:
-        source_model_dir = Path(__file__).resolve().parents[1] / "models" / "pr_suggestion_coverage_regression"
+    def test_clustered_quantile_rejects_missing_group_identifier(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-empty identifiers"):
+            clustered_conformal_residual_quantile([0, 10], [1, 9], ["pr-1", None], alpha=0.1)
+
+    def test_intervals_reject_non_finite_predictions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be finite"):
+            apply_conformal_intervals([10, float("nan")], 5)
+
+    def test_calibration_writer_rejects_non_calibration_split(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            calibration_path = Path(temporary_directory) / "calibration.json"
+            calibration_path = Path(temporary_directory) / "rows.csv"
+            calibration_path.write_text(
+                "split,coverage_percentage,group_id\ntrain,50,pr-1\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "only calibration split rows"):
+                write_uncertainty_calibration(
+                    model_dir=Path(temporary_directory) / "missing-model",
+                    calibration_path=calibration_path,
+                    target_column="coverage_percentage",
+                    group_column="group_id",
+                    alpha=0.1,
+                    minimum_rows=1,
+                    minimum_groups=1,
+                )
+
+    def test_calibration_rejects_model_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_model_dir = write_percentage_model(root)
+            calibration_path = root / "calibration.json"
             calibration = UncertaintyCalibration(
                 created_at_utc="2026-01-01T00:00:00Z",
                 alpha=0.1,

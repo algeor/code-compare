@@ -9,6 +9,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from pr_suggestion_metrics.artifact_io import read_jsonl_objects, write_jsonl_objects
+from pr_suggestion_metrics.percentages import (
+    OBSOLETE_DERIVED_LABEL_FIELDS,
+    parse_integer_percentage,
+    round_bounded_percentage,
+)
+
 
 MANUAL_OVERRIDES: dict[str, tuple[int, str]] = {
     "e8d9a574d827f4d3": (35, "Only the display-label capitalization changed; the surrounding option structure was pre-existing context."),
@@ -34,40 +41,15 @@ MANUAL_OVERRIDES: dict[str, tuple[int, str]] = {
 }
 
 
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.write_text("".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows))
-
-
-def percentage_bucket(value: int) -> str:
-    if value == 0:
-        return "0"
-    lower = ((value - 1) // 10) * 10 + 1
-    return f"{lower}-{min(lower + 9, 100)}"
-
-
-def coarse_label(value: int) -> str:
-    if value == 0:
-        return "0%"
-    if value < 60:
-        return "partial"
-    if value < 90:
-        return "mostly"
-    return "100%"
-
-
 def apply_manual_override(row: dict[str, Any]) -> dict[str, Any]:
     override = MANUAL_OVERRIDES.get(row["example_id"])
-    if override is None:
-        return row
-    percentage, reasoning = override
     updated = dict(row)
+    for field in OBSOLETE_DERIVED_LABEL_FIELDS:
+        updated.pop(field, None)
+    if override is None:
+        return updated
+    percentage, reasoning = override
     updated["expected_landed_percentage"] = percentage
-    updated["expected_percentage_bucket"] = percentage_bucket(percentage)
-    updated["label"] = coarse_label(percentage)
     updated["reasoning"] = reasoning
     updated["confidence"] = "high"
     updated["ambiguity_flags"] = list(dict.fromkeys([*updated.get("ambiguity_flags", []), "manually_verified"]))
@@ -104,13 +86,13 @@ def audit_status(row: dict[str, Any]) -> tuple[str, float]:
         return "accepted_high_confidence", 0.85
     has_landed = bool(statuses & {"landed_exactly", "landed_equivalently"})
     has_changed = bool(statuses & {"landed_partially", "absent", "different_implementation"})
-    if row["confidence"] == "medium" and row["label"] in {"partial", "mostly"} and has_landed and has_changed:
+    if row["confidence"] == "medium" and has_landed and has_changed:
         return "accepted_mixed_evidence", 0.85
     if row["confidence"] == "medium":
         return "accepted_medium_confidence", 0.50
     if "possible_moved_implementation" in flags:
         return "uncertain_cross_file", 0.08
-    if all(unit["status"] == "landed_partially" for unit in row.get("semantic_units", [])):
+    if statuses == {"landed_partially"}:
         return "uncertain_fuzzy_only", 0.08
     return "uncertain_metric_disagreement", 0.12
 
@@ -122,42 +104,60 @@ def main() -> None:
     args = parser.parse_args()
 
     aggregate_path = args.semantic_output_dir / "all_labels.jsonl"
-    rows = [apply_manual_override(row) for row in load_jsonl(aggregate_path)]
+    rows = [apply_manual_override(row) for row in read_jsonl_objects(aggregate_path)]
     score_rows = {row["example_id"]: row for row in csv.DictReader(args.metric_scores.open(newline=""))}
     audit_rows = []
     for row in rows:
         status, weight = audit_status(row)
         score = score_rows[row["example_id"]]
+        expected_percentage = parse_integer_percentage(
+            row["expected_landed_percentage"],
+            name=f"Expected percentage for {row['example_id']}",
+        )
+        metric_percentage = round_bounded_percentage(score["predicted_percentage"])
         audit_rows.append(
             {
                 "example_id": row["example_id"],
                 "audit_status": status,
                 "training_weight": weight,
                 "confidence": row["confidence"],
-                "label": row["label"],
-                "expected_landed_percentage": row["expected_landed_percentage"],
-                "metric_percentage": int(float(score["predicted_percentage"])),
-                "metric_disagreement": abs(row["expected_landed_percentage"] - int(float(score["predicted_percentage"]))),
+                "expected_landed_percentage": expected_percentage,
+                "metric_percentage": metric_percentage,
+                "metric_disagreement": abs(expected_percentage - metric_percentage),
                 "manually_verified": row["example_id"] in MANUAL_OVERRIDES,
             }
         )
 
-    write_jsonl(aggregate_path, rows)
+    write_jsonl_objects(aggregate_path, rows, ensure_ascii=False, separators=(",", ":"))
     by_id = {row["example_id"]: row for row in rows}
     for batch_path in sorted(args.semantic_output_dir.glob("semantic_labeling_batch_*.jsonl")):
-        batch_rows = load_jsonl(batch_path)
-        write_jsonl(batch_path, [by_id[row["example_id"]] for row in batch_rows])
+        batch_rows = read_jsonl_objects(batch_path)
+        write_jsonl_objects(
+            batch_path,
+            [by_id[row["example_id"]] for row in batch_rows],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
-    write_jsonl(args.semantic_output_dir / "audit_report.jsonl", audit_rows)
-    curated = [row for row in audit_rows if row["audit_status"] in {"manually_verified", "accepted_mixed_evidence"} and row["label"] in {"partial", "mostly"}]
-    write_jsonl(args.semantic_output_dir / "curated_partial_mostly.jsonl", curated)
+    write_jsonl_objects(
+        args.semantic_output_dir / "audit_report.jsonl",
+        audit_rows,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    curated = [row for row in audit_rows if row["audit_status"] in {"manually_verified", "accepted_mixed_evidence"}]
+    write_jsonl_objects(
+        args.semantic_output_dir / "curated_mixed_coverage.jsonl",
+        curated,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     summary = {
         "rows": len(rows),
-        "manually_verified_rows": len(MANUAL_OVERRIDES),
-        "curated_partial_mostly_rows": len(curated),
+        "manually_verified_rows": sum(row["manually_verified"] for row in audit_rows),
+        "curated_mixed_coverage_rows": len(curated),
         "audit_statuses": dict(Counter(row["audit_status"] for row in audit_rows)),
         "confidence": dict(Counter(row["confidence"] for row in rows)),
-        "labels": dict(Counter(row["label"] for row in rows)),
     }
     (args.semantic_output_dir / "audit_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))

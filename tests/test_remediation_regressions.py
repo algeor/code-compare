@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import shutil
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -19,16 +19,19 @@ from pr_suggestion_metrics.collect_pr_code_changes import (
     _final_path_for_suggested_path,
 )
 from pr_suggestion_metrics.evaluate_metrics import _DEFAULT_DATASET_DIR, _DEFAULT_OUTPUT_PATH, _write_scores
-from pr_suggestion_metrics.model_inference import load_model_bundle, predict_coverage_from_diffs, prepare_model_features
+from pr_suggestion_metrics.model_artifacts import write_model_manifest
+from pr_suggestion_metrics.model_inference import (
+    load_model_bundle,
+    predict_coverage_from_diffs,
+    predict_coverage_percentages,
+    prepare_model_features,
+)
+from pr_suggestion_metrics.modeling.common import BOOLEAN_FEATURES, CATEGORICAL_FEATURES, NUMERIC_FEATURES
+from pr_suggestion_metrics.modeling.train import _prepare
 from pr_suggestion_metrics.private_collection_adapter import load_hdlf_adapter
 from pr_suggestion_metrics.scientific_contracts import FileSnapshot, HumanAnnotation, SemanticUnit, SuggestionProvenance
 from pr_suggestion_metrics.semantic_labeling_batches import _DEFAULT_PROMPT_PATH
-from pr_suggestion_metrics.train_percentage_regressor import (
-    BOOLEAN_FEATURES,
-    CATEGORICAL_FEATURES,
-    NUMERIC_FEATURES,
-    prepare_features,
-)
+from tests.model_fixture import write_percentage_model
 
 
 class RepositoryPathRegressionTest(unittest.TestCase):
@@ -217,9 +220,7 @@ class DatasetSerializationRegressionTest(unittest.TestCase):
             file_overlap_ratio=0.0,
             changed_line_overlap_ratio=0.0,
             deterministic_landed_estimate=0,
-            label="0%",
             expected_landed_percentage=0,
-            expected_percentage_bucket="0",
         )
 
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -262,7 +263,7 @@ class BooleanFeatureRegressionTest(unittest.TestCase):
         row.update({feature: "none" for feature in CATEGORICAL_FEATURES})
         row["expected_landed_percentage"] = 0
 
-        prepared = prepare_features(pd.DataFrame([row]))
+        prepared = _prepare(pd.DataFrame([row]), NUMERIC_FEATURES, BOOLEAN_FEATURES, CATEGORICAL_FEATURES)
 
         self.assertEqual(prepared[BOOLEAN_FEATURES].iloc[0].tolist(), [1, 1, 1])
 
@@ -274,7 +275,7 @@ class BooleanFeatureRegressionTest(unittest.TestCase):
         row["expected_landed_percentage"] = 0
 
         with self.assertRaisesRegex(ValueError, BOOLEAN_FEATURES[0]):
-            prepare_features(pd.DataFrame([row]))
+            _prepare(pd.DataFrame([row]), NUMERIC_FEATURES, BOOLEAN_FEATURES, CATEGORICAL_FEATURES)
 
 
 class NumericFeatureRegressionTest(unittest.TestCase):
@@ -324,6 +325,20 @@ class NumericFeatureRegressionTest(unittest.TestCase):
 
         self.assertEqual(prepared.index.tolist(), ["stable-row"])
 
+    def test_percentage_inference_rejects_non_finite_model_output(self) -> None:
+        schema = {
+            "numeric_features": ["candidate_hunk_count"],
+            "boolean_features": [],
+            "categorical_features": [],
+            "feature_columns": ["candidate_hunk_count"],
+        }
+        model = Mock()
+        model.predict.return_value = [float("nan")]
+
+        with patch("pr_suggestion_metrics.model_inference.load_model_bundle", return_value=(model, schema)):
+            with self.assertRaisesRegex(ValueError, "only finite values"):
+                predict_coverage_percentages([{"candidate_hunk_count": 1}], model_dir=Path("unused"))
+
 
 class RawDiffInferenceRegressionTest(unittest.TestCase):
     def test_supported_single_hunk_addition_returns_prediction(self) -> None:
@@ -334,13 +349,14 @@ class RawDiffInferenceRegressionTest(unittest.TestCase):
 +print("landed")
 """
 
-        model_dir = Path(__file__).resolve().parents[1] / "models" / "pr_suggestion_coverage_regression"
-        result = predict_coverage_from_diffs(
-            suggestion_diff,
-            suggestion_diff,
-            example_id="raw-example",
-            model_dir=model_dir,
-        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_dir = write_percentage_model(Path(temporary_directory))
+            result = predict_coverage_from_diffs(
+                suggestion_diff,
+                suggestion_diff,
+                example_id="raw-example",
+                model_dir=model_dir,
+            )
 
         self.assertEqual(result["example_id"], "raw-example")
         self.assertEqual(result["status"], "predicted")
@@ -374,16 +390,36 @@ class RawDiffInferenceRegressionTest(unittest.TestCase):
 
 class ModelArtifactIntegrityRegressionTest(unittest.TestCase):
     def test_model_load_rejects_schema_tampering_before_unpickling(self) -> None:
-        source_model_dir = Path(__file__).resolve().parents[1] / "models" / "pr_suggestion_coverage"
         with tempfile.TemporaryDirectory() as temporary_directory:
-            model_dir = Path(temporary_directory)
-            for artifact_name in ("model.joblib", "feature_schema.json", "artifact_manifest.json"):
-                shutil.copy2(source_model_dir / artifact_name, model_dir / artifact_name)
+            model_dir = write_percentage_model(Path(temporary_directory))
             with (model_dir / "feature_schema.json").open("a", encoding="utf-8") as stream:
                 stream.write("\n")
 
             with self.assertRaisesRegex(ValueError, "Artifact hash mismatch"):
                 load_model_bundle(model_dir)
+
+    def test_model_load_validates_schema_before_unpickling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_dir = Path(temporary_directory)
+            (model_dir / "model.joblib").write_bytes(b"not a pickle")
+            (model_dir / "feature_schema.json").write_text(
+                json.dumps(
+                    {
+                        "numeric_features": ["line_recall"],
+                        "boolean_features": [],
+                        "categorical_features": [],
+                        "feature_columns": ["token_recall"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_model_manifest(model_dir)
+
+            with patch("pr_suggestion_metrics.model_inference.joblib.load") as joblib_load:
+                with self.assertRaisesRegex(ValueError, "must match the typed feature lists"):
+                    load_model_bundle(model_dir)
+
+            joblib_load.assert_not_called()
 
 
 if __name__ == "__main__":

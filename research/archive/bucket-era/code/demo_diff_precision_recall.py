@@ -6,11 +6,9 @@ import argparse
 import json
 from pathlib import Path
 
+from pr_suggestion_metrics._paths import REPOSITORY_ROOT as _REPOSITORY_ROOT
 from pr_suggestion_metrics.diff_precision_recall import compare_diffs
 from pr_suggestion_metrics.model_inference import predict_coverage_from_diffs
-
-
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DATASET = _REPOSITORY_ROOT / "data" / "external" / "github_codereview" / "dataset" / "dataset.jsonl"
 _DEFAULT_EXAMPLE_ID = "4cd17d7210f1d44c"
 _DEFAULT_MODEL_DIR = _REPOSITORY_ROOT / "models" / "pr_suggestion_coverage_regression"

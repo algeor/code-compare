@@ -63,6 +63,39 @@ diff --git a/b.py b/b.py
         self.assertEqual(evidence.coverage_percentage, 100)
         self.assertTrue(evidence.matches[0].moved_across_files)
 
+    def test_duplicate_content_prioritizes_same_path_matches_globally(self) -> None:
+        suggestion = """diff --git a/a.py b/a.py
+--- a/a.py
++++ b/a.py
+@@ -0,0 +1 @@
++same()
+diff --git a/b.py b/b.py
+--- a/b.py
++++ b/b.py
+@@ -0,0 +1 @@
++same()
+"""
+        landed = """diff --git a/b.py b/b.py
+--- a/b.py
++++ b/b.py
+@@ -0,0 +1 @@
++same()
+diff --git a/c.py b/c.py
+--- a/c.py
++++ b/c.py
+@@ -0,0 +1 @@
++same()
+"""
+
+        evidence = analyze_change_coverage(suggestion, landed)
+
+        self.assertEqual(evidence.matched_units, 2)
+        self.assertEqual(sum(match.moved_across_files for match in evidence.matches), 1)
+        self.assertEqual(
+            {(match.suggested_path, match.landed_path) for match in evidence.matches},
+            {("a.py", "c.py"), ("b.py", "b.py")},
+        )
+
     def test_explicit_rename_is_a_change_unit(self) -> None:
         rename = """diff --git a/old.py b/new.py
 similarity index 100%

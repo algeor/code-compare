@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import warnings
 from hashlib import sha256
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -17,22 +16,47 @@ from pydantic import BaseModel, Field
 from pr_suggestion_metrics.feature_preprocessing import coerce_boolean_series, coerce_numeric_series
 from pr_suggestion_metrics.diff_semantics import ChangeCoverageEvidence, analyze_change_coverage
 from pr_suggestion_metrics.model_artifacts import verify_model_manifest
+from pr_suggestion_metrics.percentages import round_bounded_percentage
 from pr_suggestion_metrics.uncertainty import apply_conformal_intervals, load_uncertainty_calibration
 
 
-_PERCENTAGE_BUCKETS = (
-    "0",
-    "1-10",
-    "11-20",
-    "21-30",
-    "31-40",
-    "41-50",
-    "51-60",
-    "61-70",
-    "71-80",
-    "81-90",
-    "91-100",
-)
+_FEATURE_LIST_KEYS = ("numeric_features", "boolean_features", "categorical_features")
+
+
+def _validate_feature_schema(schema: Any) -> dict[str, Any]:
+    if not isinstance(schema, Mapping):
+        raise ValueError("Feature schema must be a JSON object")
+
+    validated = dict(schema)
+    feature_groups: list[list[str]] = []
+    for key in _FEATURE_LIST_KEYS + ("feature_columns",):
+        value = validated.get(key)
+        if (
+            not isinstance(value, list)
+            or any(not isinstance(feature, str) or not feature.strip() for feature in value)
+        ):
+            raise ValueError(f"Feature schema {key} must be a list of non-empty strings")
+        if len(value) != len(set(value)):
+            raise ValueError(f"Feature schema {key} must not contain duplicates")
+        if key in _FEATURE_LIST_KEYS:
+            feature_groups.append(value)
+
+    feature_columns = validated["feature_columns"]
+    typed_features = [feature for group in feature_groups for feature in group]
+    if not feature_columns:
+        raise ValueError("Feature schema must contain at least one feature column")
+    if len(typed_features) != len(set(typed_features)):
+        raise ValueError("Feature schema feature types must not overlap")
+    if set(feature_columns) != set(typed_features):
+        raise ValueError("Feature schema feature_columns must match the typed feature lists")
+
+    schema_version = validated.get("schema_version")
+    if schema_version is not None and schema_version != "1.0":
+        raise ValueError(f"Unsupported feature schema version: {schema_version!r}")
+    model_name = validated.get("model_name")
+    if model_name is not None and (not isinstance(model_name, str) or not model_name.strip()):
+        raise ValueError("Feature schema model_name must be a non-empty string when present")
+    return validated
 
 
 class CoverageUncertainty(BaseModel):
@@ -68,16 +92,6 @@ class CoverageResult(BaseModel):
         return getattr(self, key)
 
 
-def percentage_bucket(value: int | float) -> str:
-    """Map a percentage to the shared reporting bucket scheme."""
-    percentage = max(0, min(100, int(round(value))))
-    if percentage == 0:
-        return "0"
-    lower_bound = ((percentage - 1) // 10) * 10 + 1
-    upper_bound = min(lower_bound + 9, 100)
-    return f"{lower_bound}-{upper_bound}"
-
-
 def load_model_bundle(model_dir: Path) -> tuple[Any, dict[str, Any]]:
     """Verify and load a trusted local estimator and its feature schema.
 
@@ -99,8 +113,12 @@ def load_model_bundle(model_dir: Path) -> tuple[Any, dict[str, Any]]:
     model_path = model_dir / manifest["model_file"]
     schema_path = model_dir / manifest["schema_file"]
 
+    schema = _validate_feature_schema(json.loads(schema_path.read_text(encoding="utf-8")))
+    manifest_model_name = manifest.get("model_name")
+    schema_model_name = schema.get("model_name")
+    if manifest_model_name != schema_model_name:
+        raise ValueError("Model manifest model_name does not match the feature schema")
     model = joblib.load(model_path)
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     return model, schema
 
 
@@ -117,53 +135,24 @@ def prepare_model_features(rows: pd.DataFrame | Sequence[Mapping[str, Any]], sch
     Raises:
         ValueError: If required feature columns are missing.
     """
+    validated_schema = _validate_feature_schema(schema)
     frame = rows.copy() if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
-    feature_columns = list(schema["feature_columns"])
+    if frame.columns.has_duplicates:
+        raise ValueError("Model input rows must not contain duplicate columns")
+    feature_columns = validated_schema["feature_columns"]
     missing_features = [feature for feature in feature_columns if feature not in frame.columns]
     if missing_features:
         raise ValueError(f"Missing model features: {missing_features}")
 
     row_ids = frame["example_id"].tolist() if "example_id" in frame.columns else None
-    for feature in schema["numeric_features"]:
+    for feature in validated_schema["numeric_features"]:
         frame[feature] = coerce_numeric_series(frame[feature], feature, row_ids=row_ids)
-    for feature in schema["boolean_features"]:
+    for feature in validated_schema["boolean_features"]:
         frame[feature] = coerce_boolean_series(frame[feature], feature, row_ids=row_ids)
-    for feature in schema["categorical_features"]:
+    for feature in validated_schema["categorical_features"]:
         frame[feature] = frame[feature].fillna("none").replace("", "none").astype(str)
 
     return frame[feature_columns]
-
-
-def predict_coverage_labels(
-    rows: pd.DataFrame | Sequence[Mapping[str, Any]],
-    model_dir: Path,
-) -> pd.DataFrame:
-    """Predict coverage labels for metric rows using the saved sklearn model.
-
-    Args:
-        rows: One or more metric rows produced by `evaluate_metrics.py`.
-        model_dir: Directory containing the saved model artifacts.
-
-    Returns:
-        DataFrame with `model_prediction` and probability columns when available.
-    """
-    warnings.warn(
-        "predict_coverage_labels is deprecated; use the percentage API instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    model, schema = load_model_bundle(model_dir)
-    features = prepare_model_features(rows, schema)
-    predictions = model.predict(features)
-    result = pd.DataFrame({"model_prediction": predictions}, index=features.index)
-
-    if hasattr(model, "predict_proba"):
-        probabilities = model.predict_proba(features)
-        class_labels = [str(label) for label in model.classes_]
-        for index, class_label in enumerate(class_labels):
-            result[f"probability_{class_label}"] = np.asarray(probabilities)[:, index]
-
-    return result
 
 
 def predict_coverage_percentages(
@@ -179,11 +168,11 @@ def predict_coverage_percentages(
     Returns:
         DataFrame with the model's `model_predicted_percentage` output.
     """
-    predictions = _percentage_prediction_frame(rows, model_dir=model_dir)
+    predictions = percentage_prediction_frame(rows, model_dir=model_dir)
     return predictions[["model_predicted_percentage"]]
 
 
-def _percentage_prediction_frame(
+def percentage_prediction_frame(
     rows: pd.DataFrame | Sequence[Mapping[str, Any]],
     *,
     model_dir: Path,
@@ -192,11 +181,16 @@ def _percentage_prediction_frame(
     model, schema = load_model_bundle(model_dir)
     features = prepare_model_features(rows, schema)
     raw_predictions = np.asarray(model.predict(features), dtype=float)
+    if raw_predictions.ndim != 1 or len(raw_predictions) != len(features):
+        raise ValueError("Model predictions must be a one-dimensional array matching the input row count")
+    if not np.isfinite(raw_predictions).all():
+        raise ValueError("Model predictions must contain only finite values")
     clipped_predictions = np.clip(raw_predictions, 0, 100)
+    rounded_predictions = round_bounded_percentage(raw_predictions)
     return pd.DataFrame(
         {
             "model_raw_percentage": clipped_predictions,
-            "model_predicted_percentage": np.rint(clipped_predictions).astype(int),
+            "model_predicted_percentage": rounded_predictions,
         },
         index=features.index,
     )
@@ -209,7 +203,7 @@ def predict_coverage_with_uncertainty(
     calibration_path: Path | None = None,
 ) -> pd.DataFrame:
     """Predict percentages with intervals from a matching split-conformal calibration artifact."""
-    predictions = _percentage_prediction_frame(rows, model_dir=model_dir)
+    predictions = percentage_prediction_frame(rows, model_dir=model_dir)
     calibration = load_uncertainty_calibration(model_dir, calibration_path)
     intervals = apply_conformal_intervals(
         predictions["model_raw_percentage"].to_numpy(dtype=float),
@@ -235,7 +229,7 @@ def predict_coverage_from_diffs(
     The current public boundary intentionally abstains on deletions, replacements,
     renames, and multi-file or multi-hunk suggestions until those semantics are modeled.
     """
-    from pr_suggestion_metrics.evaluate_metrics import (
+    from pr_suggestion_metrics.features import (
         metric_result_to_feature_row,
         raw_diff_support_issues,
         score_diff_pair,
@@ -272,7 +266,7 @@ def predict_coverage_from_diffs(
             coverage=float(prediction.iloc[0]["interval_coverage"]),
         )
     else:
-        prediction = _percentage_prediction_frame([feature_row], model_dir=model_dir)
+        prediction = percentage_prediction_frame([feature_row], model_dir=model_dir)
         uncertainty = CoverageUncertainty(
             status="unavailable",
             reason="no matching held-out uncertainty calibration artifact",
@@ -297,3 +291,6 @@ def predict_coverage_from_diffs(
             "in the final repository state."
         ],
     )
+
+
+_percentage_prediction_frame = percentage_prediction_frame

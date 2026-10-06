@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 
-from pr_suggestion_metrics.evaluate_metrics import _structural_node_types
+from pr_suggestion_metrics.features.structural import structural_node_types
 
 
 _SMOKE_SNIPPETS = {
@@ -36,7 +36,7 @@ def check_structural_parsers(languages: list[str]) -> list[ParserCheck]:
     checks: list[ParserCheck] = []
     for language in languages:
         snippet = _SMOKE_SNIPPETS[language]
-        nodes, error, engine = _structural_node_types(language, snippet)
+        nodes, error, engine = structural_node_types(language, snippet)
         checks.append(
             ParserCheck(
                 language=language,

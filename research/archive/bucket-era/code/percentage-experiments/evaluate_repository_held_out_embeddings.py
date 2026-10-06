@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ from pr_suggestion_metrics.train_percentage_regressor import (
     prepare_features,
     read_source,
     training_weights,
+    validate_disjoint_sources,
 )
 from pr_suggestion_metrics.train_two_stage_percentage import make_model as make_two_stage_model
 
@@ -115,7 +118,11 @@ def repository_bootstrap(
     }
 
 
-def macro_metrics(per_repository: dict[str, dict[str, Any]], candidate: str, minimum_rows: int = 1) -> dict[str, float]:
+def macro_metrics(
+    per_repository: dict[str, dict[str, Any]],
+    candidate: str,
+    minimum_rows: int = 1,
+) -> dict[str, float | None]:
     rows = [
         repository_result[candidate]
         for repository_result in per_repository.values()
@@ -128,10 +135,11 @@ def macro_metrics(per_repository: dict[str, dict[str, Any]], candidate: str, min
         "within_10_points",
         "dangerous_error_rate",
     ]
-    return {
-        name: float(np.mean([row[name] for row in rows if row[name] is not None]))
-        for name in metric_names
-    }
+    result: dict[str, float | None] = {}
+    for name in metric_names:
+        values = [row[name] for row in rows if row[name] is not None]
+        result[name] = float(np.mean(values)) if values else None
+    return result
 
 
 def repository_wins(
@@ -158,6 +166,7 @@ def configuration_fingerprint(
     embedding_metadata: dict[str, Any],
     base_schema: dict[str, Any],
     selected_embedding_schema: dict[str, Any],
+    input_paths: Sequence[Path] = (),
 ) -> str:
     payload = json.dumps(
         {
@@ -165,10 +174,60 @@ def configuration_fingerprint(
             "embedding_metadata": embedding_metadata,
             "base_schema": base_schema,
             "selected_embedding_schema": selected_embedding_schema,
+            "input_sha256": {
+                str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in input_paths
+            },
         },
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def completed_repositories(completed: pd.DataFrame, external: pd.DataFrame) -> set[str]:
+    """Validate resumed predictions and return repositories with complete folds."""
+    required_columns = {"example_id", "repo", *PREDICTION_COLUMNS}
+    missing_columns = required_columns - set(completed)
+    if missing_columns:
+        raise ValueError(f"partial predictions are missing columns: {sorted(missing_columns)}")
+    if completed["example_id"].duplicated().any():
+        raise ValueError("partial predictions contain duplicate example_id values")
+
+    external_ids = set(external["example_id"])
+    unknown_ids = sorted(str(example_id) for example_id in set(completed["example_id"]) - external_ids)
+    if unknown_ids:
+        raise ValueError(f"partial predictions contain unknown example_id values: {unknown_ids[:10]}")
+
+    repositories: set[str] = set()
+    for repository, rows in completed.groupby("repo", sort=False):
+        expected_ids = set(external.loc[external["repo"].eq(repository), "example_id"])
+        completed_ids = set(rows["example_id"])
+        if completed_ids != expected_ids:
+            raise ValueError(f"partial predictions contain an incomplete fold for repository {repository!r}")
+        repositories.add(str(repository))
+    return repositories
+
+
+def write_csv_atomically(frame: pd.DataFrame, path: Path) -> None:
+    """Replace a CSV only after its complete contents are on disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            frame.to_csv(temporary_file, index=False)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def fit_two_stage(
@@ -279,6 +338,7 @@ def main() -> None:
             args.hf_audit,
         )
     )
+    validate_disjoint_sources(internal, external)
     internal = attach_embedding_features(internal, embedding_frame, all_embedding_columns)
     external = attach_embedding_features(external, embedding_frame, all_embedding_columns)
     audit = pd.read_json(args.hf_audit, lines=True)[["example_id", "confidence", "audit_status"]]
@@ -302,6 +362,18 @@ def main() -> None:
         embedding_metadata,
         current_schema,
         selected_embedding_schema,
+        input_paths=[
+            args.internal_scores,
+            args.internal_labels,
+            args.hf_scores,
+            args.hf_labels,
+            args.hf_audit,
+            args.base_model_dir / "model.joblib",
+            args.base_model_dir / "feature_schema.json",
+            args.base_model_dir / "two_stage_evaluation_report.json",
+            args.embedding_model_dir / "feature_schema.json",
+            *(path for _, path in args.embedding_features),
+        ],
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -309,18 +381,16 @@ def main() -> None:
     completed = pd.DataFrame()
     if args.resume and partial_path.exists():
         completed = pd.read_csv(partial_path)
-        if set(PREDICTION_COLUMNS) - set(completed):
-            raise ValueError("partial predictions do not contain the expected model columns")
         fingerprint_path = args.output_dir / "configuration_fingerprint.txt"
         if not fingerprint_path.exists() or fingerprint_path.read_text().strip() != fingerprint:
             raise ValueError("partial predictions were generated by a different configuration")
     (args.output_dir / "configuration_fingerprint.txt").write_text(fingerprint + "\n")
-    completed_repositories = set(completed["repo"]) if not completed.empty else set()
+    completed_repository_names = completed_repositories(completed, external) if not completed.empty else set()
 
     repositories = sorted(external["repo"].unique())
     fold_frames = [completed] if not completed.empty else []
     for fold_number, repository in enumerate(repositories, start=1):
-        if repository in completed_repositories:
+        if repository in completed_repository_names:
             print(f"[{fold_number}/{len(repositories)}] skipping completed {repository}", flush=True)
             continue
         test_rows = external.loc[external["repo"].eq(repository)].copy()
@@ -356,7 +426,7 @@ def main() -> None:
         for name, values in predictions.items():
             fold_frame[name] = np.rint(np.clip(values, 0, 100)).astype(int)
         fold_frames.append(fold_frame)
-        pd.concat(fold_frames, ignore_index=True).to_csv(partial_path, index=False)
+        write_csv_atomically(pd.concat(fold_frames, ignore_index=True), partial_path)
 
     predictions = pd.concat(fold_frames, ignore_index=True)
     predictions = predictions.sort_values(["repo", "example_id"]).reset_index(drop=True)

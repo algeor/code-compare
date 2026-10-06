@@ -24,7 +24,7 @@ Do not show:
 - lexical, token, AST, embedding, or model scores;
 - deterministic estimates or existing labels;
 - another annotator's decision;
-- author identity, model output, or expected bucket;
+- author identity, model output, or an existing coverage score;
 - post hoc explanations designed to justify an existing score.
 
 ## 3. Eligibility and Abstention

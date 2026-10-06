@@ -4,28 +4,27 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
-import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 from sklearn.metrics import cohen_kappa_score
 
+from pr_suggestion_metrics.artifact_io import read_jsonl_objects, write_jsonl_objects
+from pr_suggestion_metrics.benchmark.contracts import (
+    Split,
+    validate_splits as _validate_splits,
+)
 from pr_suggestion_metrics.model_artifacts import sha256_file
+from pr_suggestion_metrics.percentages import round_bounded_percentage, validate_continuous_percentage
 from pr_suggestion_metrics.scientific_contracts import (
     AdjudicatedAnnotation,
     BenchmarkCandidate,
     HumanAnnotation,
 )
-
-from pr_suggestion_metrics.diff.parser import parse_unified_diff
-
-Split = Literal["train", "development", "calibration", "test"]
-
 
 BenchmarkExample = BenchmarkCandidate
 
@@ -46,22 +45,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, start=1):
-            if not line.strip():
-                continue
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSON at {path}:{line_number}: {exc}") from exc
-            if not isinstance(value, dict):
-                raise ValueError(f"Expected a JSON object at {path}:{line_number}")
-            rows.append(value)
-    return rows
-
-
 def _read_splits(path: Path) -> dict[str, Split]:
     assignments: dict[str, Split] = {}
     with path.open(newline="", encoding="utf-8") as stream:
@@ -76,43 +59,22 @@ def _read_splits(path: Path) -> dict[str, Split]:
     return assignments
 
 
-def _normalized_diff(diff_text: str) -> str:
-    return "\n".join(line.rstrip() for line in diff_text.strip().splitlines())
-
-
-def _duplicate_fingerprint(example: BenchmarkExample) -> str:
-    return hashlib.sha256(_normalized_diff(example.suggested_diff).encode("utf-8")).hexdigest()
-
-
-def _near_duplicate_fingerprint(example: BenchmarkExample) -> str:
-    tokens: list[str] = []
-    parsed = parse_unified_diff(example.suggested_diff)
-    for file_diff in parsed.files:
-        if file_diff.rename_from or file_diff.rename_to:
-            tokens.extend(("rename", file_diff.rename_from or "", file_diff.rename_to or ""))
-    for line in parsed.changed_lines:
-        if not line.text.strip():
-            continue
-        tokens.append(line.operation)
-        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|\S", line.text):
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
-                tokens.append("<identifier>")
-            elif re.fullmatch(r"\d+(?:\.\d+)?", token):
-                tokens.append("<number>")
-            else:
-                tokens.append(token)
-    return hashlib.sha256(" ".join(tokens).encode("utf-8")).hexdigest()
-
-
 def _validate_annotations(
     example_ids: set[str],
     annotations: list[HumanAnnotation],
     adjudications: list[AdjudicatedAnnotation],
 ) -> tuple[dict[str, AdjudicatedAnnotation], dict[str, float | None], dict[str, list[str]]]:
     by_example: dict[str, list[HumanAnnotation]] = defaultdict(list)
-    annotation_keys: set[tuple[str, str, str]] = set()
+    unknown_annotation_ids = sorted({annotation.example_id for annotation in annotations} - example_ids)
+    if unknown_annotation_ids:
+        raise ValueError(f"Annotations reference unknown examples: {unknown_annotation_ids}")
+    unknown_adjudication_ids = sorted({adjudication.example_id for adjudication in adjudications} - example_ids)
+    if unknown_adjudication_ids:
+        raise ValueError(f"Adjudications reference unknown examples: {unknown_adjudication_ids}")
+
+    annotation_keys: set[tuple[str, str]] = set()
     for annotation in annotations:
-        annotation_key = (annotation.example_id, annotation.annotator_id, annotation.guide_version)
+        annotation_key = (annotation.example_id, annotation.annotator_id)
         if annotation_key in annotation_keys:
             raise ValueError(f"Duplicate annotation record for {annotation.example_id}/{annotation.annotator_id}")
         annotation_keys.add(annotation_key)
@@ -130,9 +92,12 @@ def _validate_annotations(
     for example_id in sorted(example_ids):
         example_annotations = by_example.get(example_id, [])
         annotator_ids = {annotation.annotator_id for annotation in example_annotations}
-        if len(annotator_ids) < 2:
-            raise ValueError(f"Example {example_id} requires two independent annotators")
-        first, second = sorted(example_annotations, key=lambda item: item.annotator_id)[:2]
+        if len(example_annotations) != 2 or len(annotator_ids) != 2:
+            raise ValueError(f"Example {example_id} requires exactly two independent annotators")
+        guide_versions = {annotation.guide_version for annotation in example_annotations}
+        if len(guide_versions) != 1:
+            raise ValueError(f"Example {example_id} has inconsistent annotation guide versions")
+        first, second = sorted(example_annotations, key=lambda item: item.annotator_id)
         decision_agreements.append(first.decision == second.decision)
         if any(annotation.decision != "scored" for annotation in example_annotations):
             abstained_by_example[example_id] = sorted(
@@ -161,11 +126,15 @@ def _validate_annotations(
             raise ValueError(f"Invalid adjudication {adjudication.example_id}: {issues}")
         if adjudication.example_id in adjudicated_by_example:
             raise ValueError(f"Duplicate adjudication for {adjudication.example_id}")
+        if adjudication.example_id in abstained_by_example:
+            raise ValueError(f"Abstained example {adjudication.example_id} must not have an adjudication")
         source_ids = {annotation.annotator_id for annotation in by_example.get(adjudication.example_id, [])}
-        if not set(adjudication.source_annotator_ids).issubset(source_ids):
-            raise ValueError(f"Adjudication for {adjudication.example_id} references unknown source annotators")
-        if adjudication.example_id not in abstained_by_example:
-            adjudicated_by_example[adjudication.example_id] = adjudication
+        if set(adjudication.source_annotator_ids) != source_ids:
+            raise ValueError(f"Adjudication for {adjudication.example_id} must reference both source annotators")
+        source_guide_version = by_example[adjudication.example_id][0].guide_version
+        if adjudication.guide_version != source_guide_version:
+            raise ValueError(f"Adjudication for {adjudication.example_id} uses a different guide version")
+        adjudicated_by_example[adjudication.example_id] = adjudication
 
     scored_example_ids = example_ids - set(abstained_by_example)
     if set(adjudicated_by_example) != scored_example_ids:
@@ -215,51 +184,6 @@ def _validate_annotations(
     return adjudicated_by_example, agreement, abstained_by_example
 
 
-def _validate_splits(
-    examples: list[BenchmarkExample],
-    assignments: dict[str, Split],
-    *,
-    split_policy: str,
-) -> None:
-    example_ids = {example.example_id for example in examples}
-    if set(assignments) != example_ids:
-        missing = sorted(example_ids - set(assignments))
-        extra = sorted(set(assignments) - example_ids)
-        raise ValueError(f"Split/example mismatch; missing={missing}, extra={extra}")
-    if not {"train", "development", "test"}.issubset(set(assignments.values())):
-        raise ValueError("Frozen benchmark must contain train, development, and test examples")
-
-    pr_splits: dict[tuple[str, int], set[Split]] = defaultdict(set)
-    duplicate_splits: dict[str, set[Split]] = defaultdict(set)
-    near_duplicate_splits: dict[str, set[Split]] = defaultdict(set)
-    repository_splits: dict[str, set[Split]] = defaultdict(set)
-    for example in examples:
-        split = assignments[example.example_id]
-        pr_splits[(example.repo, example.pr_number)].add(split)
-        duplicate_splits[_duplicate_fingerprint(example)].add(split)
-        near_duplicate_splits[_near_duplicate_fingerprint(example)].add(split)
-        repository_splits[example.repo].add(split)
-    if any(len(splits) > 1 for splits in pr_splits.values()):
-        raise ValueError("Examples from one pull request cross split boundaries")
-    if any(len(splits) > 1 for splits in duplicate_splits.values()):
-        raise ValueError("Exact duplicate examples cross split boundaries")
-    if any(len(splits) > 1 for splits in near_duplicate_splits.values()):
-        raise ValueError("Near-duplicate examples cross split boundaries")
-    if split_policy == "repository_disjoint" and any(len(splits) > 1 for splits in repository_splits.values()):
-        raise ValueError("Repositories cross split boundaries under repository_disjoint policy")
-
-    if split_policy == "temporal":
-        split_order = {"train": 0, "development": 1, "calibration": 2, "test": 3}
-        by_repository: dict[str, list[BenchmarkExample]] = defaultdict(list)
-        for example in examples:
-            by_repository[example.repo].append(example)
-        for repository, repository_examples in by_repository.items():
-            ordered = sorted(repository_examples, key=lambda item: item.suggestion_provenance.pr_merged_at or datetime.min)
-            observed = [split_order[assignments[example.example_id]] for example in ordered]
-            if observed != sorted(observed):
-                raise ValueError(f"Temporal split order is violated in repository {repository}")
-
-
 def freeze_benchmark(
     *,
     examples_path: Path,
@@ -270,7 +194,7 @@ def freeze_benchmark(
     split_policy: str,
 ) -> dict[str, Any]:
     """Validate evidence, then write immutable train/development/test artifacts."""
-    raw_examples = _read_jsonl(examples_path)
+    raw_examples = read_jsonl_objects(examples_path)
     examples = [BenchmarkExample.model_validate(row) for row in raw_examples]
     if len({example.example_id for example in examples}) != len(examples):
         raise ValueError("Example IDs must be unique")
@@ -279,8 +203,8 @@ def freeze_benchmark(
         if issues:
             raise ValueError(f"Example {example.example_id} has incomplete provenance: {issues}")
 
-    annotations = [HumanAnnotation.model_validate(row) for row in _read_jsonl(annotations_path)]
-    adjudications = [AdjudicatedAnnotation.model_validate(row) for row in _read_jsonl(adjudications_path)]
+    annotations = [HumanAnnotation.model_validate(row) for row in read_jsonl_objects(annotations_path)]
+    adjudications = [AdjudicatedAnnotation.model_validate(row) for row in read_jsonl_objects(adjudications_path)]
     example_ids = {example.example_id for example in examples}
     adjudicated_by_example, agreement, abstained_by_example = _validate_annotations(
         example_ids,
@@ -313,13 +237,18 @@ def freeze_benchmark(
         percentage = adjudication.computed_percentage()
         if percentage is None:
             raise ValueError(f"Adjudication for {example.example_id} did not produce a score")
+        percentage = validate_continuous_percentage(
+            percentage,
+            name=f"Adjudicated percentage for {example.example_id}",
+        )
+        rounded_percentage = round_bounded_percentage(percentage)
         if split == "test":
             split_rows[split].append(raw_example)
             private_test_labels.append(
                 {
                     "example_id": example.example_id,
                     "coverage_unrounded": percentage,
-                    "coverage_percentage": round(percentage),
+                    "coverage_percentage": rounded_percentage,
                     "adjudication": adjudication.model_dump(mode="json"),
                 }
             )
@@ -328,7 +257,7 @@ def freeze_benchmark(
                 {
                     **raw_example,
                     "coverage_unrounded": percentage,
-                    "coverage_percentage": round(percentage),
+                    "coverage_percentage": rounded_percentage,
                     "adjudication": adjudication.model_dump(mode="json"),
                 }
             )
@@ -347,15 +276,9 @@ def freeze_benchmark(
         ("calibration", paths["calibration"]),
         ("test", paths["test"]),
     ):
-        path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in split_rows[split]), encoding="utf-8")
-    paths["private_test_labels"].write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in private_test_labels),
-        encoding="utf-8",
-    )
-    paths["abstained"].write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in abstained_rows),
-        encoding="utf-8",
-    )
+        write_jsonl_objects(path, split_rows[split], sort_keys=True)
+    write_jsonl_objects(paths["private_test_labels"], private_test_labels, sort_keys=True)
+    write_jsonl_objects(paths["abstained"], abstained_rows, sort_keys=True)
 
     manifest = {
         "schema_version": "1.0",
@@ -374,7 +297,12 @@ def freeze_benchmark(
         },
         "artifact_sha256": {name: sha256_file(path) for name, path in paths.items()},
         "label_counts": dict(
-            sorted(Counter(round(value.computed_percentage() or 0) for value in adjudicated_by_example.values()).items())
+            sorted(
+                Counter(
+                    round_bounded_percentage(value.computed_percentage() or 0)
+                    for value in adjudicated_by_example.values()
+                ).items()
+            )
         ),
         "confirmatory_test_labels_are_private": True,
     }

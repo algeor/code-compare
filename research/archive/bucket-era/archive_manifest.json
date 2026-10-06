@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "archived_at": "2026-10-06",
+  "source_commit": "caa3fd4a7ab921bbe424a839a8572f5c86641ea6",
+  "policy": "unsupported-research-only",
+  "source_files_archived": 584,
+  "sections": {
+    "code": {
+      "files": 13,
+      "bytes": 162370,
+      "tree_sha256": "86b58367185ac707b4c31cb201f192889c7bf57ec9c24ee37266a2f9e767d82e"
+    },
+    "data": {
+      "files": 511,
+      "bytes": 151096310,
+      "tree_sha256": "f63aebebf63f7e22e1f33d81d16fae43d5951dd47f49515d6c0273870173cd47"
+    },
+    "docs": {
+      "files": 19,
+      "bytes": 587424,
+      "tree_sha256": "045378a9b6087c9db66ecfe8300863a0aa16d9e4244bb188e3fafab79f19f4d5"
+    },
+    "models": {
+      "files": 19,
+      "bytes": 26761100,
+      "tree_sha256": "db788bbe4399128d54ca3088b164415958e3f37221e75afb1cbbddc6beba0794"
+    },
+    "notebooks": {
+      "files": 5,
+      "bytes": 848857,
+      "tree_sha256": "f0c386260ad5343b9a13de5d9a2cd6494a4b9b7ffa38505b6422af9cec21ece5"
+    },
+    "reports": {
+      "files": 13,
+      "bytes": 1183632,
+      "tree_sha256": "52ccf11cb5d6e4d7f2e92d0ba51638197cbc88147d5a511c72a50ac0a1ce7618"
+    },
+    "tests": {
+      "files": 6,
+      "bytes": 19215,
+      "tree_sha256": "ead813ee18f06e6bb1364920a4f1480850b137779f66b6ae5506a689cf0db8a8"
+    }
+  }
+}

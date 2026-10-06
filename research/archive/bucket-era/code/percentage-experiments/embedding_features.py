@@ -148,9 +148,11 @@ def prepare_embedding_example(
         suggestion_text = "\n".join(lines).strip()
         if not suggestion_text:
             continue
-        suggestion_chunks.extend(
-            chunk_text(tokenizer, suggestion_text, max_length, chunk_overlap)[:max_suggestion_chunks]
-        )
+        remaining_suggestion_chunks = max_suggestion_chunks - len(suggestion_chunks)
+        if remaining_suggestion_chunks > 0:
+            suggestion_chunks.extend(
+                chunk_text(tokenizer, suggestion_text, max_length, chunk_overlap)[:remaining_suggestion_chunks]
+            )
         for candidate in _candidate_texts(
             suggestion_path,
             suggestion_text,

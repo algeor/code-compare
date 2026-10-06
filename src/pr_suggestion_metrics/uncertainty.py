@@ -7,6 +7,7 @@ import json
 import math
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -21,18 +22,18 @@ CALIBRATION_FILENAME = "uncertainty_calibration.json"
 class UncertaintyCalibration(BaseModel):
     """Finite-sample absolute-residual interval calibration metadata."""
 
-    manifest_version: int = 1
+    manifest_version: Literal[1] = 1
     created_at_utc: str
-    method: str = "grouped_split_conformal_max_residual"
+    method: Literal["grouped_split_conformal_max_residual"] = "grouped_split_conformal_max_residual"
     alpha: float = Field(gt=0.0, lt=1.0)
     residual_quantile: float = Field(ge=0.0)
     calibration_rows: int = Field(ge=1)
     calibration_groups: int = Field(ge=1)
     target_column: str
     group_column: str
-    calibration_data_sha256: str
-    model_sha256: str
-    schema_sha256: str
+    calibration_data_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 def conformal_residual_quantile(
@@ -68,8 +69,19 @@ def clustered_conformal_residual_quantile(
     actual_array = np.asarray(actual, dtype=float)
     predicted_array = np.asarray(predicted, dtype=float)
     group_array = np.asarray(groups, dtype=object)
-    if len(group_array) != len(actual_array):
+    conformal_residual_quantile(actual_array, predicted_array, alpha=alpha)
+    if group_array.ndim != 1 or len(group_array) != len(actual_array):
         raise ValueError("groups must have the same length as actual and predicted")
+    for group in group_array:
+        missing = pd.isna(group)
+        if not isinstance(missing, (bool, np.bool_)):
+            raise ValueError("groups must contain hashable scalar identifiers")
+        if missing or (isinstance(group, str) and not group.strip()):
+            raise ValueError("groups must contain non-empty identifiers")
+        try:
+            hash(group)
+        except TypeError as exc:
+            raise ValueError("groups must contain hashable scalar identifiers") from exc
     group_residuals = [
         float(np.max(np.abs(actual_array[group_array == group] - predicted_array[group_array == group])))
         for group in dict.fromkeys(group_array.tolist())
@@ -86,6 +98,10 @@ def apply_conformal_intervals(predicted: np.ndarray | list[float], residual_quan
     if residual_quantile < 0 or not math.isfinite(residual_quantile):
         raise ValueError("residual_quantile must be a finite non-negative number")
     predictions = np.asarray(predicted, dtype=float)
+    if predictions.ndim != 1:
+        raise ValueError("predicted must be a one-dimensional array")
+    if not np.isfinite(predictions).all():
+        raise ValueError("predicted values must be finite")
     lower = np.clip(predictions - residual_quantile, 0, 100)
     upper = np.clip(predictions + residual_quantile, 0, 100)
     return np.column_stack((lower, upper))
@@ -114,28 +130,42 @@ def write_uncertainty_calibration(
     minimum_groups: int = 20,
 ) -> Path:
     """Fit and write calibration from a dedicated, non-test feature table."""
-    from pr_suggestion_metrics.model_inference import _percentage_prediction_frame
+    from pr_suggestion_metrics.model_inference import percentage_prediction_frame
 
+    if not 0.0 < alpha < 1.0:
+        raise ValueError("alpha must be between 0 and 1")
+    if minimum_rows < 1 or minimum_groups < 1:
+        raise ValueError("minimum_rows and minimum_groups must be positive integers")
     rows = pd.read_csv(calibration_path)
     missing = [column for column in (target_column, group_column) if column not in rows.columns]
     if missing:
         raise ValueError(f"Calibration data is missing required columns: {missing}")
-    if "split" in rows.columns and rows["split"].astype(str).str.lower().eq("test").any():
-        raise ValueError("Test rows must never be used for uncertainty calibration")
+    if "split" in rows.columns:
+        splits = rows["split"].astype("string").str.strip().str.lower()
+        invalid_splits = splits.isna() | ~splits.eq("calibration")
+        if invalid_splits.any():
+            raise ValueError("Uncertainty calibration data must contain only calibration split rows")
     if len(rows) < minimum_rows:
         raise ValueError(f"Calibration requires at least {minimum_rows} rows; received {len(rows)}")
-    group_count = rows[group_column].nunique(dropna=True)
+
+    group_ids = rows[group_column].astype("string").str.strip()
+    if (group_ids.isna() | group_ids.eq("")).any():
+        raise ValueError("Calibration group identifiers must be non-empty")
+    group_count = group_ids.nunique()
     if group_count < minimum_groups:
         raise ValueError(f"Calibration requires at least {minimum_groups} independent groups; received {group_count}")
 
-    actual = pd.to_numeric(rows[target_column], errors="raise").to_numpy(dtype=float)
-    if np.any((actual < 0) | (actual > 100)):
-        raise ValueError("Calibration targets must be between 0 and 100")
-    predictions = _percentage_prediction_frame(rows, model_dir=model_dir)["model_raw_percentage"].to_numpy()
+    try:
+        actual = pd.to_numeric(rows[target_column], errors="raise").to_numpy(dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Calibration targets must be numeric") from exc
+    if not np.isfinite(actual).all() or np.any((actual < 0) | (actual > 100)):
+        raise ValueError("Calibration targets must be finite and between 0 and 100")
+    predictions = percentage_prediction_frame(rows, model_dir=model_dir)["model_raw_percentage"].to_numpy()
     quantile = clustered_conformal_residual_quantile(
         actual,
         predictions,
-        rows[group_column].astype(str).to_numpy(),
+        group_ids.astype(str).to_numpy(),
         alpha=alpha,
     )
     manifest = verify_model_manifest(model_dir)

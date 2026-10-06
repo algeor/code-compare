@@ -4,7 +4,7 @@ You are labeling a machine learning dataset for code suggestion coverage.
 
 The task is to decide, with code-level semantic reasoning, what percentage of a review suggestion landed in the final merged PR diff.
 
-The source-of-truth label is:
+The source-of-truth target is:
 
 ```text
 expected_landed_percentage
@@ -12,7 +12,7 @@ expected_landed_percentage
 
 It must be an integer from `0` to `100`.
 
-Buckets and coarse labels are derived after that. Do not start from a bucket. Do not start from a coarse label.
+Do not convert the percentage into a category or range.
 
 ## Core Question
 
@@ -96,7 +96,7 @@ For each example, do this in order:
    - absent
    - replaced by a different implementation
 5. Estimate the final percentage from the weighted semantic coverage.
-6. Derive the bucket and coarse label from the percentage.
+6. Record the percentage directly.
 
 ## Percentage Scale
 
@@ -117,37 +117,6 @@ Use the full 0-100 range.
 ```
 
 Use exact values when justified. For example, prefer `73` over `70` if that is the best estimate.
-
-## Coarse Label Derivation
-
-After choosing `expected_landed_percentage`, derive `label` exactly:
-
-```text
-0      -> 0%
-1-59   -> partial
-60-89  -> mostly
-90-100 -> 100%
-```
-
-## Bucket Derivation
-
-After choosing `expected_landed_percentage`, derive `expected_percentage_bucket` exactly:
-
-```text
-0       -> 0
-1-10    -> 1-10
-11-20   -> 11-20
-21-30   -> 21-30
-31-40   -> 31-40
-41-50   -> 41-50
-51-60   -> 51-60
-61-70   -> 61-70
-71-80   -> 71-80
-81-90   -> 81-90
-91-100  -> 91-100
-```
-
-`100` is not a valid bucket name. Percentage `100` belongs to `91-100`.
 
 ## Hard Cases
 
@@ -190,9 +159,7 @@ Return one JSON object per example:
 ```json
 {
   "example_id": "...",
-  "label": "0% | partial | mostly | 100%",
   "expected_landed_percentage": 0,
-  "expected_percentage_bucket": "0 | 1-10 | 11-20 | 21-30 | 31-40 | 41-50 | 51-60 | 61-70 | 71-80 | 81-90 | 91-100",
   "reasoning": "Short semantic explanation of why this exact percentage is correct.",
   "semantic_units": [
     {
@@ -218,8 +185,6 @@ Before finalizing each row, check:
 ```text
 percentage is based on semantic units, not raw line count
 reasoning cites concrete matched or missing code/logic
-bucket matches percentage
-coarse label matches percentage
 confidence is low when the diff is too noisy or ambiguous
 ```
 

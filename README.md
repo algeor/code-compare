@@ -28,7 +28,7 @@ from pr_suggestion_metrics import predict_coverage_from_diffs
 result = predict_coverage_from_diffs(
     suggested_diff,
     merged_pr_diff,
-    model_dir=Path("models/pr_suggestion_coverage_regression"),
+    model_dir=Path("/path/to/trusted-percentage-model"),
 )
 
 if result.status == "predicted":
@@ -89,7 +89,6 @@ A local model may draft assessment units, but tests, static analysis, specificat
 - `suggestion_coverage_percentage`: primary learned estimate.
 - `exact_change_unit_coverage_percentage`: transparent exact-match evidence.
 - `final_diff_recall`: PR-scope diagnostic.
-- `coverage_bucket`: display-only derivative.
 
 Token, file, and line precision/recall are diagnostics. The project does not combine them into an aggregate coverage score.
 
@@ -145,31 +144,31 @@ Abstained examples are preserved in dedicated artifacts. Calibration uses raw pr
 ```text
 data/          research datasets and small fixtures
 docs/          method, model, data, and reproducibility notes
-models/        trusted local research artifacts
 notebooks/     historical and exploratory analyses
 reports/       generated evaluation outputs
+research/      archived, unsupported research artifacts
 src/           reusable Python package
 tests/         regression, benchmark, metric, and model tests
 ```
 
 Key documents:
 
+- `ROADMAP.md`
+- `IMPLEMENTATION_PLAN.md`
+- `docs/senior-code-review.md`
+- `docs/implementation-progress.md`
 - `docs/data-card.md`
 - `docs/model-card.md`
 - `docs/annotation-guide.md`
 - `docs/reproducibility.md`
 - `docs/pr-suggestion-diff-metrics.md`
-- `docs/migration-1808e1c.md`
+- `research/archive/bucket-era/README.md`
 
 ## Development
 
 ```bash
 uv run --locked --extra dev ruff check src tests
-uv run --locked --extra dev mypy \
-  src/pr_suggestion_metrics/diff \
-  src/pr_suggestion_metrics/benchmark \
-  src/pr_suggestion_metrics/modeling \
-  src/pr_suggestion_metrics/model_inference.py
+uv run --locked --extra dev mypy src/pr_suggestion_metrics
 uv build
 ```
 

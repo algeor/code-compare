@@ -80,7 +80,7 @@ Recompute all internal feature rows:
 ```bash
 uv run --locked --extra structural pr-suggestion-evaluate \
   --dataset-dir data/processed/pr_suggestion_coverage/dataset \
-  --output reports/metric_scores.csv
+  --output /tmp/pr-suggestion-metric-scores.csv
 ```
 
 Structural features depend on parser availability. Verify parsers first:
@@ -102,10 +102,10 @@ from pathlib import Path
 import pandas as pd
 from pr_suggestion_metrics.model_inference import predict_coverage_percentages
 
-rows = pd.read_csv("reports/metric_scores.csv")
+rows = pd.read_csv("/tmp/pr-suggestion-metric-scores.csv")
 predictions = predict_coverage_percentages(
     rows,
-    model_dir=Path("models/pr_suggestion_coverage_regression"),
+    model_dir=Path("/secure/trusted-percentage-model"),
 )
 assert len(predictions) == 279
 assert predictions["model_predicted_percentage"].between(0, 100).all()
@@ -117,21 +117,9 @@ Raw-diff supported/abstention behavior is covered by `tests/test_remediation_reg
 
 ## 7. Training Commands
 
-Baseline percentage model:
+Use only the frozen benchmark workflow documented below and in `README.md`. The former mixed-corpus training commands, generated score tables, and bundled models are preserved under `research/archive/bucket-era/` for provenance only.
 
-```bash
-uv run --locked --extra train python -m pr_suggestion_metrics.train_percentage_regressor \
-  --internal-scores reports/metric_scores.csv \
-  --internal-labels data/processed/pr_suggestion_coverage/dataset/labels.csv \
-  --hf-scores data/external/github_codereview/metric_scores.csv \
-  --hf-labels data/external/github_codereview/dataset/labels.csv \
-  --hf-audit data/labeling_batches/hf_semantic_percentage_outputs/audit_report.jsonl \
-  --model-dir models/pr_suggestion_coverage_regression
-```
-
-Additional guarded experiments are documented in `README.md`: two-stage, OOF ensemble, advanced tabular models, and frozen embeddings. Training writes the model, schema, evaluation report, and integrity manifest together when a candidate is promoted.
-
-Do not rerun training as a confirmatory experiment. The current holdout has already been reused. A valid final evaluation requires a new frozen test manifest.
+Do not reuse the historical holdout as a confirmatory experiment. A valid final evaluation requires a new frozen test manifest.
 
 ## 8. Artifact Record
 
@@ -198,7 +186,7 @@ uv run --locked pr-suggestion-train \
 
 # Calibrate intervals from a dedicated non-test table with sufficient independent groups.
 uv run --locked --extra train pr-suggestion-calibrate-uncertainty \
-  --model-dir models/pr_suggestion_coverage_regression \
+  --model-dir /secure/trusted-percentage-model \
   --calibration-data /secure/calibration_features.csv
 
 # Evaluate private test labels once. A receipt blocks accidental repeated use.
@@ -206,7 +194,7 @@ uv run --locked --extra train pr-suggestion-evaluate-frozen \
   --benchmark-dir /secure/frozen-benchmark \
   --private-labels /protected-evaluator/test_labels.private.jsonl \
   --receipt /protected-evaluator/receipts/model-v1.json \
-  --model-dir models/pr_suggestion_coverage_regression \
+  --model-dir /secure/trusted-percentage-model \
   --output-dir /secure/confirmatory-evaluation
 ```
 

@@ -46,3 +46,51 @@ def test_trainer_uses_train_and_development_but_reserves_calibration(tmp_path: P
     assert "file_overlap_ratio" not in report["feature_columns"]
     assert "gumtree_operation_count" not in report["feature_columns"]
     assert predictions["model_predicted_percentage"].between(0, 100).all()
+
+
+def test_trainer_rejects_groups_shared_across_splits(tmp_path: Path) -> None:
+    features_path = tmp_path / "features.csv"
+    rows = [
+        {
+            "example_id": "train-example",
+            "group_id": "shared-pr",
+            "split": "train",
+            "coverage_percentage": 10,
+            "line_recall": 0.1,
+        },
+        {
+            "example_id": "development-example",
+            "group_id": "shared-pr",
+            "split": "development",
+            "coverage_percentage": 90,
+            "line_recall": 0.9,
+        },
+    ]
+    with features_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    try:
+        train_from_frozen_features(features_path=features_path, model_dir=tmp_path / "model")
+    except ValueError as exc:
+        assert "must not cross dataset splits" in str(exc)
+    else:
+        raise AssertionError("Expected cross-split group leakage to be rejected")
+
+
+def test_trainer_rejects_out_of_range_targets(tmp_path: Path) -> None:
+    features_path = tmp_path / "features.csv"
+    features_path.write_text(
+        "group_id,split,coverage_percentage,line_recall\n"
+        "train-pr,train,-1,0.1\n"
+        "development-pr,development,50,0.9\n",
+        encoding="utf-8",
+    )
+
+    try:
+        train_from_frozen_features(features_path=features_path, model_dir=tmp_path / "model")
+    except ValueError as exc:
+        assert "finite and between 0 and 100" in str(exc)
+    else:
+        raise AssertionError("Expected invalid targets to be rejected")

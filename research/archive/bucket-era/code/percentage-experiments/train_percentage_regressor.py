@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from urllib.parse import unquote, urlparse
 
 import joblib
 import numpy as np
@@ -54,6 +55,65 @@ def metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     }
 
 
+def _normalized_example_identity(value: object) -> str | None:
+    if value is None or bool(pd.isna(cast(Any, value))):
+        return None
+    normalized = str(value).strip().casefold()
+    return normalized or None
+
+
+def _normalized_pr_identity(value: object) -> str | None:
+    if value is None or bool(pd.isna(cast(Any, value))):
+        return None
+    parsed = urlparse(str(value).strip())
+    path_parts = [unquote(part) for part in parsed.path.split("/") if part]
+    if not parsed.hostname or len(path_parts) < 4 or path_parts[2].casefold() != "pull":
+        return None
+    try:
+        pr_number = int(path_parts[3])
+    except ValueError:
+        return None
+    if pr_number <= 0:
+        return None
+    owner = path_parts[0].casefold()
+    repository = path_parts[1].casefold().removesuffix(".git")
+    return f"{parsed.hostname.casefold()}/{owner}/{repository}/pull/{pr_number}"
+
+
+def validate_disjoint_sources(first: pd.DataFrame, second: pd.DataFrame) -> None:
+    """Reject concrete example or GitHub PR identities shared by two source datasets.
+
+    Example IDs are stripped and case-folded. PR URLs are reduced to a
+    case-folded host/owner/repository plus integer pull-request number; scheme,
+    query, fragment, trailing path components, and a repository ``.git`` suffix
+    do not affect identity. Missing, blank, or unparseable values are ignored.
+    """
+    overlapping_example_ids = {
+        identity
+        for value in first.get("example_id", pd.Series(dtype=object))
+        if (identity := _normalized_example_identity(value)) is not None
+    } & {
+        identity
+        for value in second.get("example_id", pd.Series(dtype=object))
+        if (identity := _normalized_example_identity(value)) is not None
+    }
+    overlapping_prs = {
+        identity
+        for value in first.get("pr_url", pd.Series(dtype=object))
+        if (identity := _normalized_pr_identity(value)) is not None
+    } & {
+        identity
+        for value in second.get("pr_url", pd.Series(dtype=object))
+        if (identity := _normalized_pr_identity(value)) is not None
+    }
+    if overlapping_example_ids or overlapping_prs:
+        raise ValueError(
+            "cross-source leakage detected; "
+            f"overlapping example_id identities={sorted(overlapping_example_ids)[:10]}, "
+            f"overlapping PR identities={sorted(overlapping_prs)[:10]}"
+        )
+
+
 def read_source(
     source: str,
     scores_path: Path,
@@ -61,15 +121,32 @@ def read_source(
     audit_path: Path | None = None,
 ) -> pd.DataFrame:
     scores = pd.read_csv(scores_path)
-    labels = pd.read_csv(labels_path)[["example_id", "expected_landed_percentage", "label", "pr_url", "repo"]]
-    stale = [column for column in ("expected_landed_percentage", "label", "expected_percentage_bucket") if column in scores.columns]
-    rows = scores.drop(columns=stale).merge(labels, on="example_id", how="inner")
+    labels = pd.read_csv(labels_path)[["example_id", "expected_landed_percentage", "pr_url", "repo"]]
+    for name, frame in (("scores", scores), ("labels", labels)):
+        if frame["example_id"].isna().any():
+            raise ValueError(f"{name} contains a missing example_id")
+        duplicate_ids = frame.loc[frame["example_id"].duplicated(keep=False), "example_id"].astype(str).unique()
+        if len(duplicate_ids):
+            raise ValueError(f"{name} contains duplicate example_id values: {duplicate_ids[:10].tolist()}")
+    score_ids = set(scores["example_id"])
+    label_ids = set(labels["example_id"])
+    if score_ids != label_ids:
+        missing_scores = sorted(str(example_id) for example_id in label_ids - score_ids)[:10]
+        missing_labels = sorted(str(example_id) for example_id in score_ids - label_ids)[:10]
+        raise ValueError(
+            "scores and labels example_id sets differ; "
+            f"missing scores={missing_scores}, missing labels={missing_labels}"
+        )
+    stale = [column for column in ("expected_landed_percentage",) if column in scores.columns]
+    rows = scores.drop(columns=stale).merge(labels, on="example_id", how="inner", validate="one_to_one")
     rows["dataset_source"] = source
-    rows["group_id"] = source + ":" + rows["pr_url"].fillna(rows["repo"] + "#unknown").astype(str)
+    pr_urls = rows["pr_url"].astype("string").str.strip().replace("", pd.NA)
+    fallback_groups = rows["repo"].astype("string").fillna("unknown") + "#unknown"
+    rows["group_id"] = source + ":" + pr_urls.fillna(fallback_groups).astype(str)
     rows["sample_weight"] = 1.0
     if audit_path is not None:
         audit = pd.read_json(audit_path, lines=True)[["example_id", "training_weight", "audit_status"]]
-        rows = rows.merge(audit, on="example_id", how="left")
+        rows = rows.merge(audit, on="example_id", how="left", validate="one_to_one")
         rows["sample_weight"] = rows["training_weight"].fillna(0.10)
     return rows
 
@@ -82,7 +159,12 @@ def prepare_features(rows: pd.DataFrame) -> pd.DataFrame:
         prepared[feature] = coerce_boolean_series(prepared[feature], feature)
     for feature in CATEGORICAL_FEATURES:
         prepared[feature] = prepared[feature].fillna("none").replace("", "none").astype(str)
-    prepared["expected_landed_percentage"] = pd.to_numeric(prepared["expected_landed_percentage"], errors="raise").clip(0, 100)
+    target = pd.to_numeric(prepared["expected_landed_percentage"], errors="raise")
+    invalid_target = target.isna() | ~np.isfinite(target) | ~target.between(0, 100)
+    if invalid_target.any():
+        invalid_values = prepared.loc[invalid_target, "expected_landed_percentage"].head(10).tolist()
+        raise ValueError(f"expected_landed_percentage must be finite and in [0, 100]: {invalid_values}")
+    prepared["expected_landed_percentage"] = target
     return prepared
 
 
@@ -105,13 +187,13 @@ def make_pipeline(model_name: str, params: dict[str, Any]) -> Pipeline:
 def candidates() -> list[tuple[str, dict[str, Any], dict[str, float]]]:
     result = []
     weight_profiles = (
-        {"hf_scale": 0.0, "confidence_floor": 0.0, "internal_scale": 2.0, "minority_scale": 1.8},
-        {"hf_scale": 0.1, "confidence_floor": 0.0, "internal_scale": 2.0, "minority_scale": 1.8},
-        {"hf_scale": 0.5, "confidence_floor": 0.0, "internal_scale": 2.0, "minority_scale": 1.8},
-        {"hf_scale": 1.1, "confidence_floor": 0.0, "internal_scale": 1.0, "minority_scale": 1.0},
-        {"hf_scale": 0.9, "confidence_floor": 0.25, "internal_scale": 1.0, "minority_scale": 1.0},
-        {"hf_scale": 0.85, "confidence_floor": 0.5, "internal_scale": 1.0, "minority_scale": 1.0},
-        {"hf_scale": 0.85, "confidence_floor": 0.5, "internal_scale": 1.25, "minority_scale": 1.25},
+        {"hf_scale": 0.0, "confidence_floor": 0.0, "internal_scale": 2.0},
+        {"hf_scale": 0.1, "confidence_floor": 0.0, "internal_scale": 2.0},
+        {"hf_scale": 0.5, "confidence_floor": 0.0, "internal_scale": 2.0},
+        {"hf_scale": 1.1, "confidence_floor": 0.0, "internal_scale": 1.0},
+        {"hf_scale": 0.9, "confidence_floor": 0.25, "internal_scale": 1.0},
+        {"hf_scale": 0.85, "confidence_floor": 0.5, "internal_scale": 1.0},
+        {"hf_scale": 0.85, "confidence_floor": 0.5, "internal_scale": 1.25},
     )
     for weight_profile in weight_profiles:
         for leaf in (1, 2, 4, 7):
@@ -127,11 +209,9 @@ def candidates() -> list[tuple[str, dict[str, Any], dict[str, float]]]:
 def training_weights(rows: pd.DataFrame, weight_profile: dict[str, float]) -> np.ndarray:
     confidence_weights = rows["sample_weight"].astype(float).to_numpy()
     internal = rows["dataset_source"].eq("internal").to_numpy()
-    minority = rows["label"].isin(["partial", "mostly"]).to_numpy()
     confidence_floor = weight_profile["confidence_floor"]
     hf_weights = confidence_floor + ((1.0 - confidence_floor) * confidence_weights)
-    weights = np.where(internal, weight_profile["internal_scale"], hf_weights * weight_profile["hf_scale"])
-    return np.where(internal & minority, weights * weight_profile["minority_scale"], weights)
+    return np.where(internal, weight_profile["internal_scale"], hf_weights * weight_profile["hf_scale"])
 
 
 def fit(model: Pipeline, rows: pd.DataFrame, weight_profile: dict[str, float]) -> Pipeline:
@@ -152,6 +232,7 @@ def main() -> None:
 
     internal = prepare_features(read_source("internal", args.internal_scores, args.internal_labels))
     hf = prepare_features(read_source("hf_github_codereview", args.hf_scores, args.hf_labels, args.hf_audit))
+    validate_disjoint_sources(internal, hf)
     splitter = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=RANDOM_STATE)
     dev_pos, test_pos = next(splitter.split(internal, groups=internal["group_id"]))
     internal_dev = internal.iloc[dev_pos].copy()

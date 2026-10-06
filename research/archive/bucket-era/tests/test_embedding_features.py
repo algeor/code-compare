@@ -55,6 +55,28 @@ class EmbeddingFeatureTest(unittest.TestCase):
         self.assertEqual(len(prepared.candidates), 1)
         self.assertEqual(prepared.candidates[0].path, "app.py")
 
+    def test_prepare_embedding_example_caps_suggestion_chunks_globally(self) -> None:
+        row = {
+            "dataset_source": "internal",
+            "example_id": "example-many-files",
+            "suggested_diff": (
+                "diff --git a/one.py b/one.py\n--- a/one.py\n+++ b/one.py\n@@ -0,0 +1 @@\n+abcdefgh\n"
+                "diff --git a/two.py b/two.py\n--- a/two.py\n+++ b/two.py\n@@ -0,0 +1 @@\n+ijklmnop\n"
+            ),
+            "landed_diff": "",
+        }
+
+        prepared = prepare_embedding_example(
+            row,
+            FakeTokenizer(),
+            max_length=6,
+            max_candidates=0,
+            chunk_overlap=0,
+            max_suggestion_chunks=2,
+        )
+
+        self.assertEqual(len(prepared.suggestion_chunks), 2)
+
     def test_prepare_embedding_example_caps_large_candidate(self) -> None:
         row = {
             "dataset_source": "internal",

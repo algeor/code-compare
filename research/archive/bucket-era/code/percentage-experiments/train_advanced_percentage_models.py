@@ -34,6 +34,7 @@ from pr_suggestion_metrics.train_percentage_regressor import (
     prepare_features,
     read_source,
     training_weights,
+    validate_disjoint_sources,
 )
 from pr_suggestion_metrics.train_two_stage_percentage import make_model as make_two_stage_model
 from pr_suggestion_metrics.two_stage_percentage import StackedPercentageEnsemble, WeightedPercentageEnsemble
@@ -55,7 +56,6 @@ DEFAULT_BASELINE_SCHEMA = {
         "hf_scale": 1.1,
         "confidence_floor": 0.0,
         "internal_scale": 1.0,
-        "minority_scale": 1.0,
     },
 }
 
@@ -191,6 +191,7 @@ def main() -> None:
 
     internal = prepare_features(read_source("internal", args.internal_scores, args.internal_labels))
     hf = prepare_features(read_source("hf_github_codereview", args.hf_scores, args.hf_labels, args.hf_audit))
+    validate_disjoint_sources(internal, hf)
     splitter = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=RANDOM_STATE)
     dev_positions, test_positions = next(splitter.split(internal, groups=internal["group_id"]))
     internal_dev = internal.iloc[dev_positions].reset_index(drop=True)

@@ -10,19 +10,19 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pr_suggestion_metrics._paths import REPOSITORY_ROOT as _REPOSITORY_ROOT
+from pr_suggestion_metrics.artifact_io import read_jsonl_objects, write_jsonl_objects
+from pr_suggestion_metrics.percentages import OBSOLETE_DERIVED_LABEL_FIELDS, parse_integer_percentage
+
 
 LABEL_COLUMNS = [
     "example_id",
-    "label",
     "expected_landed_percentage",
-    "expected_percentage_bucket",
     "label_notes",
-    "suggested_label",
     "suggested_percentage",
     "suggested_rationale",
     "pr_url",
@@ -35,9 +35,6 @@ LABEL_COLUMNS = [
     "landed_files",
 ]
 
-BUCKETS = ["0", "1-10", "11-20", "21-30", "31-40", "41-50", "51-60", "61-70", "71-80", "81-90", "91-100"]
-LABELS = {"0%", "partial", "mostly", "100%"}
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_PROMPT_PATH = _REPOSITORY_ROOT / "docs" / "prompts" / "llm_semantic_percentage_labeling_prompt.md"
 
 
@@ -56,47 +53,6 @@ class DatasetPaths:
     @property
     def llm_labels_jsonl(self) -> Path:
         return self.dataset_dir / "llm_labels.jsonl"
-
-
-def percentage_bucket(value: int) -> str:
-    if value < 0 or value > 100:
-        raise ValueError(f"percentage out of range: {value}")
-    if value == 0:
-        return "0"
-    if value <= 10:
-        return "1-10"
-    lower = ((value - 1) // 10) * 10 + 1
-    upper = min(lower + 9, 100)
-    return f"{lower}-{upper}"
-
-
-def coarse_label(value: int) -> str:
-    if value == 0:
-        return "0%"
-    if value < 60:
-        return "partial"
-    if value < 90:
-        return "mostly"
-    return "100%"
-
-
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open() as stream:
-        for line_number, line in enumerate(stream, start=1):
-            if not line.strip():
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError as error:
-                raise ValueError(f"invalid JSON in {path} line {line_number}: {error}") from error
-    return rows
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    with path.open("w") as stream:
-        for row in rows:
-            stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def load_csv(path: Path) -> list[dict[str, str]]:
@@ -130,7 +86,7 @@ def trim_text(text: str, max_chars: int) -> str:
 
 def prepare(args: argparse.Namespace) -> None:
     paths = DatasetPaths(args.dataset_dir)
-    examples = load_jsonl(paths.dataset_jsonl)
+    examples = read_jsonl_objects(paths.dataset_jsonl)
     existing_labels = {row["example_id"]: row for row in load_csv(paths.labels_csv)} if paths.labels_csv.exists() else {}
 
     output_dir = args.output_dir
@@ -142,6 +98,12 @@ def prepare(args: argparse.Namespace) -> None:
     batch_index = 1
     batch_rows: list[dict[str, Any]] = []
     written = 0
+    written_batches = 0
+
+    if args.batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
+    if args.max_diff_chars <= 0:
+        raise ValueError("max_diff_chars must be greater than zero")
 
     for example in examples:
         example_id = str(example["example_id"])
@@ -160,7 +122,6 @@ def prepare(args: argparse.Namespace) -> None:
                             "suggestion_source": example.get("suggestion_source", ""),
                             "suggested_diff": trim_text(str(example.get("suggested_diff", "")), args.max_diff_chars),
                             "landed_diff": trim_text(str(example.get("landed_diff", "")), args.max_diff_chars),
-                            "weak_existing_label": previous.get("label", example.get("label", "")),
                             "weak_existing_percentage": previous.get(
                                 "expected_landed_percentage", example.get("expected_landed_percentage", "")
                             ),
@@ -178,22 +139,34 @@ def prepare(args: argparse.Namespace) -> None:
         batch_rows.append(task)
 
         if len(batch_rows) >= args.batch_size:
-            write_jsonl(output_dir / f"semantic_labeling_batch_{batch_index:04d}.jsonl", batch_rows)
+            write_jsonl_objects(
+                output_dir / f"semantic_labeling_batch_{batch_index:04d}.jsonl",
+                batch_rows,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             written += len(batch_rows)
+            written_batches += 1
             batch_index += 1
             batch_rows = []
 
     if batch_rows:
-        write_jsonl(output_dir / f"semantic_labeling_batch_{batch_index:04d}.jsonl", batch_rows)
+        write_jsonl_objects(
+            output_dir / f"semantic_labeling_batch_{batch_index:04d}.jsonl",
+            batch_rows,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         written += len(batch_rows)
+        written_batches += 1
 
     print(f"prepared examples: {written}")
-    print(f"batch files: {batch_index}")
+    print(f"batch files: {written_batches}")
     print(f"output_dir: {output_dir}")
 
 
 def read_llm_output(path: Path) -> dict[str, dict[str, Any]]:
-    rows = load_jsonl(path)
+    rows = read_jsonl_objects(path)
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
         payload = row
@@ -202,21 +175,21 @@ def read_llm_output(path: Path) -> dict[str, dict[str, Any]]:
         if "content" in payload and isinstance(payload["content"], str):
             payload = json.loads(payload["content"])
         example_id = str(payload["example_id"])
+        if example_id in result:
+            raise ValueError(f"duplicate semantic label for example_id {example_id!r}")
         result[example_id] = payload
     return result
 
 
 def normalized_label_row(example: dict[str, Any], old_label: dict[str, Any], semantic: dict[str, Any]) -> dict[str, Any]:
-    percentage = int(semantic["expected_landed_percentage"])
-    if percentage < 0 or percentage > 100:
-        raise ValueError(f"{example['example_id']}: percentage out of range: {percentage}")
+    percentage = parse_integer_percentage(
+        semantic["expected_landed_percentage"],
+        name=f"{example['example_id']}: percentage",
+    )
     return {
         "example_id": example["example_id"],
-        "label": coarse_label(percentage),
         "expected_landed_percentage": percentage,
-        "expected_percentage_bucket": percentage_bucket(percentage),
         "label_notes": semantic.get("reasoning", old_label.get("label_notes", "")),
-        "suggested_label": old_label.get("suggested_label", old_label.get("label", "")),
         "suggested_percentage": old_label.get(
             "suggested_percentage", old_label.get("expected_landed_percentage", example.get("deterministic_landed_estimate", ""))
         ),
@@ -238,14 +211,21 @@ def normalized_label_row(example: dict[str, Any], old_label: dict[str, Any], sem
 
 def apply_labels(args: argparse.Namespace) -> None:
     paths = DatasetPaths(args.dataset_dir)
-    examples = load_jsonl(paths.dataset_jsonl)
+    examples = read_jsonl_objects(paths.dataset_jsonl)
     old_labels = {row["example_id"]: row for row in load_csv(paths.labels_csv)} if paths.labels_csv.exists() else {}
     semantic_labels = read_llm_output(args.llm_output)
 
-    missing = [row["example_id"] for row in examples if row["example_id"] not in semantic_labels]
+    example_ids = [str(row["example_id"]) for row in examples]
+    if len(example_ids) != len(set(example_ids)):
+        raise ValueError("duplicate example_id in dataset.jsonl")
+    missing = [example_id for example_id in example_ids if example_id not in semantic_labels]
     if missing:
         preview = ", ".join(missing[:10])
         raise ValueError(f"semantic labels missing {len(missing)} examples: {preview}")
+    unexpected = sorted(set(semantic_labels) - set(example_ids))
+    if unexpected:
+        preview = ", ".join(unexpected[:10])
+        raise ValueError(f"semantic labels contain {len(unexpected)} unknown examples: {preview}")
 
     label_rows: list[dict[str, Any]] = []
     llm_rows: list[dict[str, Any]] = []
@@ -257,29 +237,27 @@ def apply_labels(args: argparse.Namespace) -> None:
         label_row = normalized_label_row(example, old_labels.get(example_id, {}), semantic)
         label_rows.append(label_row)
 
-        llm_row = dict(semantic)
+        llm_row = {key: value for key, value in semantic.items() if key not in OBSOLETE_DERIVED_LABEL_FIELDS}
         llm_row["example_id"] = example_id
-        llm_row["label"] = label_row["label"]
         llm_row["expected_landed_percentage"] = label_row["expected_landed_percentage"]
-        llm_row["expected_percentage_bucket"] = label_row["expected_percentage_bucket"]
         llm_rows.append(llm_row)
 
         updated = dict(example)
-        updated["label"] = label_row["label"]
+        for field in OBSOLETE_DERIVED_LABEL_FIELDS:
+            updated.pop(field, None)
         updated["expected_landed_percentage"] = label_row["expected_landed_percentage"]
-        updated["expected_percentage_bucket"] = label_row["expected_percentage_bucket"]
         updated_examples.append(updated)
 
     write_labels_csv(paths.labels_csv, label_rows)
-    write_jsonl(paths.llm_labels_jsonl, llm_rows)
-    write_jsonl(paths.dataset_jsonl, updated_examples)
+    write_jsonl_objects(paths.llm_labels_jsonl, llm_rows, ensure_ascii=False, sort_keys=True)
+    write_jsonl_objects(paths.dataset_jsonl, updated_examples, ensure_ascii=False, sort_keys=True)
     validate_dataset(paths)
 
 
 def validate_dataset(paths: DatasetPaths) -> None:
-    examples = load_jsonl(paths.dataset_jsonl)
+    examples = read_jsonl_objects(paths.dataset_jsonl)
     labels = load_csv(paths.labels_csv)
-    llm_labels = load_jsonl(paths.llm_labels_jsonl) if paths.llm_labels_jsonl.exists() else []
+    llm_labels = read_jsonl_objects(paths.llm_labels_jsonl) if paths.llm_labels_jsonl.exists() else []
 
     example_ids = [str(row["example_id"]) for row in examples]
     label_ids = [str(row["example_id"]) for row in labels]
@@ -297,34 +275,45 @@ def validate_dataset(paths: DatasetPaths) -> None:
 
     by_example = {str(row["example_id"]): row for row in examples}
     by_llm = {str(row["example_id"]): row for row in llm_labels}
-    label_counter: Counter[str] = Counter()
-    bucket_counter: Counter[str] = Counter()
 
     for row in labels:
         example_id = str(row["example_id"])
-        percentage = int(row["expected_landed_percentage"])
-        expected_label = coarse_label(percentage)
-        expected_bucket = percentage_bucket(percentage)
-        label_counter[expected_label] += 1
-        bucket_counter[expected_bucket] += 1
-        if row["label"] not in LABELS:
-            errors.append(f"{example_id}: invalid label {row['label']!r}")
-        if row["label"] != expected_label:
-            errors.append(f"{example_id}: label does not match percentage")
-        if row["expected_percentage_bucket"] != expected_bucket:
-            errors.append(f"{example_id}: bucket does not match percentage")
-        if by_example.get(example_id, {}).get("expected_landed_percentage") != percentage:
-            errors.append(f"{example_id}: dataset percentage does not match labels.csv")
-        if by_llm and int(by_llm[example_id]["expected_landed_percentage"]) != percentage:
-            errors.append(f"{example_id}: llm percentage does not match labels.csv")
+        try:
+            percentage = parse_integer_percentage(
+                row["expected_landed_percentage"],
+                name=f"{example_id}: labels.csv percentage",
+            )
+        except ValueError as error:
+            errors.append(str(error))
+            continue
+        try:
+            dataset_percentage = parse_integer_percentage(
+                by_example.get(example_id, {}).get("expected_landed_percentage"),
+                name=f"{example_id}: dataset percentage",
+            )
+        except ValueError as error:
+            errors.append(str(error))
+        else:
+            if dataset_percentage != percentage:
+                errors.append(f"{example_id}: dataset percentage does not match labels.csv")
+        llm_row = by_llm.get(example_id)
+        if llm_row is not None:
+            try:
+                llm_percentage = parse_integer_percentage(
+                    llm_row.get("expected_landed_percentage"),
+                    name=f"{example_id}: llm percentage",
+                )
+            except ValueError as error:
+                errors.append(str(error))
+            else:
+                if llm_percentage != percentage:
+                    errors.append(f"{example_id}: llm percentage does not match labels.csv")
 
     if errors:
         preview = "\n".join(errors[:20])
         raise ValueError(f"validation failed with {len(errors)} error(s):\n{preview}")
 
     print(f"validated examples: {len(examples)}")
-    print("labels:", dict(label_counter))
-    print("buckets:", {bucket: bucket_counter[bucket] for bucket in BUCKETS})
 
 
 def validate(args: argparse.Namespace) -> None:

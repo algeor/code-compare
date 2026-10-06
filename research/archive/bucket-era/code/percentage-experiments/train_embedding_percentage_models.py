@@ -37,6 +37,7 @@ from pr_suggestion_metrics.train_percentage_regressor import (
     prepare_features,
     read_source,
     training_weights,
+    validate_disjoint_sources,
 )
 from pr_suggestion_metrics.train_two_stage_percentage import make_model as make_two_stage_model
 from pr_suggestion_metrics.two_stage_percentage import WeightedPercentageEnsemble
@@ -216,6 +217,7 @@ def main() -> None:
 
     internal = prepare_features(read_source("internal", args.internal_scores, args.internal_labels))
     hf = prepare_features(read_source("hf_github_codereview", args.hf_scores, args.hf_labels, args.hf_audit))
+    validate_disjoint_sources(internal, hf)
     internal = attach_embedding_features(internal, embedding_frame, all_embedding_columns)
     hf = attach_embedding_features(hf, embedding_frame, all_embedding_columns)
 

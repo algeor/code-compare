@@ -4,34 +4,22 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from pr_suggestion_metrics.evaluate_metrics import (
+from pr_suggestion_metrics.artifact_io import parse_jsonl_objects
+from pr_suggestion_metrics.features import (
     metric_result_to_feature_row,
     raw_diff_support_issues,
     score_diff_pair,
 )
 from pr_suggestion_metrics.model_artifacts import sha256_file
+from pr_suggestion_metrics.percentages import parse_integer_percentage, validate_continuous_percentage
 
 
 _INPUT_SPLITS = ("train", "development", "calibration")
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, start=1):
-            if not line.strip():
-                continue
-            value = json.loads(line)
-            if not isinstance(value, dict):
-                raise ValueError(f"Expected a JSON object at {path}:{line_number}")
-            rows.append(value)
-    return rows
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -44,22 +32,56 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def _verified_split_artifacts(
+    benchmark_dir: Path,
+) -> tuple[str, dict[str, list[dict[str, Any]]], dict[str, str]]:
+    manifest_path = benchmark_dir / "benchmark_manifest.json"
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    if not isinstance(manifest, dict):
+        raise ValueError("Benchmark manifest must contain a JSON object")
+    artifact_hashes = manifest.get("artifact_sha256")
+    if not isinstance(artifact_hashes, dict):
+        raise ValueError("Benchmark manifest is missing artifact_sha256")
+
+    split_rows: dict[str, list[dict[str, Any]]] = {}
+    verified_hashes: dict[str, str] = {}
+    for split in _INPUT_SPLITS:
+        input_path = benchmark_dir / f"{split}.jsonl"
+        expected_hash = artifact_hashes.get(split)
+        if not isinstance(expected_hash, str):
+            raise ValueError(f"Benchmark manifest is missing the {split} artifact hash")
+        if not input_path.is_file():
+            raise ValueError(f"Frozen benchmark is missing {input_path.name}")
+        input_bytes = input_path.read_bytes()
+        actual_hash = hashlib.sha256(input_bytes).hexdigest()
+        if actual_hash != expected_hash:
+            raise ValueError(f"Frozen {split} split does not match the benchmark manifest")
+        split_rows[split] = parse_jsonl_objects(input_bytes.decode("utf-8"), source=input_path)
+        verified_hashes[split] = actual_hash
+    return hashlib.sha256(manifest_bytes).hexdigest(), split_rows, verified_hashes
+
+
 def build_frozen_feature_tables(*, benchmark_dir: Path, output_dir: Path) -> dict[str, Any]:
     """Transform frozen train/development/calibration rows into one feature schema."""
+    benchmark_manifest_sha256, rows_by_split, input_hashes = _verified_split_artifacts(benchmark_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     feature_rows: list[dict[str, Any]] = []
     abstentions: list[dict[str, Any]] = []
-    input_hashes: dict[str, str] = {}
 
     for split in _INPUT_SPLITS:
-        input_path = benchmark_dir / f"{split}.jsonl"
-        if not input_path.exists():
-            continue
-        input_hashes[split] = sha256_file(input_path)
-        for row in _read_jsonl(input_path):
+        for row in rows_by_split[split]:
             example_id = str(row["example_id"])
             suggested_diff = str(row["suggested_diff"])
             landed_diff = str(row["landed_diff"])
+            coverage_percentage = parse_integer_percentage(
+                row["coverage_percentage"],
+                name=f"coverage_percentage for {example_id}",
+            )
+            coverage_unrounded = validate_continuous_percentage(
+                row["coverage_unrounded"],
+                name=f"coverage_unrounded for {example_id}",
+            )
             issues = raw_diff_support_issues(suggested_diff)
             if issues:
                 abstentions.append({"example_id": example_id, "split": split, "reasons": issues})
@@ -73,8 +95,8 @@ def build_frozen_feature_tables(*, benchmark_dir: Path, output_dir: Path) -> dic
                     "pr_number": int(row["pr_number"]),
                     "group_id": f"{row['repo']}#{row['pr_number']}",
                     "split": split,
-                    "coverage_percentage": int(row["coverage_percentage"]),
-                    "coverage_unrounded": float(row["coverage_unrounded"]),
+                    "coverage_percentage": coverage_percentage,
+                    "coverage_unrounded": coverage_unrounded,
                     **metric_result_to_feature_row(metric_result),
                 }
             )
@@ -89,6 +111,7 @@ def build_frozen_feature_tables(*, benchmark_dir: Path, output_dir: Path) -> dic
     manifest = {
         "schema_version": "1.0",
         "source_benchmark_dir": str(benchmark_dir),
+        "benchmark_manifest_sha256": benchmark_manifest_sha256,
         "input_sha256": input_hashes,
         "feature_rows": len(feature_rows),
         "abstained_rows": len(abstentions),

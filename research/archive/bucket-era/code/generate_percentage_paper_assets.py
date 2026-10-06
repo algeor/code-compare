@@ -96,7 +96,6 @@ def dataset_summary(labels: pd.DataFrame, detailed_labels: pd.DataFrame) -> dict
         "zero_rows": int((percentages == 0).sum()),
         "intermediate_rows": int(percentages.between(1, 99).sum()),
         "hundred_rows": int((percentages == 100).sum()),
-        "coarse_labels": {str(name): int(count) for name, count in labels["label"].value_counts().items()},
         "label_confidence": {
             str(name): int(count) for name, count in detailed_labels["confidence"].value_counts().items()
         },

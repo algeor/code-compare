@@ -1,7 +1,7 @@
 # Model Card: Experimental PR Suggestion Coverage Estimator
 
-**Status:** exploratory; not production-validated
-**Primary artifact:** `models/pr_suggestion_coverage_regression/`  
+**Status:** implementation available; no bundled production-validated model
+**Primary artifact:** user-supplied trusted percentage model
 **Output:** rounded integer estimate from 0 to 100
 
 ## 1. Model Purpose
@@ -10,14 +10,14 @@ The model estimates an LLM-assisted **semantic agreement/coverage score** betwee
 
 ## 2. Model and Features
 
-The deployed percentage artifact is described by its schema as a weighted ensemble using:
+Archived percentage experiments used ensembles of:
 
 - a Random Forest baseline;
 - a two-stage endpoint/intermediate model;
 - a CatBoost MAE component;
 - deterministic lexical, hunk, structural, GumTree availability, and file-overlap features.
 
-The schema contains 28 numeric, 3 boolean, and 5 categorical features. Model input is normally a precomputed feature row. The public raw-diff convenience API computes that row only for a deliberately narrow supported case.
+The supported training command now selects a percentage regressor from frozen non-test feature rows. Model input is normally a precomputed feature row. The public raw-diff convenience API computes that row only for a deliberately narrow supported case.
 
 Frozen embedding artifacts are research-only. They were not promoted because internal holdout and repository-held-out evidence did not show a consistent practical improvement.
 
@@ -52,21 +52,9 @@ Do not use the model for:
 
 See `docs/data-card.md` for composition and limitations.
 
-## 6. Reported Exploratory Results
+## 6. Reported Results
 
-The latest advanced comparison reports the currently loaded baseline on the repeatedly reused 70-row internal holdout as:
-
-| Metric | Value |
-|---|---:|
-| MAE | 9.743 percentage points |
-| RMSE | 19.310 percentage points |
-| Within 5 points | 61.4% |
-| Within 10 points | 74.3% |
-| Dangerous endpoint error rate | 1.43% |
-
-These numbers are **not confirmatory**. The holdout was repeatedly consulted during model-family, blend, threshold, and embedding experiments. Labels are not frozen double-human ground truth, and the feature/label process contains leakage risks.
-
-The classifier artifact reports 80.2% accuracy and 0.741 macro-F1 over a 743-row evaluation table, but this combines sources and targets the obsolete coarse-bucket framing. It is retained for research compatibility, not as the end-goal metric.
+No active bundled model has confirmatory results. Superseded exploratory artifacts and their reports are preserved under `research/archive/bucket-era/` and must not be presented as current model performance.
 
 ## 7. Public Inference Contract
 
@@ -96,7 +84,7 @@ The API now returns exact normalized change-unit evidence for additions, deletio
 
 ## 9. Artifact Safety and Versioning
 
-Each model directory contains:
+A deployable model directory must contain:
 
 - `model.joblib`;
 - `feature_schema.json`;
@@ -104,7 +92,7 @@ Each model directory contains:
 
 Inference verifies model and schema hashes before deserializing. This catches accidental or unauthorized file changes but does not authenticate the publisher. `joblib` uses pickle semantics and can execute code while loading; load only artifacts from a trusted repository/revision.
 
-The current manifests were added after the existing artifacts were trained. They bind the checked-in bytes and document the verification runtime, but do not recover missing original training provenance.
+The repository intentionally does not bundle a model until a bucket-free frozen benchmark and confirmatory evaluation exist.
 
 ## 10. Validation Blockers
 

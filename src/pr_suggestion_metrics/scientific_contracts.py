@@ -87,10 +87,16 @@ class SuggestionProvenance(BaseModel):
         issues: list[str] = []
         if self.suggestion_created_at is None:
             issues.append("missing suggestion creation timestamp")
+        elif self.suggestion_created_at.utcoffset() is None:
+            issues.append("suggestion creation timestamp must include a timezone")
         if self.pr_merged_at is None:
             issues.append("missing PR merge timestamp")
+        elif self.pr_merged_at.utcoffset() is None:
+            issues.append("PR merge timestamp must include a timezone")
         if self.suggestion_created_at is not None and self.pr_merged_at is not None:
-            if self.suggestion_created_at >= self.pr_merged_at:
+            created_is_aware = self.suggestion_created_at.utcoffset() is not None
+            merged_is_aware = self.pr_merged_at.utcoffset() is not None
+            if created_is_aware == merged_is_aware and self.suggestion_created_at >= self.pr_merged_at:
                 issues.append("suggestion was not created before PR merge")
         if self.source_kind == "github_review_comment":
             if self.original_commit_sha is None and self.comment_commit_sha is None:

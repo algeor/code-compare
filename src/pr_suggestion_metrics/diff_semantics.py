@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict, deque
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -11,6 +11,8 @@ from pr_suggestion_metrics.diff.parser import parse_unified_diff
 
 
 ChangeKind = Literal["addition", "deletion", "rename"]
+
+
 class ChangeUnit(BaseModel):
     """One changed line or rename operation extracted from a unified diff."""
 
@@ -116,22 +118,40 @@ def analyze_change_coverage(suggested_diff: str, landed_diff: str) -> ChangeCove
     """Match exact normalized change units one-to-one and return inspectable evidence."""
     suggested_units = extract_change_units(suggested_diff, prefix="suggested")
     landed_units = extract_change_units(landed_diff, prefix="landed")
-    available = set(range(len(landed_units)))
+    landed_by_exact_key: dict[tuple[ChangeKind, str, str], deque[int]] = defaultdict(deque)
+    for index, landed in enumerate(landed_units):
+        landed_by_exact_key[(landed.kind, landed.text, landed.path)].append(index)
+
+    matched_landed_indices: set[int] = set()
+    matched_pairs: dict[int, int] = {}
+    for suggested_index, suggested in enumerate(suggested_units):
+        exact_candidates = landed_by_exact_key[(suggested.kind, suggested.text, suggested.path)]
+        if exact_candidates:
+            landed_index = exact_candidates.popleft()
+            matched_landed_indices.add(landed_index)
+            matched_pairs[suggested_index] = landed_index
+
+    landed_by_content_key: dict[tuple[ChangeKind, str], deque[int]] = defaultdict(deque)
+    for index, landed in enumerate(landed_units):
+        if index not in matched_landed_indices:
+            landed_by_content_key[(landed.kind, landed.text)].append(index)
+
+    for suggested_index, suggested in enumerate(suggested_units):
+        if suggested_index in matched_pairs:
+            continue
+        content_candidates = landed_by_content_key[(suggested.kind, suggested.text)]
+        if content_candidates:
+            matched_pairs[suggested_index] = content_candidates.popleft()
+
     matches: list[ChangeUnitMatch] = []
     unmatched: list[ChangeUnit] = []
 
-    for suggested in suggested_units:
-        candidates = [
-            index
-            for index in available
-            if landed_units[index].kind == suggested.kind and landed_units[index].text == suggested.text
-        ]
-        if not candidates:
+    for suggested_index, suggested in enumerate(suggested_units):
+        matched_landed_index = matched_pairs.get(suggested_index)
+        if matched_landed_index is None:
             unmatched.append(suggested)
             continue
-        selected = min(candidates, key=lambda index: landed_units[index].path != suggested.path)
-        landed = landed_units[selected]
-        available.remove(selected)
+        landed = landed_units[matched_landed_index]
         matches.append(
             ChangeUnitMatch(
                 suggested_unit_id=suggested.unit_id,

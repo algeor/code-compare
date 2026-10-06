@@ -30,17 +30,15 @@ The current rows pair a suggested diff with a pull-request diff. They do not est
 - **279 examples** from one internal repository: `github.tools.sap/Lenny/pipeline-fl-control-plane`.
 - Suggestions are GitHub review-comment suggestion blocks.
 - The compared target is the whole PR diff from the GitHub pull-diff API.
-- Current coarse labels: 70 `0%`, 35 `partial`, 70 `mostly`, and 104 `100%`.
 - Current percentages range from 0 to 100, with a mean of approximately 62.93.
 - No immutable train/development/test assignment is stored in `labels.csv`; training scripts derive grouped splits at runtime.
 
 ### Files
 
-- `dataset.jsonl`: suggestion/landed-diff pairs, metadata, deterministic priors, and current labels.
+- `dataset.jsonl`: suggestion/landed-diff pairs, metadata, deterministic priors, and percentage targets.
 - `labels.csv`: compact current targets keyed by `example_id`.
 - `llm_labels.jsonl`: LLM reasoning and semantic-unit output.
-- `metric_scores.csv`: deterministic features computed from the pairs.
-- `supervised_training.jsonl`: joined training-oriented records.
+- Historical generated feature and training files are archived under `research/archive/bucket-era/data/`.
 
 ### Known limitations
 
@@ -59,7 +57,6 @@ The current rows pair a suggested diff with a pull-request diff. They do not est
 - **2,500 examples** retained from 11,325 scanned rows of `ronantakizawa/github-codereview`.
 - **29 repositories** and multiple languages are represented.
 - Largest language groups recorded in metadata are Python (893), Julia (325), Kotlin (283), Swift (207), TypeScript (165), and Java (150).
-- Current coarse labels: 250 `0%`, 310 `partial`, 587 `mostly`, and 1,353 `100%`.
 - Current percentages range from 0 to 100, with a mean of approximately 77.55.
 
 ### Known limitations
@@ -97,7 +94,7 @@ verified pre-merge suggestion event
 ## 6. Quality Controls Present
 
 - Stable `example_id` values join data, labels, and scores.
-- Label/percentage/bucket consistency can be audited.
+- Percentage consistency across joined artifacts can be audited.
 - Model training groups examples by pull request.
 - External audit records can lower training weight for uncertain rows.
 - Numeric and boolean model inputs now reject malformed values instead of silently coercing them.

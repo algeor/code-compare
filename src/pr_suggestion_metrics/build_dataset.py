@@ -12,22 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from pr_suggestion_metrics.artifact_io import iter_jsonl_objects, write_jsonl_object_lines
 from pr_suggestion_metrics.scientific_contracts import BenchmarkCandidate, SuggestionProvenance
-
-HumanLabel = Literal["0%", "partial", "mostly", "100%"]
-PercentageBucket = Literal[
-    "0",
-    "1-10",
-    "11-20",
-    "21-30",
-    "31-40",
-    "41-50",
-    "51-60",
-    "61-70",
-    "71-80",
-    "81-90",
-    "91-100",
-]
 
 _DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*)$")
 _OLD_FILE_RE = re.compile(r"^---\s+(?:a/)?(.+)$")
@@ -55,8 +41,7 @@ class RawPair(BaseModel):
     inspection_commit_sha: str | None = None
     handler_diff_path: str
     merged_pr_diff_source: str
-    expected_landed_percentage: int | None = None
-    human_label: HumanLabel | None = None
+    expected_landed_percentage: int | None = Field(default=None, ge=0, le=100)
     reviewer_edited_version: str | None = None
     renamed_files: bool | None = None
     config_files_touched: bool | None = None
@@ -96,9 +81,7 @@ class DatasetRow(BaseModel):
     file_overlap_ratio: float
     changed_line_overlap_ratio: float
     deterministic_landed_estimate: int
-    label: HumanLabel | None = None
-    expected_landed_percentage: int | None = None
-    expected_percentage_bucket: PercentageBucket | None = None
+    expected_landed_percentage: int | None = Field(default=None, ge=0, le=100)
     label_notes: str = ""
     split: Literal["unassigned", "train", "validation", "test"] = "unassigned"
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -118,14 +101,11 @@ def _read_pairs(paths: list[Path]) -> list[RawPair]:
     """Read raw JSONL pairs from one or more files."""
     rows: list[RawPair] = []
     for path in paths:
-        with path.open(encoding="utf-8", errors="replace") as stream:
-            for line_number, line in enumerate(stream, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    rows.append(RawPair.model_validate_json(line))
-                except ValueError as exc:
-                    raise ValueError(f"Could not parse {path}:{line_number}: {exc}") from exc
+        for line_number, row in iter_jsonl_objects(path, errors="replace"):
+            try:
+                rows.append(RawPair.model_validate(row))
+            except ValueError as exc:
+                raise ValueError(f"Could not parse {path}:{line_number}: {exc}") from exc
     return rows
 
 
@@ -205,17 +185,6 @@ def _estimate_landed_percentage(file_overlap: float, line_overlap: float) -> int
     return round((0.35 * file_overlap + 0.65 * line_overlap) * 100)
 
 
-def _suggest_label(percentage: int) -> HumanLabel:
-    """Map the deterministic percentage to a review starting label."""
-    if percentage >= 90:
-        return "100%"
-    if percentage >= 60:
-        return "mostly"
-    if percentage >= 20:
-        return "partial"
-    return "0%"
-
-
 def _rationale(row: DatasetRow) -> str:
     """Explain the deterministic suggestion in one compact sentence."""
     return (
@@ -258,11 +227,7 @@ def _dataset_row(pair: RawPair) -> DatasetRow:
         file_overlap_ratio=file_overlap,
         changed_line_overlap_ratio=changed_line_overlap,
         deterministic_landed_estimate=_estimate_landed_percentage(file_overlap, changed_line_overlap),
-        label=pair.human_label,
         expected_landed_percentage=pair.expected_landed_percentage,
-        expected_percentage_bucket=_percentage_bucket(pair.expected_landed_percentage)
-        if pair.expected_landed_percentage is not None
-        else None,
         metadata={
             "renamed_files": pair.renamed_files,
             "config_files_touched": pair.config_files_touched,
@@ -275,7 +240,7 @@ def _dataset_row(pair: RawPair) -> DatasetRow:
 
 def _write_jsonl(path: Path, rows: list[DatasetRow]) -> None:
     """Write dataset rows as JSONL."""
-    path.write_text("".join(row.model_dump_json(exclude_none=True) + "\n" for row in rows), encoding="utf-8")
+    write_jsonl_object_lines(path, (row.model_dump_json(exclude_none=True) for row in rows))
 
 
 def _write_benchmark_candidates(path: Path, rows: list[DatasetRow]) -> int:
@@ -296,7 +261,7 @@ def _write_benchmark_candidates(path: Path, rows: list[DatasetRow]) -> int:
                 suggestion_provenance=provenance,
             )
         )
-    path.write_text("".join(candidate.model_dump_json() + "\n" for candidate in candidates), encoding="utf-8")
+    write_jsonl_object_lines(path, (candidate.model_dump_json() for candidate in candidates))
     return len(candidates)
 
 
@@ -307,11 +272,8 @@ def _write_labels_csv(path: Path, rows: list[DatasetRow]) -> None:
             stream,
             fieldnames=[
                 "example_id",
-                "label",
                 "expected_landed_percentage",
-                "expected_percentage_bucket",
                 "label_notes",
-                "suggested_label",
                 "suggested_percentage",
                 "suggested_rationale",
                 "pr_url",
@@ -329,15 +291,10 @@ def _write_labels_csv(path: Path, rows: list[DatasetRow]) -> None:
             writer.writerow(
                 {
                     "example_id": row.example_id,
-                    "label": row.label or "",
                     "expected_landed_percentage": (
                         row.expected_landed_percentage if row.expected_landed_percentage is not None else ""
                     ),
-                    "expected_percentage_bucket": _percentage_bucket(row.expected_landed_percentage)
-                    if row.expected_landed_percentage is not None
-                    else "",
                     "label_notes": row.label_notes,
-                    "suggested_label": _suggest_label(row.deterministic_landed_estimate),
                     "suggested_percentage": row.deterministic_landed_estimate,
                     "suggested_rationale": _rationale(row),
                     "pr_url": row.pr_url,
@@ -366,25 +323,12 @@ def _write_summary(path: Path, rows: list[DatasetRow], raw_count: int) -> None:
         "- dataset.jsonl: ML-ready records with full suggestion and landed diffs.",
         "- labels.csv: compact manual labeling sheet keyed by example_id.",
         "",
-        "Label options:",
-        "- 0%",
-        "- partial",
-        "- mostly",
-        "- 100%",
+        "Label format:",
+        "- expected_landed_percentage: integer from 0 through 100",
         "",
         "Important: deterministic_landed_estimate is only a weak sorting/helper signal, not ground truth.",
     ]
     path.write_text("\n".join(content) + "\n", encoding="utf-8")
-
-
-def _percentage_bucket(percentage: int) -> PercentageBucket:
-    """Map a manual 0-100 percentage to the dataset bucket label."""
-    bounded_percentage = max(0, min(100, int(round(percentage))))
-    if bounded_percentage == 0:
-        return "0"
-    lower_bound = ((bounded_percentage - 1) // 10) * 10 + 1
-    upper_bound = min(lower_bound + 9, 100)
-    return f"{lower_bound}-{upper_bound}"  # type: ignore[return-value]
 
 
 def main() -> int:

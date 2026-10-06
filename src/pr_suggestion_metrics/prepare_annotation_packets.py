@@ -11,14 +11,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pr_suggestion_metrics.freeze_benchmark import BenchmarkExample, _read_jsonl
+from pr_suggestion_metrics.artifact_io import read_jsonl_objects, write_jsonl_objects
 from pr_suggestion_metrics.model_artifacts import sha256_file
+from pr_suggestion_metrics.scientific_contracts import BenchmarkCandidate
 
 
 _FORBIDDEN_KEYS = {
     "label",
     "expected_landed_percentage",
-    "expected_percentage_bucket",
     "deterministic_landed_estimate",
     "file_overlap_ratio",
     "changed_line_overlap_ratio",
@@ -32,7 +32,7 @@ def _safe_packet_name(annotator_id: str) -> str:
     return f"annotator-{digest}.jsonl"
 
 
-def _blinded_packet(example: BenchmarkExample, *, guide_version: str) -> dict[str, Any]:
+def _blinded_packet(example: BenchmarkCandidate, *, guide_version: str) -> dict[str, Any]:
     provenance = example.suggestion_provenance.model_dump(mode="json")
     provenance.pop("author_login", None)
     return {
@@ -65,7 +65,7 @@ def prepare_annotation_packets(
     if len(unique_annotators) < 2:
         raise ValueError("At least two distinct annotators are required")
 
-    raw_examples = _read_jsonl(examples_path)
+    raw_examples = read_jsonl_objects(examples_path)
     for raw_example in raw_examples:
         forbidden = sorted(key for key in _FORBIDDEN_KEYS & raw_example.keys() if raw_example[key] is not None)
         if forbidden:
@@ -74,7 +74,7 @@ def prepare_annotation_packets(
         {key: value for key, value in row.items() if not (key in _FORBIDDEN_KEYS and value is None)}
         for row in raw_examples
     ]
-    examples = [BenchmarkExample.model_validate(row) for row in cleaned_examples]
+    examples = [BenchmarkCandidate.model_validate(row) for row in cleaned_examples]
     if len({example.example_id for example in examples}) != len(examples):
         raise ValueError("Example IDs must be unique")
     for example in examples:
@@ -84,7 +84,7 @@ def prepare_annotation_packets(
 
     shuffled = examples.copy()
     random.Random(seed).shuffle(shuffled)
-    assignments: dict[str, list[BenchmarkExample]] = {annotator_id: [] for annotator_id in unique_annotators}
+    assignments: dict[str, list[BenchmarkCandidate]] = {annotator_id: [] for annotator_id in unique_annotators}
     assignment_manifest: list[dict[str, Any]] = []
     for index, example in enumerate(shuffled):
         first = unique_annotators[index % len(unique_annotators)]
@@ -103,7 +103,7 @@ def prepare_annotation_packets(
     for annotator_id, assigned_examples in assignments.items():
         packet_path = output_dir / _safe_packet_name(annotator_id)
         rows = [_blinded_packet(example, guide_version=guide_version) for example in assigned_examples]
-        packet_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+        write_jsonl_objects(packet_path, rows, sort_keys=True)
         packet_hashes[annotator_id] = sha256_file(packet_path)
 
     manifest = {

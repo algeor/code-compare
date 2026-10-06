@@ -7,19 +7,20 @@ import csv
 import hashlib
 import json
 from collections import Counter, defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from pr_suggestion_metrics.freeze_benchmark import (
-    BenchmarkExample,
+from pr_suggestion_metrics.artifact_io import read_jsonl_objects
+from pr_suggestion_metrics.benchmark.contracts import (
     Split,
-    _near_duplicate_fingerprint,
-    _read_jsonl,
-    _validate_splits,
+    SplitPolicy,
+    near_duplicate_fingerprint,
+    validate_splits,
 )
+from pr_suggestion_metrics.scientific_contracts import BenchmarkCandidate
 
 
-SplitPolicy = Literal["repository_disjoint", "temporal"]
 _SPLIT_RATIOS: dict[Split, float] = {
     "train": 0.60,
     "development": 0.15,
@@ -59,13 +60,13 @@ def _component_counts(component_count: int) -> dict[Split, int]:
     return counts
 
 
-def _build_components(examples: list[BenchmarkExample], policy: SplitPolicy) -> list[list[BenchmarkExample]]:
+def _build_components(examples: list[BenchmarkCandidate], policy: SplitPolicy) -> list[list[BenchmarkCandidate]]:
     union_find = _UnionFind([example.example_id for example in examples])
     grouping_keys: dict[tuple[str, object], str] = {}
     for example in examples:
         keys: list[tuple[str, object]] = [
             ("pr", (example.repo, example.pr_number)),
-            ("near_duplicate", _near_duplicate_fingerprint(example)),
+            ("near_duplicate", near_duplicate_fingerprint(example)),
         ]
         if policy == "repository_disjoint":
             keys.append(("repository", example.repo))
@@ -76,19 +77,30 @@ def _build_components(examples: list[BenchmarkExample], policy: SplitPolicy) -> 
             else:
                 union_find.union(existing, example.example_id)
 
-    components: dict[str, list[BenchmarkExample]] = defaultdict(list)
+    components: dict[str, list[BenchmarkCandidate]] = defaultdict(list)
     for example in examples:
         components[union_find.find(example.example_id)].append(example)
     return list(components.values())
 
 
-def _component_sort_key(component: list[BenchmarkExample], policy: SplitPolicy, seed: int) -> str:
+def _component_identity(component: list[BenchmarkCandidate]) -> str:
+    return "|".join(sorted(example.example_id for example in component))
+
+
+def _component_sort_key(
+    component: list[BenchmarkCandidate],
+    policy: SplitPolicy,
+    seed: int,
+) -> tuple[datetime, str] | str:
     if policy == "temporal":
         timestamps = [example.suggestion_provenance.pr_merged_at for example in component]
         if any(timestamp is None for timestamp in timestamps):
             raise ValueError("Temporal split planning requires a merge timestamp for every example")
-        return max(timestamp for timestamp in timestamps if timestamp is not None).isoformat()
-    identity = "|".join(sorted(example.example_id for example in component))
+        resolved_timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+        if any(timestamp.utcoffset() is None for timestamp in resolved_timestamps):
+            raise ValueError("Temporal split planning requires timezone-aware merge timestamps")
+        return max(timestamp.astimezone(UTC) for timestamp in resolved_timestamps), _component_identity(component)
+    identity = _component_identity(component)
     return hashlib.sha256(f"{seed}:{identity}".encode("utf-8")).hexdigest()
 
 
@@ -101,7 +113,9 @@ def plan_splits(
     seed: int,
 ) -> dict[str, Any]:
     """Write deterministic assignments that keep PRs and near duplicates together."""
-    examples = [BenchmarkExample.model_validate(row) for row in _read_jsonl(examples_path)]
+    if policy not in {"repository_disjoint", "temporal"}:
+        raise ValueError(f"Unsupported split policy: {policy}")
+    examples = [BenchmarkCandidate.model_validate(row) for row in read_jsonl_objects(examples_path)]
     if len({example.example_id for example in examples}) != len(examples):
         raise ValueError("Example IDs must be unique")
     components = _build_components(examples, policy)
@@ -116,7 +130,7 @@ def plan_splits(
                 assignments[example.example_id] = split
         offset += count
 
-    _validate_splits(examples, assignments, split_policy=policy)
+    validate_splits(examples, assignments, split_policy=policy)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", newline="") as stream:

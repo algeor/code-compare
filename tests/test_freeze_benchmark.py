@@ -131,7 +131,7 @@ class FreezeBenchmarkTest(unittest.TestCase):
             root = Path(temporary_directory)
             paths = self._write_fixture(root, omit_second_annotation=True)
 
-            with self.assertRaisesRegex(ValueError, "requires two independent annotators"):
+            with self.assertRaisesRegex(ValueError, "requires exactly two independent annotators"):
                 freeze_benchmark(
                     examples_path=paths["examples"],
                     annotations_path=paths["annotations"],
@@ -157,6 +157,57 @@ class FreezeBenchmarkTest(unittest.TestCase):
                     splits_path=paths["splits"],
                     output_dir=root / "frozen",
                     split_policy="repository_disjoint",
+                )
+
+    def test_freeze_rejects_annotation_for_unknown_example(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+            unknown = _annotation("unknown-example", "annotator-a")
+            with paths["annotations"].open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(unknown) + "\n")
+
+            with self.assertRaisesRegex(ValueError, "Annotations reference unknown examples"):
+                freeze_benchmark(
+                    examples_path=paths["examples"],
+                    annotations_path=paths["annotations"],
+                    adjudications_path=paths["adjudications"],
+                    splits_path=paths["splits"],
+                    output_dir=root / "frozen",
+                    split_policy="repository_disjoint",
+                )
+
+    def test_freeze_rejects_more_than_two_annotators(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+            third = _annotation("example-1", "annotator-c")
+            with paths["annotations"].open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(third) + "\n")
+
+            with self.assertRaisesRegex(ValueError, "exactly two independent annotators"):
+                freeze_benchmark(
+                    examples_path=paths["examples"],
+                    annotations_path=paths["annotations"],
+                    adjudications_path=paths["adjudications"],
+                    splits_path=paths["splits"],
+                    output_dir=root / "frozen",
+                    split_policy="repository_disjoint",
+                )
+
+    def test_freeze_rejects_unknown_split_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+
+            with self.assertRaisesRegex(ValueError, "Unsupported split policy"):
+                freeze_benchmark(
+                    examples_path=paths["examples"],
+                    annotations_path=paths["annotations"],
+                    adjudications_path=paths["adjudications"],
+                    splits_path=paths["splits"],
+                    output_dir=root / "frozen",
+                    split_policy="typo",
                 )
 
     def test_freeze_quarantines_abstained_example(self) -> None:

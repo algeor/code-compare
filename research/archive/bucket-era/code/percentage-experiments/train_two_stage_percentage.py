@@ -23,15 +23,16 @@ from pr_suggestion_metrics.train_percentage_regressor import (
     prepare_features,
     read_source,
     training_weights,
+    validate_disjoint_sources,
 )
 from pr_suggestion_metrics.two_stage_percentage import TwoStageCatBoostRegressor
 
 
 ENDPOINT_THRESHOLDS = (0.55, 0.7, 0.85)
 WEIGHT_PROFILES = (
-    {"hf_scale": 1.1, "confidence_floor": 0.0, "internal_scale": 1.0, "minority_scale": 1.0},
-    {"hf_scale": 0.9, "confidence_floor": 0.25, "internal_scale": 1.0, "minority_scale": 1.0},
-    {"hf_scale": 0.85, "confidence_floor": 0.5, "internal_scale": 1.0, "minority_scale": 1.0},
+    {"hf_scale": 1.1, "confidence_floor": 0.0, "internal_scale": 1.0},
+    {"hf_scale": 0.9, "confidence_floor": 0.25, "internal_scale": 1.0},
+    {"hf_scale": 0.85, "confidence_floor": 0.5, "internal_scale": 1.0},
 )
 MODEL_PARAMETERS = (
     {"iterations": 250, "depth": 4, "learning_rate": 0.05, "l2_leaf_reg": 5.0, "auto_class_weights": None},
@@ -67,6 +68,7 @@ def main() -> None:
 
     internal = prepare_features(read_source("internal", args.internal_scores, args.internal_labels))
     hf = prepare_features(read_source("hf_github_codereview", args.hf_scores, args.hf_labels, args.hf_audit))
+    validate_disjoint_sources(internal, hf)
     splitter = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=RANDOM_STATE)
     dev_positions, test_positions = next(splitter.split(internal, groups=internal["group_id"]))
     internal_dev = internal.iloc[dev_positions].copy()
