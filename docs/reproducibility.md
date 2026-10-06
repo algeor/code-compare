@@ -187,6 +187,12 @@ uv run --locked pr-suggestion-build-features \
   --benchmark-dir /secure/frozen-benchmark \
   --output-dir /secure/frozen-features
 
+# Evaluate compatible existing models on development before training more.
+uv run --locked pr-suggestion-select-model \
+  --benchmark-dir /secure/frozen-benchmark \
+  --candidate-model-dir /secure/current-model \
+  --output-dir /secure/model-selection
+
 # Select on development and train without exposing test rows.
 uv run --locked pr-suggestion-train \
   --features /secure/frozen-features/features.csv \

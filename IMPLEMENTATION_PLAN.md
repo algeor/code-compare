@@ -240,9 +240,21 @@ cli/collect.py
 - The manifest labels the benchmark as `llm_adjudicated_not_human_ground_truth`.
 - Test labels remain inaccessible to model development.
 
-## Phase 6 — Train and Evaluate the Model Bundle
+## Phase 6 — Select and Package the Model Bundle
 
-**Goal:** produce independently validated percentage and explanation artifacts that can be composed without coupling their training pipelines.
+**Goal:** choose/package the best model under the frozen Phase 5 benchmark, without blindly training more.
+
+### Implementation order
+
+1. Lock frozen Phase 5 inputs and verify train, development, calibration, and test hashes.
+2. Build feature tables from the frozen benchmark and verify schema plus normalization policy.
+3. Evaluate existing compatible models on development before training anything new.
+4. Compare existing models against constant, exact, token, and line baselines.
+5. Retrain only if existing models fail to beat baselines honestly.
+6. Calibrate uncertainty on the dedicated calibration split only.
+7. Consume the protected test split exactly once after model and thresholds are locked.
+8. Package model, schema, policy version, calibration, code/data hashes, and selection report.
+9. Update model/data-card claims to say LLM-adjudicated labels, not human ground truth.
 
 ### Change set 12: authoritative group provenance
 
@@ -282,8 +294,9 @@ cli/collect.py
 
 ### Exit gate
 
+- The best model is selected by development evidence, not training convenience.
+- Baselines are beaten or the no-go result is documented.
 - Calibration-group independence is machine-verifiable.
-- The released model beats required baselines with defensible uncertainty.
 - One immutable confirmatory report is linked to exact code, data, and artifact hashes.
 - Explanation claims are grounded in stored evidence and pass independent release thresholds.
 - The release manifest authenticates compatible percentage and explanation artifacts.
