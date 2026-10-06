@@ -15,7 +15,8 @@ stabilize current cleanup
 -> lock metric semantics
 -> harden benchmark production
 -> build the human benchmark
--> retrain and evaluate once
+-> train and evaluate percentage and explanation models independently
+-> compose both models behind one API
 -> expand and release the product
 ```
 
@@ -45,8 +46,8 @@ Phase 0 is complete. Phase 1 dependency extraction is now in progress; detailed 
 | 3 | Lock metric contracts | F-014, F-015, F-016 | Correct semantics before generating benchmark features or new models. |
 | 4 | Harden benchmark production | F-022, F-027, F-028 | Ensure data creation is balanced, transactional, and reproducible. |
 | 5 | Build human benchmark | F-001 | Replace weak labels with valid evidence. |
-| 6 | Retrain and evaluate | F-033, F-032 | Train only after data and semantics are frozen. |
-| 7 | Expand and release | F-002, F-007, F-010 | Expand scope only where confirmatory evidence supports it. |
+| 6 | Train and evaluate model bundle | F-033, F-032 | Train percentage and explanation models independently after data and semantics are frozen. |
+| 7 | Compose, showcase, and release | F-002, F-007, F-010 | Combine validated model outputs behind one API and expand only where evidence supports it. |
 
 ## Phase 0 — Stabilize the Active Migration
 
@@ -227,9 +228,9 @@ cli/collect.py
 - Agreement and abstention are reported by repository, language, and edit type.
 - Test labels remain inaccessible to model development.
 
-## Phase 6 — Retrain, Calibrate, and Evaluate Once
+## Phase 6 — Train and Evaluate the Model Bundle
 
-**Goal:** replace the exploratory estimator with one benchmark-backed candidate.
+**Goal:** produce independently validated percentage and explanation artifacts that can be composed without coupling their training pipelines.
 
 ### Change set 12: authoritative group provenance
 
@@ -251,33 +252,102 @@ cli/collect.py
 - Run the protected test once using the canonical receipt.
 - Publish error analysis, subgroup results, prediction coverage, and a go/no-go decision.
 
+### Change set 15: grounded explanation model
+
+- Train the explanation model separately from the percentage regressor using its own labels, splits, metrics, and artifact manifest.
+- Use CodeBERT as an encoder for semantic evidence, classification, retrieval, or ranking; do not treat the encoder alone as a free-form text generator.
+- Start with CodeBERT-backed evidence selection plus controlled explanation templates.
+- Consider a code-aware encoder-decoder such as CodeT5 only after grounded template quality is measured.
+- Require every explanation to reference inspectable matched, missing, or changed evidence.
+- Evaluate factual grounding, omission detection, unsupported claims, consistency, and human usefulness separately from percentage error.
+
+### Change set 16: release bundle
+
+- Keep percentage and explanation model artifacts in separate versioned directories.
+- Create one release manifest binding both model versions, schemas, dataset manifests, dependencies, and hashes.
+- Reject startup when either artifact is missing, incompatible, or fails integrity validation.
+- Never merge model weights merely to simplify deployment; compose outputs through a typed runtime service.
+
 ### Exit gate
 
 - Calibration-group independence is machine-verifiable.
 - The released model beats required baselines with defensible uncertainty.
 - One immutable confirmatory report is linked to exact code, data, and artifact hashes.
+- Explanation claims are grounded in stored evidence and pass independent release thresholds.
+- The release manifest authenticates compatible percentage and explanation artifacts.
 
-## Phase 7 — Expand and Release
+## Phase 7 — Compose, Showcase, and Release
 
-**Goal:** expand only what the evidence supports and finish operational hardening.
+**Goal:** expose both validated models through one stable product contract, showcase it on Hugging Face, and expand only what the evidence supports.
 
 ### Implementation order
 
-1. Expand learned inference by edit type only when subgroup evidence passes the release gate.
-2. Keep unsupported shapes as explicit abstentions.
-3. Add authenticated model distribution, signatures or attestations, compatibility checks, and rollback.
-4. Finish moving approved large artifacts to external versioned storage.
-5. Decide separately whether Git history should be rewritten; never combine this with normal feature work.
-6. Expand mypy and Ruff coverage one cleaned module at a time.
-7. Add operational limits, health checks, safe logging, and release documentation.
+1. Add an `AnalysisService` that validates one input and invokes deterministic evidence, percentage inference, and explanation inference.
+2. Return one versioned result containing percentage, uncertainty, matched/missing evidence, grounded explanation, model versions, hashes, abstentions, and warnings.
+3. Keep unsupported shapes as explicit abstentions; one model may abstain while the other returns a supported partial result.
+4. Package the API and demonstration UI as a Docker-based Hugging Face Space using FastAPI plus Gradio or an equivalent thin UI.
+5. Keep the option to move each model to a separate Hugging Face Inference Endpoint later; the API remains the orchestrator.
+6. Cache expensive CodeBERT embeddings and allow percentage and explanation workloads to scale independently.
+7. Add authenticated model distribution, signatures or attestations, compatibility checks, rollback, health checks, safe logging, and resource limits.
+8. Expand learned inference by edit type only when subgroup evidence passes the release gate.
+9. Finish moving approved large artifacts to external versioned storage.
+10. Decide separately whether Git history should be rewritten; never combine this with normal feature work.
+11. Expand mypy and Ruff coverage one cleaned module at a time.
 
 ### Exit gate
 
 - Package, CLI, and hosted interface share one result contract.
+- Percentage and explanation models can be upgraded or rolled back independently.
+- The hosted response identifies both model versions and the evidence used for the explanation.
 - Every supported edit type has confirmatory subgroup evidence.
 - Model artifacts come from an authenticated distribution channel.
 - Full-package type and lint gates pass at the agreed strictness.
 - Git contains only approved source, tiny fixtures, manifests, and compact evidence.
+
+## Target Product Architecture
+
+Keep historical exploration, reproducible training, and deployable inference as separate lifecycle layers:
+
+```text
+research/archive/               historical collectors, experiments, reports, and abandoned models
+collection/                     supported gateways, provenance, and candidate construction
+datasets/                       manifests, schemas, hashes, and tiny fixtures; large payloads external
+features/                       deterministic parsing, evidence, and shared feature contracts
+modeling/percentage/            percentage training, selection, calibration, and evaluation
+modeling/explanation/           CodeBERT evidence model and explanation evaluation
+inference/percentage.py         percentage artifact loading and prediction
+inference/explanation.py        evidence selection and grounded explanation
+inference/analysis_service.py   typed composition of both model outputs
+api/                            stable request/response schemas and hosted routes
+```
+
+### Combined runtime contract
+
+The models share validated inputs and deterministic evidence, but remain independently trained and versioned:
+
+```text
+suggested diff + merged diff
+        -> parse and validate
+        -> deterministic matched/missing evidence
+        -> percentage model
+        -> explanation evidence model
+        -> AnalysisService result
+```
+
+The combined result should include at least:
+
+- `coverage_percentage`, raw value, uncertainty interval, and abstention reasons;
+- grounded explanation text plus matched, missing, and changed evidence;
+- deterministic evidence and input hashes;
+- percentage and explanation model names, versions, schema versions, and artifact hashes;
+- warnings distinguishing correlation with a merged diff from proof of causal adoption or final-state equivalence.
+
+### Deployment boundary
+
+- Training code never runs in the hosted API process.
+- Historical research modules are never imported by supported training or inference entry points.
+- The hosted service loads only a validated release bundle and exposes the same result schema as package and CLI callers.
+- A Docker-based Hugging Face Space is the first showcase target; separate managed endpoints are a scaling option, not an API redesign.
 
 ## Cross-Cutting Rules
 
@@ -310,5 +380,6 @@ These tasks may start early without changing the implementation order:
 
 ## Immediate Next Action
 
-Start **Phase 2** with behavior-preserving decomposition: split the extracted feature core first, then separate collection
-gateways from pure provenance/candidate construction and CLI orchestration.
+Start **Phase 3** without changing score formulas: add typed parser diagnostics and explicit strict-versus-fragment
+dialects, then gate public inference on invalid versus valid-but-unsupported inputs before versioning normalization and
+evidence policies.

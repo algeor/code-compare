@@ -72,8 +72,8 @@ This is the live source of truth for review findings. Findings are recorded here
 
 - **Severity:** High
 - **Area:** architecture and maintainability
-- **Status:** partially addressed; evaluation orchestration extracted
-- **Evidence:** `evaluate_metrics.py` is now a roughly 270-line compatibility/CLI shell, while the extracted feature core and `collect_pr_code_changes.py` still require responsibility-based decomposition.
+- **Status:** fixed
+- **Evidence:** `evaluate_metrics.py` and `collect_pr_code_changes.py` are now thin compatibility/CLI shells. Feature logic is split across contracts, lexical, matching, structural, optional-adapter, and scoring modules; collection is split across contracts, extraction, GitHub gateway, service, and CLI modules.
 - **Risk:** changes have broad regression surfaces, unit tests require too much setup, and internal helpers become accidental APIs.
 - **Action:** split by responsibility behind compatibility-preserving facades; do not perform a blind file move while logic review is active.
 
@@ -362,11 +362,13 @@ This is the live source of truth for review findings. Findings are recorded here
 - Added one percentage-policy module for integer labels, continuous values, bounded rounding, and obsolete derived fields.
 - Extracted deterministic feature and structural-parser APIs from `evaluate_metrics.py` while preserving compatibility exports.
 - Removed active imports from `evaluate_metrics.py`, archived training modules, and cross-feature private helpers.
+- Split the deterministic feature engine by responsibility behind a compatibility facade.
+- Split collection into contracts, pure extraction, GitHub gateway, service, and CLI modules with fake-gateway tests.
 
 ## Next Priorities
 
-1. Split the extracted feature core into lexical, hunk, structural, optional-adapter, and scoring modules.
-2. Split collection into gateway, domain, orchestration, and CLI modules.
-3. Lock parser, normalization, and strict-versus-relaxed evidence contracts.
-4. Make multi-artifact benchmark workflows transactional using the new staging primitives.
+1. Lock parser diagnostics and explicit strict-versus-fragment input dialects.
+2. Version normalization and strict-versus-relaxed evidence contracts.
+3. Make multi-artifact benchmark workflows transactional using the new staging primitives.
+4. Replace component-count splitting with deterministic example-balanced assignment.
 5. Build the provenance-complete human benchmark described in `ROADMAP.md`.

@@ -1,0 +1,1 @@
+"""GitHub suggestion collection boundaries."""

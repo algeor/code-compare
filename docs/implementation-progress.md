@@ -8,8 +8,9 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 
 - **Phase 0 — Stabilize the active migration:** complete.
 - **Phase 1 — Extract stable foundations:** complete.
-- **Phase 2 — Split the monoliths:** next.
-- **Next gate:** feature and collection modules separate pure domain logic from optional adapters, gateways, orchestration, and CLI code.
+- **Phase 2 — Split the monoliths:** complete.
+- **Phase 3 — Lock metric contracts:** next.
+- **Next gate:** malformed diffs cannot produce plausible scores, and normalization/evidence policies are explicit and versioned.
 
 ## Completed
 
@@ -29,6 +30,10 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - Centralized strict integer percentages, continuous percentage validation, bounded rounding, and obsolete label fields.
 - Added atomic text replacement and staged output-directory promotion primitives.
 - Added streaming JSONL parsing while preserving Pydantic line diagnostics and exact serialized bytes.
+- Split the feature engine into contracts, lexical, matching, structural, GumTree, and scoring modules.
+- Reduced `features/core.py` to a compatibility facade with identity-preserving legacy aliases.
+- Split collection into contracts, pure extraction, a GitHub gateway, a gateway-driven service, and CLI orchestration.
+- Reduced `collect_pr_code_changes.py` to a compatibility facade and pointed the console script at `cli.collect`.
 
 ## Validation Record
 
@@ -38,13 +43,15 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - Mypy passed across all 34 active source files.
 - Source distribution and wheel builds passed.
 - Archive verifier: 586 payload files across 7 sections.
+- Phase 2 final gate: 139 tests and 21 subtests passed; Ruff, mypy over 46 source files, package build, and archive verification passed.
 
 ## Next Implementation Order
 
-1. Split `features/core.py` without changing metric behavior.
-2. Split `collect_pr_code_changes.py` by external boundary.
-3. Lock parser diagnostics and normalization contracts.
-4. Apply transactional staging to multi-artifact workflows.
+1. Add typed diff diagnostics and explicit parser dialects.
+2. Gate inference on invalid versus unsupported inputs.
+3. Characterize language and indentation normalization.
+4. Separate strict and relaxed evidence contracts.
+5. Apply transactional staging to multi-artifact workflows.
 
 ## Phase 1 Audit Notes
 
@@ -72,6 +79,15 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - Do not recreate bucket or coarse-label conversion; those derived fields belong to the archived bucket era.
 - Highest atomicity risks are in-place semantic-label application and audit mutation, followed by stale batch files and partially published output directories.
 - The sealed-evaluation claim is intentionally fail-closed and must remain outside normal rollback semantics.
+
+## Phase 3 Prepared Findings
+
+- The parser currently accepts malformed hunk headers, incomplete/overflowing hunk counts, invalid body lines, missing marker pairs, partial renames, and non-diff text without typed validity diagnostics.
+- Current shape checks can classify malformed input as model-supported, and landed diffs are not structurally validated before feature scoring.
+- Add a non-breaking `DiffAssessment` contract with `valid`, `invalid`, and `valid_but_unsupported` states before changing any scoring formulas.
+- Distinguish strict `git_unified` input from the internal `suggestion_fragment` dialect because collection intentionally emits bare `@@` pseudo-hunks.
+- Preserve `parse_unified_diff()` as a compatibility wrapper while diagnostics are threaded through exact evidence, feature generation, and inference.
+- Add characterization tests for malformed structure plus Python indentation, YAML, shell, config, Markdown, and rename/move cases before changing normalization behavior.
 
 ## Deferred By Design
 
