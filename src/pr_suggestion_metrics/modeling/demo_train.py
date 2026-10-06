@@ -19,7 +19,7 @@ from pr_suggestion_metrics.percentages import parse_integer_percentage
 
 _SPLITS = ("train", "development", "calibration")
 _DEFAULT_DATASET = Path("data/processed/pr_suggestion_coverage/dataset/dataset.jsonl")
-_DEFAULT_OUTPUT_DIR = Path("models/demo_percentage_model")
+_DEFAULT_OUTPUT_DIR = Path("models/pr_suggestion_coverage/demo_weak_local")
 _LABEL_SOURCE = "weak_local_llm_assisted_demo"
 
 

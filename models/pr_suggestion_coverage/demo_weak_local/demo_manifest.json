@@ -4,7 +4,7 @@
     "dataset_path": "data/processed/pr_suggestion_coverage/dataset/dataset.jsonl",
     "dataset_sha256": "71cb87c67fce27703683c0f4d7b6da5411e117da6000a5e558d4633080caf40a",
     "feature_rows": 277,
-    "features_path": "models/demo_percentage_model/features.csv",
+    "features_path": "models/pr_suggestion_coverage/demo_weak_local/features.csv",
     "features_sha256": "22bd8ad2500025315f529eb0221b8db59381eba43ac58f4b56ad67dea40bbc47",
     "label_source": "weak_local_llm_assisted_demo",
     "split_counts": {
@@ -13,7 +13,7 @@
       "train": 177
     }
   },
-  "model_dir": "models/demo_percentage_model/model",
+  "model_dir": "models/pr_suggestion_coverage/demo_weak_local/model",
   "phase_alignment": "Phase 5 derived local benchmark rows feeding the Phase 6 training path",
   "purpose": "interview_demo_percentage_model",
   "schema_version": "1.0",
