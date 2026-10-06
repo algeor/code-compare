@@ -43,21 +43,53 @@ def analyze_for_demo(
     if uncertainty.reason:
         uncertainty_text = f"{uncertainty_text}: {uncertainty.reason}"
 
-    summary = "\n".join(
-        [
-            f"**Status:** {result.status}",
-            f"**Coverage:** {percentage_text}",
-            f"**Exact evidence:** {evidence.matched_units}/{evidence.total_suggested_units} suggested units matched",
-            f"**Uncertainty:** {uncertainty_text}",
-            f"**Percentage model:** {result.model_versions['percentage_model']}",
-            f"**Explainer:** {result.model_versions['explanation_model']} {result.model_versions['explanation_model_version']}",
-            "",
-            result.explanation.summary,
-            "",
-            "_Demo note: trained on weak local Phase 5-derived labels, not human ground truth._",
-        ]
+    summary = _summary_markdown(
+        status=result.status,
+        percentage_text=percentage_text,
+        matched_units=evidence.matched_units,
+        total_units=evidence.total_suggested_units,
+        uncertainty_text=uncertainty_text,
+        percentage_model=result.model_versions["percentage_model"],
+        explanation_model=result.model_versions["explanation_model"],
+        explanation_version=result.model_versions["explanation_model_version"],
+        explanation_summary=result.explanation.summary,
     )
     return summary, json.dumps(_json_payload(result.model_dump(mode="json")), indent=2, sort_keys=True)
+
+
+def _summary_markdown(
+    *,
+    status: str,
+    percentage_text: str,
+    matched_units: int,
+    total_units: int,
+    uncertainty_text: str,
+    percentage_model: str,
+    explanation_model: str,
+    explanation_version: str,
+    explanation_summary: str,
+) -> str:
+    badge = "✅ Predicted" if status == "predicted" else "⚠️ Abstained"
+    return f"""## Result
+
+| Signal | Value |
+|---|---:|
+| Status | {badge} |
+| Coverage | {percentage_text} |
+| Exact evidence | {matched_units}/{total_units} suggested units matched |
+| Uncertainty | {uncertainty_text} |
+
+## Explanation
+
+{explanation_summary}
+
+## Versions
+
+- Percentage model: `{percentage_model}`
+- Explainer: `{explanation_model}` `{explanation_version}`
+
+_Demo note: trained on weak local Phase 5-derived labels, not human ground truth._
+"""
 
 
 def build_app(*, model_dir: Path = DEFAULT_DEMO_MODEL_DIR) -> Any:
@@ -67,17 +99,23 @@ def build_app(*, model_dir: Path = DEFAULT_DEMO_MODEL_DIR) -> Any:
     def run(suggested_diff: str, merged_pr_diff: str) -> tuple[str, str]:
         return analyze_for_demo(suggested_diff, merged_pr_diff, model_dir=model_dir)
 
-    with gr.Blocks(title="PR Suggestion Coverage Demo") as app:
+    css = """
+    .gradio-container { max-width: 1180px !important; }
+    textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; }
+    """
+    with gr.Blocks(title="PR Suggestion Coverage Demo", css=css) as app:
         gr.Markdown(
             "# PR Suggestion Coverage Demo\n"
-            "Interview prototype: deterministic evidence + weak local percentage model + grounded explanation."
+            "Paste a review suggestion diff and the merged PR diff. The demo returns one stable analysis result: "
+            "deterministic evidence, a weak local percentage model, and a grounded template explanation."
         )
         with gr.Row():
-            suggested = gr.Textbox(label="Suggested diff", value=SAMPLE_SUGGESTED_DIFF, lines=12)
-            merged = gr.Textbox(label="Merged PR diff", value=SAMPLE_MERGED_DIFF, lines=12)
-        button = gr.Button("Analyze")
-        summary = gr.Markdown(label="Summary")
-        payload = gr.Code(label="Raw API Result", language="json")
+            suggested = gr.Textbox(label="Suggested diff", value=SAMPLE_SUGGESTED_DIFF, lines=14)
+            merged = gr.Textbox(label="Merged PR diff", value=SAMPLE_MERGED_DIFF, lines=14)
+        button = gr.Button("Analyze", variant="primary")
+        with gr.Row():
+            summary = gr.Markdown(label="Summary")
+            payload = gr.Code(label="Raw API Result", language="json")
         button.click(run, inputs=[suggested, merged], outputs=[summary, payload])
     return app
 

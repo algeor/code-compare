@@ -17,4 +17,12 @@ Local run from the repository root:
 uv run --extra demo pr-suggestion-demo
 ```
 
+Interview flow:
+
+1. Paste a suggested diff.
+2. Paste the merged PR diff.
+3. Click Analyze.
+4. Show the coverage card first.
+5. Open the raw JSON to show hashes, versions, and evidence.
+
 For Hugging Face Spaces, use Gradio and set the app file to `space/app.py`.
