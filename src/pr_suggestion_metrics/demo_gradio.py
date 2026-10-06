@@ -39,9 +39,7 @@ def analyze_for_demo(
     percentage_text = "abstained" if percentage is None else f"{percentage}%"
     evidence = result.percentage.change_coverage_evidence
     uncertainty = result.percentage.uncertainty
-    uncertainty_text: str = uncertainty.status
-    if uncertainty.reason:
-        uncertainty_text = f"{uncertainty_text}: {uncertainty.reason}"
+    uncertainty_text = _uncertainty_text(uncertainty.status, uncertainty.lower, uncertainty.upper)
 
     summary = _summary_markdown(
         status=result.status,
@@ -72,12 +70,12 @@ def _summary_markdown(
     badge = "✅ Predicted" if status == "predicted" else "⚠️ Abstained"
     return f"""## Result
 
-| Signal | Value |
-|---|---:|
-| Status | {badge} |
-| Coverage | {percentage_text} |
-| Exact evidence | {matched_units}/{total_units} suggested units matched |
-| Uncertainty | {uncertainty_text} |
+<div class="result-cards">
+  <div class="result-card"><span>Status</span><strong>{badge}</strong></div>
+  <div class="result-card"><span>Coverage</span><strong>{percentage_text}</strong></div>
+  <div class="result-card"><span>Exact Evidence</span><strong>{matched_units}/{total_units}</strong></div>
+  <div class="result-card"><span>Uncertainty</span><strong>{uncertainty_text}</strong></div>
+</div>
 
 ## Explanation
 
@@ -92,6 +90,12 @@ _Demo note: trained on weak local Phase 5-derived labels, not human ground truth
 """
 
 
+def _uncertainty_text(status: str, lower: int | None, upper: int | None) -> str:
+    if status == "calibrated" and lower is not None and upper is not None:
+        return f"{lower}–{upper}%"
+    return "N/A"
+
+
 def build_app(*, model_dir: Path = DEFAULT_DEMO_MODEL_DIR) -> Any:
     """Build the Gradio Blocks app lazily so core imports do not require Gradio."""
     import gradio as gr
@@ -102,6 +106,10 @@ def build_app(*, model_dir: Path = DEFAULT_DEMO_MODEL_DIR) -> Any:
     css = """
     .gradio-container { max-width: 1180px !important; }
     textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; }
+    .result-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 10px 0 22px; }
+    .result-card { border: 1px solid #ece7df; border-radius: 14px; padding: 14px 16px; background: #fffaf4; }
+    .result-card span { display: block; color: #6b625b; font-size: 0.88rem; margin-bottom: 5px; }
+    .result-card strong { color: #2f2a26; font-size: 1.15rem; }
     """
     with gr.Blocks(title="PR Suggestion Coverage Demo", css=css) as app:
         gr.Markdown(

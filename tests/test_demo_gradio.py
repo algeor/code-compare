@@ -9,8 +9,9 @@ def test_analyze_for_demo_returns_summary_and_raw_payload() -> None:
     summary, raw_payload = analyze_for_demo(SAMPLE_SUGGESTED_DIFF, SAMPLE_MERGED_DIFF)
     payload = json.loads(raw_payload)
 
-    assert "| Status | ✅ Predicted |" in summary
-    assert "| Coverage |" in summary
+    assert "<div class=\"result-cards\">" in summary
+    assert "<span>Status</span><strong>✅ Predicted</strong>" in summary
+    assert "<span>Uncertainty</span><strong>N/A</strong>" in summary
     assert "## Versions" in summary
     assert "weak local Phase 5-derived labels" in summary
     assert payload["status"] == "predicted"
