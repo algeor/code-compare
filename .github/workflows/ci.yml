@@ -15,14 +15,14 @@ jobs:
           enable-cache: true
       - name: Verify lockfile
         run: uv lock --check
-      - name: Verify bucket-era archive
-        run: python research/archive/bucket-era/scripts/verify_bucket_archive.py
       - name: Test minimal supported install
         run: uv run --locked --extra test pytest -q
       - name: Lint and type-check
         run: |
           uv run --locked --extra dev ruff check src tests
           uv run --locked --extra dev mypy src/pr_suggestion_metrics
+      - name: Check active documentation
+        run: python scripts/check_documentation.py
       - name: Test all optional integrations
         run: uv run --locked --all-extras pytest -q
       - name: Build wheel

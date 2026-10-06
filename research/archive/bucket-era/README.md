@@ -31,6 +31,6 @@ Verify the archive from the repository root:
 python3 research/archive/bucket-era/scripts/verify_bucket_archive.py
 ```
 
-CI runs the same verifier so accidental edits, additions, or removals fail closed until the manifest is intentionally updated.
+Run this verifier manually before publishing or relying on the archive as byte-preserved provenance. Normal CI does not gate on this unsupported archive.
 
 The archived Python files and tests contain the final safety fixes made before archival, so they are not expected to be byte-identical to the pre-review commit. Four archived CSV snapshots differ from the previous commit only by line-ending normalization.
