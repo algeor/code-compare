@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ def analyze_for_demo(
     evidence = result.percentage.change_coverage_evidence
     uncertainty = result.percentage.uncertainty
     uncertainty_text = _uncertainty_text(uncertainty.status, uncertainty.lower, uncertainty.upper)
+    input_fingerprint = _input_fingerprint(suggested_diff, merged_pr_diff)
 
     summary = _summary_markdown(
         status=result.status,
@@ -51,8 +53,13 @@ def analyze_for_demo(
         explanation_model=result.model_versions["explanation_model"],
         explanation_version=result.model_versions["explanation_model_version"],
         explanation_summary=result.explanation.summary,
+        input_fingerprint=input_fingerprint,
     )
-    return summary, json.dumps(_json_payload(result.model_dump(mode="json")), indent=2, sort_keys=True)
+    return summary, json.dumps(
+        _json_payload(result.model_dump(mode="json"), input_fingerprint=input_fingerprint),
+        indent=2,
+        sort_keys=True,
+    )
 
 
 def _summary_markdown(
@@ -66,6 +73,7 @@ def _summary_markdown(
     explanation_model: str,
     explanation_version: str,
     explanation_summary: str,
+    input_fingerprint: str,
 ) -> str:
     badge = "✅ Predicted" if status == "predicted" else "⚠️ Abstained"
     return f"""## Result
@@ -85,6 +93,7 @@ def _summary_markdown(
 
 - Percentage model: `{percentage_model}`
 - Explainer: `{explanation_model}` `{explanation_version}`
+- Input fingerprint: `{input_fingerprint}`
 
 _Demo note: trained on weak local Phase 5-derived labels, not human ground truth._
 """
@@ -94,6 +103,15 @@ def _uncertainty_text(status: str, lower: int | None, upper: int | None) -> str:
     if status == "calibrated" and lower is not None and upper is not None:
         return f"{lower}–{upper}%"
     return "N/A"
+
+
+def _input_fingerprint(suggested_diff: str, merged_pr_diff: str) -> str:
+    digest = sha256(f"{suggested_diff}\0{merged_pr_diff}".encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def _pending_result() -> tuple[str, str]:
+    return "Analyzing latest inputs…", ""
 
 
 def build_app(*, model_dir: Path = DEFAULT_DEMO_MODEL_DIR) -> Any:
@@ -124,11 +142,16 @@ def build_app(*, model_dir: Path = DEFAULT_DEMO_MODEL_DIR) -> Any:
         with gr.Row():
             summary = gr.Markdown(label="Summary")
             payload = gr.Code(label="Raw API Result", language="json")
-        button.click(run, inputs=[suggested, merged], outputs=[summary, payload])
+        button.click(_pending_result, outputs=[summary, payload], queue=False).then(
+            run,
+            inputs=[suggested, merged],
+            outputs=[summary, payload],
+        )
     return app
 
 
-def _json_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _json_payload(payload: dict[str, Any], *, input_fingerprint: str) -> dict[str, Any]:
+    payload["demo_input_fingerprint"] = input_fingerprint
     payload["demo_disclaimer"] = "Weak local labels only; not human validated; not release validated."
     return payload
 
