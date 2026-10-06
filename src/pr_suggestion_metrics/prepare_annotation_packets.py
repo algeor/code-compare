@@ -1,4 +1,4 @@
-"""Create blinded, balanced double-human annotation packets."""
+"""Create blinded, balanced semantic annotation packets."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import random
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pr_suggestion_metrics.artifact_io import read_jsonl_objects, write_jsonl_objects
 from pr_suggestion_metrics.model_artifacts import sha256_file
@@ -32,7 +32,10 @@ def _safe_packet_name(annotator_id: str) -> str:
     return f"annotator-{digest}.jsonl"
 
 
-def _blinded_packet(example: BenchmarkCandidate, *, guide_version: str) -> dict[str, Any]:
+AnnotationPacketMode = Literal["human", "llm"]
+
+
+def _blinded_packet(example: BenchmarkCandidate, *, guide_version: str, annotation_mode: AnnotationPacketMode) -> dict[str, Any]:
     provenance = example.suggestion_provenance.model_dump(mode="json")
     provenance.pop("author_login", None)
     return {
@@ -43,6 +46,9 @@ def _blinded_packet(example: BenchmarkCandidate, *, guide_version: str) -> dict[
         "suggested_diff": example.suggested_diff,
         "suggestion_provenance": provenance,
         "annotation": {
+            "source_type": annotation_mode,
+            "model_id": "" if annotation_mode == "llm" else None,
+            "prompt_sha256": "" if annotation_mode == "llm" else None,
             "decision": "",
             "abstention_reasons": [],
             "units": [],
@@ -59,8 +65,9 @@ def prepare_annotation_packets(
     output_dir: Path,
     guide_version: str,
     seed: int,
+    annotation_mode: AnnotationPacketMode = "human",
 ) -> dict[str, Any]:
-    """Assign every verified example to two blinded annotators."""
+    """Assign every verified example to two blinded annotators or LLM judge runs."""
     unique_annotators = list(dict.fromkeys(annotator_ids))
     if len(unique_annotators) < 2:
         raise ValueError("At least two distinct annotators are required")
@@ -102,12 +109,16 @@ def prepare_annotation_packets(
     packet_hashes: dict[str, str] = {}
     for annotator_id, assigned_examples in assignments.items():
         packet_path = output_dir / _safe_packet_name(annotator_id)
-        rows = [_blinded_packet(example, guide_version=guide_version) for example in assigned_examples]
+        rows = [
+            _blinded_packet(example, guide_version=guide_version, annotation_mode=annotation_mode)
+            for example in assigned_examples
+        ]
         write_jsonl_objects(packet_path, rows, sort_keys=True)
         packet_hashes[annotator_id] = sha256_file(packet_path)
 
     manifest = {
         "schema_version": "1.0",
+        "annotation_mode": annotation_mode,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "guide_version": guide_version,
         "seed": seed,
@@ -136,6 +147,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--examples", type=Path, required=True)
     parser.add_argument("--annotator", action="append", required=True, dest="annotators")
+    parser.add_argument("--annotation-mode", choices=("human", "llm"), default="human")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--guide-version", default="1.0")
     parser.add_argument("--seed", type=int, default=42)
@@ -151,6 +163,7 @@ def main() -> int:
         output_dir=args.output_dir,
         guide_version=args.guide_version,
         seed=args.seed,
+        annotation_mode=args.annotation_mode,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0

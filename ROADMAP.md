@@ -168,13 +168,13 @@ The score must not be presented as proof that a suggestion caused a code change.
 
 ## Immediate Next Deliverable
 
-Create the **first provenance-complete candidate cohort** and run it through:
+Create the **first provenance-complete LLM-owned candidate cohort** and run it through:
 
 ```text
 collect/build candidates
 -> plan grouped splits
 -> prepare blinded annotation packets
--> annotate and adjudicate
+-> run two independent LLM annotation passes and LLM adjudication
 -> freeze benchmark
 ```
 
@@ -194,7 +194,8 @@ The project may claim a validated suggestion-coverage metric only when:
 
 - one percentage construct is used across code, research, docs, and UI;
 - provenance is complete for every scored example;
-- the benchmark is blinded, independent, adjudicated, and frozen;
+- the benchmark is blinded, independently LLM-labeled, adjudicated, and frozen;
+- reports explicitly say LLM-adjudicated and not human ground truth;
 - duplicates cannot cross data splits;
 - uncertainty is calibrated on independent groups;
 - protected test evaluation occurs once under explicit governance;

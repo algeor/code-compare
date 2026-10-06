@@ -8,7 +8,7 @@ import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from sklearn.metrics import cohen_kappa_score
@@ -30,14 +30,16 @@ from pr_suggestion_metrics.scientific_contracts import (
 )
 
 BenchmarkExample = BenchmarkCandidate
+AnnotationMode = Literal["human", "llm_adjudicated"]
 
 
 def parse_args() -> argparse.Namespace:
     """Parse benchmark-freezing arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--examples", type=Path, required=True, help="Provenance-complete example JSONL.")
-    parser.add_argument("--annotations", type=Path, required=True, help="Independent blind human annotation JSONL.")
+    parser.add_argument("--annotations", type=Path, required=True, help="Independent blind annotation JSONL.")
     parser.add_argument("--adjudications", type=Path, required=True, help="Final adjudicated annotation JSONL.")
+    parser.add_argument("--annotation-mode", choices=("human", "llm_adjudicated"), default="human")
     parser.add_argument("--splits", type=Path, required=True, help="CSV containing example_id and split.")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
@@ -66,6 +68,8 @@ def _validate_annotations(
     example_ids: set[str],
     annotations: list[HumanAnnotation],
     adjudications: list[AdjudicatedAnnotation],
+    *,
+    annotation_mode: AnnotationMode,
 ) -> tuple[dict[str, AdjudicatedAnnotation], dict[str, float | None], dict[str, list[str]]]:
     by_example: dict[str, list[HumanAnnotation]] = defaultdict(list)
     unknown_annotation_ids = sorted({annotation.example_id for annotation in annotations} - example_ids)
@@ -77,6 +81,10 @@ def _validate_annotations(
 
     annotation_keys: set[tuple[str, str]] = set()
     for annotation in annotations:
+        if annotation_mode == "human" and annotation.source_type != "human":
+            raise ValueError(f"Human benchmark cannot use {annotation.source_type} annotation {annotation.example_id}")
+        if annotation_mode == "llm_adjudicated" and annotation.source_type != "llm":
+            raise ValueError(f"LLM-owned benchmark requires LLM annotation records for {annotation.example_id}")
         annotation_key = (annotation.example_id, annotation.annotator_id)
         if annotation_key in annotation_keys:
             raise ValueError(f"Duplicate annotation record for {annotation.example_id}/{annotation.annotator_id}")
@@ -124,6 +132,10 @@ def _validate_annotations(
                 absolute_differences.append(abs(left - right))
 
     for adjudication in adjudications:
+        if annotation_mode == "human" and adjudication.source_type != "human":
+            raise ValueError(f"Human benchmark cannot use {adjudication.source_type} adjudication {adjudication.example_id}")
+        if annotation_mode == "llm_adjudicated" and adjudication.source_type != "llm":
+            raise ValueError(f"LLM-owned benchmark requires LLM adjudication records for {adjudication.example_id}")
         issues = adjudication.validation_issues()
         if issues:
             raise ValueError(f"Invalid adjudication {adjudication.example_id}: {issues}")
@@ -195,6 +207,7 @@ def freeze_benchmark(
     splits_path: Path,
     output_dir: Path,
     split_policy: str,
+    annotation_mode: AnnotationMode = "human",
 ) -> dict[str, Any]:
     """Validate evidence, then write immutable train/development/test artifacts."""
     raw_examples = read_jsonl_objects(examples_path)
@@ -213,6 +226,7 @@ def freeze_benchmark(
         example_ids,
         annotations,
         adjudications,
+        annotation_mode=annotation_mode,
     )
     assignments = _read_splits(splits_path)
     _validate_splits(examples, assignments, split_policy=split_policy)
@@ -302,6 +316,12 @@ def freeze_benchmark(
         manifest = {
             "schema_version": "1.0",
             "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
+            "annotation_mode": annotation_mode,
+            "ground_truth_claim": (
+                "independent_human_adjudicated"
+                if annotation_mode == "human"
+                else "llm_adjudicated_not_human_ground_truth"
+            ),
             "created_at_utc": datetime.now(UTC).isoformat(),
             "split_policy": split_policy,
             "counts": {split: len(rows) for split, rows in split_rows.items()},
@@ -342,7 +362,7 @@ def freeze_benchmark(
 
 
 def main() -> int:
-    """Freeze a benchmark from validated human evidence."""
+    """Freeze a benchmark from validated semantic evidence."""
     args = parse_args()
     manifest = freeze_benchmark(
         examples_path=args.examples,
@@ -351,6 +371,7 @@ def main() -> int:
         splits_path=args.splits,
         output_dir=args.output_dir,
         split_policy=args.split_policy,
+        annotation_mode=args.annotation_mode,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0

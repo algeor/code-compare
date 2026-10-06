@@ -217,18 +217,18 @@ cli/collect.py
 - Split reports show acceptable row and group balance.
 - No dataset-specific curation decisions are hidden in package code.
 
-## Phase 5 — Build Human Benchmark v1
+## Phase 5 — Build LLM-Owned Benchmark v1
 
-**Goal:** resolve the scientific-validity blocker.
+**Goal:** create a provenance-complete, LLM-adjudicated benchmark without claiming human ground truth.
 
 ### Implementation order
 
 1. Freeze the target population and supported edit semantics.
 2. Complete privacy, licensing, retention, and access review.
 3. Collect provenance-complete candidates with suggestion-time and final-state snapshots.
-4. Run a small annotation pilot to test the guide and tools.
+4. Run a small LLM annotation pilot to test the guide and prompts.
 5. Freeze the guide before full labeling.
-6. Run blinded double annotation and separate adjudication.
+6. Run two blinded LLM annotation passes and separate LLM adjudication.
 7. Generate balanced grouped splits using Phase 4 tooling.
 8. Freeze and hash Benchmark v1 with private test labels externally governed.
 
@@ -237,6 +237,7 @@ cli/collect.py
 - Every scored example has complete chronology and file provenance.
 - Every percentage is reproducible from stored units, weights, and credits.
 - Agreement and abstention are reported by repository, language, and edit type.
+- The manifest labels the benchmark as `llm_adjudicated_not_human_ground_truth`.
 - Test labels remain inaccessible to model development.
 
 ## Phase 6 — Train and Evaluate the Model Bundle

@@ -122,6 +122,47 @@ class PrepareAnnotationPacketsTest(unittest.TestCase):
 
             self.assertEqual(manifest["example_count"], 1)
 
+    def test_llm_packet_mode_marks_annotation_stub_as_llm_owned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            examples_path = root / "examples.jsonl"
+            row = {
+                "example_id": "example-llm",
+                "repo": "host/owner/repo",
+                "pr_url": "https://host/owner/repo/pull/1",
+                "pr_number": 1,
+                "suggested_diff": "+return value",
+                "landed_diff": "+return value",
+                "suggestion_provenance": {
+                    "source_kind": "github_review_comment",
+                    "suggestion_id": "suggestion-1",
+                    "suggestion_created_at": "2026-01-01T00:00:00Z",
+                    "original_commit_sha": "a" * 40,
+                    "path": "src/example.py",
+                    "merge_commit_sha": "d" * 40,
+                    "pr_merged_at": "2026-01-02T00:00:00Z",
+                    "compared_diff_base_sha": "b" * 40,
+                    "compared_diff_head_sha": "c" * 40,
+                    "suggestion_base_snapshot": _snapshot("a" * 40, "before"),
+                    "final_state_snapshot": _snapshot("d" * 40, "after"),
+                },
+            }
+            examples_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            manifest = prepare_annotation_packets(
+                examples_path=examples_path,
+                annotator_ids=["llm-pass-a", "llm-pass-b"],
+                output_dir=root / "packets",
+                guide_version="1.0",
+                seed=42,
+                annotation_mode="llm",
+            )
+
+            packet_row = json.loads(next((root / "packets").glob("annotator-*.jsonl")).read_text())
+            self.assertEqual(manifest["annotation_mode"], "llm")
+            self.assertEqual(packet_row["annotation"]["source_type"], "llm")
+            self.assertEqual(packet_row["annotation"]["model_id"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,10 +44,17 @@ def _provenance(day: int) -> dict[str, object]:
     }
 
 
-def _annotation(example_id: str, annotator_id: str, credit: float = 1.0) -> dict[str, object]:
+def _annotation(
+    example_id: str,
+    annotator_id: str,
+    credit: float = 1.0,
+    *,
+    source_type: str = "human",
+) -> dict[str, object]:
     status = "landed_equivalently" if credit == 1.0 else "landed_partially"
-    return {
+    row: dict[str, object] = {
         "guide_version": "1.0",
+        "source_type": source_type,
         "example_id": example_id,
         "annotator_id": annotator_id,
         "decision": "scored",
@@ -64,6 +71,10 @@ def _annotation(example_id: str, annotator_id: str, credit: float = 1.0) -> dict
         ],
         "confidence": "high",
     }
+    if source_type == "llm":
+        row["model_id"] = "test-llm-2026-10-06"
+        row["prompt_sha256"] = "a" * 64
+    return row
 
 
 class FreezeBenchmarkTest(unittest.TestCase):
@@ -127,6 +138,51 @@ class FreezeBenchmarkTest(unittest.TestCase):
             self.assertEqual(private_label["coverage_percentage"], 100)
             self.assertEqual(manifest["counts"], {"train": 1, "development": 1, "calibration": 0, "test": 1})
             self.assertIn("private_test_labels", manifest["artifact_sha256"])
+
+    def test_freeze_accepts_explicit_llm_adjudicated_mode_without_human_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+            for key in ("annotations", "adjudications"):
+                rows = [json.loads(line) for line in paths[key].read_text().splitlines()]
+                for row in rows:
+                    row["source_type"] = "llm"
+                    row["model_id"] = f"{row['annotator_id']}-model"
+                    row["prompt_sha256"] = "b" * 64
+                paths[key].write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+            manifest = freeze_benchmark(
+                examples_path=paths["examples"],
+                annotations_path=paths["annotations"],
+                adjudications_path=paths["adjudications"],
+                splits_path=paths["splits"],
+                output_dir=root / "frozen",
+                split_policy="repository_disjoint",
+                annotation_mode="llm_adjudicated",
+            )
+
+            self.assertEqual(manifest["annotation_mode"], "llm_adjudicated")
+            self.assertEqual(manifest["ground_truth_claim"], "llm_adjudicated_not_human_ground_truth")
+
+    def test_human_mode_rejects_llm_annotations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+            rows = [json.loads(line) for line in paths["annotations"].read_text().splitlines()]
+            rows[0]["source_type"] = "llm"
+            rows[0]["model_id"] = "test-model"
+            rows[0]["prompt_sha256"] = "c" * 64
+            paths["annotations"].write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "Human benchmark cannot use llm annotation"):
+                freeze_benchmark(
+                    examples_path=paths["examples"],
+                    annotations_path=paths["annotations"],
+                    adjudications_path=paths["adjudications"],
+                    splits_path=paths["splits"],
+                    output_dir=root / "frozen",
+                    split_policy="repository_disjoint",
+                )
 
     def test_freeze_rejects_single_annotator(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

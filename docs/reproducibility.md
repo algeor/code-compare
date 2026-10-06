@@ -145,13 +145,13 @@ For every reported run, archive:
 
 - Private HDLF collection requires organization-only credentials and dependencies.
 - GitHub refreshes depend on mutable remote API state unless commits and responses are archived.
-- LLM labels depend on provider/model/prompt versions and are not deterministic human ground truth.
+- LLM-owned benchmark labels depend on provider/model/prompt versions and are not human ground truth.
 - Existing artifact manifests cannot reconstruct original training runtime details retroactively.
 - Embedding downloads require network access and pinned upstream model revisions.
 
 ## 10. Confirmatory Reproduction Standard
 
-A reliable confirmatory run must start from an immutable data release, frozen human labels, and frozen splits; build features and artifacts in a clean environment; evaluate the untouched test once; and emit one manifest binding code, data, annotations, configuration, model, and reports. The current repository does not yet meet that standard.
+A reliable confirmatory run must start from an immutable data release, frozen labels, and frozen splits; build features and artifacts in a clean environment; evaluate the untouched test once; and emit one manifest binding code, data, annotations, configuration, model, and reports. LLM-owned labels must be reported as LLM-adjudicated, not human ground truth.
 
 ## 11. New Benchmark Workflow
 
@@ -168,7 +168,8 @@ uv run --locked pr-suggestion-plan-splits \
 # Create blinded packets. Existing labels and model-derived fields are rejected.
 uv run --locked pr-suggestion-prepare-annotations \
   --examples data/benchmark-source/examples.jsonl \
-  --annotator reviewer-a --annotator reviewer-b \
+  --annotator llm-pass-a --annotator llm-pass-b \
+  --annotation-mode llm \
   --output-dir /secure/annotation-packets
 
 # Freeze only after two independent records and adjudication exist per example.
@@ -177,6 +178,7 @@ uv run --locked pr-suggestion-freeze-benchmark \
   --annotations /secure/annotations.jsonl \
   --adjudications /secure/adjudications.jsonl \
   --splits /secure/splits.csv \
+  --annotation-mode llm_adjudicated \
   --split-policy repository_disjoint \
   --output-dir /secure/frozen-benchmark
 
@@ -204,4 +206,4 @@ uv run --locked --extra train pr-suggestion-evaluate-frozen \
   --output-dir /secure/confirmatory-evaluation
 ```
 
-The current 279-row internal corpus cannot enter this workflow because it lacks the required original review anchors and immutable suggestion-time/final-state snapshots.
+The current internal corpus can enter this workflow only after provenance reconstruction succeeds and produces complete `benchmark_candidates.jsonl` rows.

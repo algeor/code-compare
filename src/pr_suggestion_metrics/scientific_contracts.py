@@ -1,4 +1,4 @@
-"""Validated contracts for provenance and human benchmark evidence."""
+"""Validated contracts for provenance and semantic benchmark evidence."""
 
 from __future__ import annotations
 
@@ -180,12 +180,15 @@ class SemanticUnit(BaseModel):
 
 
 class HumanAnnotation(BaseModel):
-    """One blind human judgment with a mechanically reproducible percentage."""
+    """One blind semantic judgment with a mechanically reproducible percentage."""
 
     schema_version: Literal["1.0"] = "1.0"
+    source_type: Literal["human", "llm"] = "human"
     guide_version: str
     example_id: str
     annotator_id: str
+    model_id: str | None = None
+    prompt_sha256: str | None = None
     decision: Literal["scored", "abstain"]
     abstention_reasons: list[str] = Field(default_factory=list)
     units: list[SemanticUnit] = Field(default_factory=list)
@@ -205,6 +208,11 @@ class HumanAnnotation(BaseModel):
     def validation_issues(self) -> list[str]:
         """Return internal inconsistencies in one annotation record."""
         issues: list[str] = []
+        if self.source_type == "llm":
+            if not self.model_id:
+                issues.append("LLM annotation requires model_id")
+            if not self.prompt_sha256:
+                issues.append("LLM annotation requires prompt_sha256")
         if self.decision == "abstain":
             if not self.abstention_reasons:
                 issues.append("abstention requires at least one reason")
