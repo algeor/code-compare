@@ -54,6 +54,7 @@ def analyze_for_demo(
         explanation_version=result.model_versions["explanation_model_version"],
         explanation_summary=result.explanation.summary,
         input_fingerprint=input_fingerprint,
+        ignores_extra_merged_lines=evidence.matched_units == evidence.total_suggested_units,
     )
     return summary, json.dumps(
         _json_payload(result.model_dump(mode="json"), input_fingerprint=input_fingerprint),
@@ -74,8 +75,14 @@ def _summary_markdown(
     explanation_version: str,
     explanation_summary: str,
     input_fingerprint: str,
+    ignores_extra_merged_lines: bool,
 ) -> str:
     badge = "✅ Predicted" if status == "predicted" else "⚠️ Abstained"
+    scope_note = (
+        "All suggested units were found. Extra merged PR lines are ignored because coverage measures suggestion adoption."
+        if ignores_extra_merged_lines
+        else "Some suggested units were not found in the merged PR diff."
+    )
     return f"""## Result
 
 <div class="result-cards">
@@ -85,6 +92,10 @@ def _summary_markdown(
   <div class="result-card"><span>Uncertainty</span><strong>{uncertainty_text}</strong></div>
 </div>
 
+**What this means:** {scope_note}
+
+**Input fingerprint:** `{input_fingerprint}`
+
 ## Explanation
 
 {explanation_summary}
@@ -93,7 +104,6 @@ def _summary_markdown(
 
 - Percentage model: `{percentage_model}`
 - Explainer: `{explanation_model}` `{explanation_version}`
-- Input fingerprint: `{input_fingerprint}`
 
 _Demo note: trained on weak local Phase 5-derived labels, not human ground truth._
 """
