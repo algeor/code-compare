@@ -1,4 +1,10 @@
-"""Canonical, path-aware parser for the unified-diff subset used by this project."""
+"""Parse Git-style unified diffs into immutable, path-aware data objects.
+
+The parser records file identity, rename metadata, hunk membership, change
+operations, and line numbers on both sides of a diff. It accepts standard Git
+headers as well as unified diffs that begin directly with ``---``/``+++`` file
+markers.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ _HUNK_HEADER = re.compile(
 
 @dataclass(frozen=True)
 class DiffLine:
-    """One line inside a parsed diff hunk."""
+    """Represent one addition, deletion, or context line inside a diff hunk."""
 
     operation: DiffOperation
     text: str
@@ -29,7 +35,12 @@ class DiffLine:
 
     @property
     def path(self) -> str | None:
-        """Return the path relevant to this line's operation."""
+        """Return the file path on the side where this line exists.
+
+        Deleted lines belong to the old file. Additions and context lines use
+        the new file path. The result is ``None`` when that side of the diff is
+        represented by Git's ``/dev/null`` sentinel.
+        """
         if self.operation == "deletion":
             return self.old_path
         return self.new_path
@@ -37,7 +48,7 @@ class DiffLine:
 
 @dataclass(frozen=True)
 class DiffFile:
-    """One file section from a unified diff."""
+    """Represent one file section and all of its parsed hunk lines."""
 
     old_path: str | None
     new_path: str | None
@@ -47,44 +58,53 @@ class DiffFile:
 
     @property
     def canonical_path(self) -> str | None:
-        """Return the final path, falling back to the original path for deletions."""
+        """Return the final path, or the original path when the file was deleted."""
         return self.new_path or self.old_path
 
     @property
     def hunk_count(self) -> int:
-        """Return the number of parsed hunks in this file section."""
+        """Count distinct hunks represented by this file's parsed lines."""
         return len({line.hunk_index for line in self.lines})
 
     @property
     def changed_lines(self) -> tuple[DiffLine, ...]:
-        """Return additions and deletions for this file section."""
+        """Return this file's additions and deletions in source order.
+
+        Context lines are excluded. Formatting-only additions and deletions are
+        retained because the parser does not classify semantic significance.
+        """
         return tuple(line for line in self.lines if line.operation != "context")
 
 
 @dataclass(frozen=True)
 class ParsedDiff:
-    """Typed representation shared by metrics, evidence, and feature extraction."""
+    """Represent all file sections parsed from one unified diff string."""
 
     files: tuple[DiffFile, ...]
 
     @property
     def lines(self) -> tuple[DiffLine, ...]:
-        """Return every parsed hunk line in source order."""
+        """Flatten every file's parsed hunk lines into one ordered tuple."""
         return tuple(line for file_diff in self.files for line in file_diff.lines)
 
     @property
     def changed_lines(self) -> tuple[DiffLine, ...]:
-        """Return additions and deletions, including formatting-only lines."""
+        """Return additions and deletions from every parsed file.
+
+        Context lines are excluded, while formatting-only changes are retained.
+        """
         return tuple(line for line in self.lines if line.operation != "context")
 
     @property
     def hunk_count(self) -> int:
-        """Return the total number of hunks across file sections."""
+        """Return the sum of the distinct hunk counts for all parsed files."""
         return sum(file_diff.hunk_count for file_diff in self.files)
 
 
 @dataclass
 class _FileBuilder:
+    """Accumulate mutable file state before creating an immutable ``DiffFile``."""
+
     old_path: str | None = None
     new_path: str | None = None
     rename_from: str | None = None
@@ -93,6 +113,7 @@ class _FileBuilder:
     lines: list[DiffLine] = field(default_factory=list)
 
     def freeze(self) -> DiffFile:
+        """Create an immutable snapshot of the accumulated file metadata and lines."""
         return DiffFile(
             old_path=self.old_path,
             new_path=self.new_path,
@@ -103,7 +124,12 @@ class _FileBuilder:
 
 
 def normalize_diff_path(raw_path: str) -> str | None:
-    """Normalize Git's a/ and b/ prefixes and the /dev/null sentinel."""
+    """Normalize a path read from unified-diff metadata.
+
+    Surrounding whitespace and tab-separated metadata are removed. Git's
+    synthetic ``a/`` and ``b/`` prefixes are stripped, and ``/dev/null`` or an
+    empty path becomes ``None``.
+    """
     cleaned = raw_path.strip().split("\t", maxsplit=1)[0]
     if cleaned == "/dev/null":
         return None
@@ -113,11 +139,17 @@ def normalize_diff_path(raw_path: str) -> str | None:
 
 
 def _is_diff_path(raw_path: str) -> bool:
+    """Return whether a value uses a Git diff prefix or ``/dev/null``."""
     cleaned = raw_path.strip().split("\t", maxsplit=1)[0]
     return cleaned == "/dev/null" or cleaned.startswith(("a/", "b/"))
 
 
 def _git_header_paths(line: str) -> tuple[str | None, str | None]:
+    """Extract normalized old and new paths from a ``diff --git`` header.
+
+    Shell-style tokenization supports quoted paths containing spaces. Malformed
+    quoting or a header with fewer than four fields produces ``(None, None)``.
+    """
     try:
         parts = shlex.split(line)
     except ValueError:
@@ -128,7 +160,20 @@ def _git_header_paths(line: str) -> tuple[str | None, str | None]:
 
 
 def parse_unified_diff(diff_text: str) -> ParsedDiff:
-    """Parse file identity, hunks, operations, and source/target line numbers."""
+    """Parse unified-diff text into file, hunk, operation, and line metadata.
+
+    Args:
+        diff_text: A Git-style unified diff. Preamble text and unsupported
+            metadata lines are ignored.
+
+    Returns:
+        An immutable ``ParsedDiff`` whose files and lines preserve source order.
+
+    The parser understands ``diff --git`` headers, ``---``/``+++`` markers,
+    rename metadata, and standard ``@@`` hunk headers. Added lines receive only
+    a new line number, deleted lines receive only an old line number, and
+    context lines receive both.
+    """
     files: list[DiffFile] = []
     current: _FileBuilder | None = None
     inside_hunk = False
@@ -137,6 +182,7 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
     new_line_number = 0
 
     def finish_file() -> None:
+        """Store the current non-empty file builder and clear parser state."""
         nonlocal current
         if current is not None and (
             current.old_path is not None
