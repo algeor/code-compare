@@ -14,7 +14,7 @@ Important: this is not human-validated release science. The percentage model is 
 Local run from the repository root:
 
 ```bash
-uv run --extra demo pr-suggestion-demo
+uv run --locked --extra demo pr-suggestion-demo
 ```
 
 Interview flow:

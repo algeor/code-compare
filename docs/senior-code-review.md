@@ -346,8 +346,8 @@ This is the live source of truth for review findings. Findings are recorded here
 
 ## Implemented Changes
 
-- Added `ROADMAP.md` with evidence-first milestones and measurable exit gates.
-- Linked the roadmap from `README.md`.
+- Added evidence-first milestone and release-gate documentation.
+- Linked the project direction from `README.md`.
 - Made package-level lazy exports explicit, cached, discoverable, and covered by a public-API test.
 - Corrected diff parsing for header-like content inside hunks.
 - Made duplicate exact matching globally prefer same-path evidence before cross-file fallback.
@@ -377,4 +377,4 @@ This is the live source of truth for review findings. Findings are recorded here
 2. Version normalization and strict-versus-relaxed evidence contracts.
 3. Make multi-artifact benchmark workflows transactional using the new staging primitives.
 4. Replace component-count splitting with deterministic example-balanced assignment.
-5. Build the provenance-complete human benchmark described in `ROADMAP.md`.
+5. Build a provenance-complete independently annotated benchmark under the finalized metric and artifact contracts.

@@ -1,10 +1,10 @@
 # Annotation Guide: Semantic Suggestion Coverage
 
-**Status:** required protocol for a future human benchmark. It does not retroactively validate the repository's current LLM-assisted labels.
+**Status:** required protocol for future independent benchmark annotation. It does not retroactively validate the repository's current LLM-assisted labels.
 
-**Audience:** annotators, adjudicators, and benchmark reviewers
+**Audience:** human annotators, LLM annotation operators, adjudicators, and benchmark reviewers
 
-**Purpose:** define the only supported human-labeling procedure for semantic suggestion coverage
+**Purpose:** define the supported unit-labeling procedure for semantic suggestion coverage
 
 ## 1. Question
 
@@ -132,6 +132,8 @@ Ignore unrelated PR changes. A same-file or same-topic match is not sufficient. 
 ```
 
 ## 9. Annotation Workflow
+
+The same unit, evidence, and percentage rules apply to human annotation and LLM-operated annotation. The label source must be recorded honestly in the frozen benchmark manifest. An LLM-adjudicated benchmark is useful for the next research gate, but it is not human ground truth.
 
 1. Train annotators on examples excluded from every experiment.
 2. Run a pilot and revise ambiguous instructions before freezing guide version 1.0.

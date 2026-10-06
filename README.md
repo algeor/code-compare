@@ -1,24 +1,103 @@
 # Semantic PR Suggestion Coverage
 
-Research tooling for estimating how much of a code-review suggestion appears in a merged pull request.
+Research tooling for comparing a code-review suggestion with a merged pull request.
 
-## Current Status
+The project currently ships four useful building blocks:
 
-The package provides two explicitly separate outputs:
+- **Deterministic evidence** for exact and path-relaxed diff matches.
+- **Experimental percentage inference** for a narrow, explicitly supported raw-diff shape.
+- **AI reviewer evaluation** for scoring review quality against independent evidence.
+- **A local demo app** that combines the percentage result with grounded explanation templates.
 
-- **Deterministic evidence:** strict same-file matches separated from operation-strict, path-relaxed cross-file matches.
-- **Experimental estimate:** a learned percentage for supported raw-diff inputs.
+## Start Here
 
-Neither output proves causality or final-state semantic equivalence. Unsupported edit shapes return a typed abstention instead of an invented score.
+If you are new to the repository, take this path first:
 
-## Quick Start
+1. Install the workspace.
+2. Run the tests.
+3. Launch the demo.
+4. Read the onboarding guide.
 
 ```bash
-uv sync --locked --extra test
-uv run --locked --extra test pytest -q
+uv sync --locked --all-extras
+uv run --locked --all-extras python -m pytest -q
+uv run --locked --extra demo pr-suggestion-demo
 ```
 
-Run inference with an explicit trusted model directory:
+Then read:
+
+- [`docs/getting-started.md`](docs/getting-started.md) for the first-hour onboarding path.
+- [`docs/project-guide.md`](docs/project-guide.md) for the project history, structure, and mastery map.
+- [`docs/architecture.md`](docs/architecture.md) for the system boundaries.
+- [`docs/README.md`](docs/README.md) for the full documentation map.
+
+## What The Project Does Today
+
+### 1. Deterministic change evidence
+
+`analyze_change_coverage` compares suggested diff units with merged diff units and reports:
+
+- `strict_same_file` matches: same path, same operation, normalized content match.
+- `relaxed_cross_file` matches: same operation and normalized content, different path allowed.
+
+This is **inspectable evidence**, not semantic proof.
+
+### 2. Experimental coverage percentage
+
+`predict_coverage_from_diffs` produces a learned percentage only when the suggestion is:
+
+- one file;
+- one hunk;
+- pure addition;
+- not a rename, deletion, or replacement.
+
+Unsupported inputs return a typed **abstention** instead of a made-up score.
+
+### 3. AI reviewer evaluation
+
+`evaluate_ai_review` scores an AI review against independently verified assessment units. Every lost point maps to a concrete deduction such as:
+
+- `incorrect_diagnosis`
+- `missed_issue`
+- `wrong_location`
+- `wrong_severity`
+- `unsafe_fix`
+- `unsupported_reasoning`
+
+This is separate from suggestion coverage. A merged PR does **not** prove an AI review was correct.
+
+### 4. Grounded local demo
+
+`pr-suggestion-demo` wraps the local `AnalysisService` and shows:
+
+- deterministic evidence;
+- weak local percentage output;
+- grounded explanation templates;
+- model versions and artifact hashes.
+
+## What The Project Does Not Claim
+
+Be careful not to overstate the current system:
+
+- It does **not** prove causal adoption.
+- It does **not** prove final-state semantic equivalence.
+- It does **not** ship a production-validated bundled model.
+- It does **not** treat current labels as double-human ground truth.
+- It does **not** support every raw-diff shape in the learned API.
+
+The safest current description is: this repository studies **suggestion coverage/agreement**, not confirmed adoption.
+
+## Quick Examples
+
+### Run the local demo
+
+```bash
+uv run --locked --extra demo pr-suggestion-demo
+```
+
+The Gradio app starts locally and uses the demo artifact at `models/pr_suggestion_coverage/demo_weak_local/model`.
+
+### Score one diff pair from Python
 
 ```python
 from pathlib import Path
@@ -28,153 +107,135 @@ from pr_suggestion_metrics import predict_coverage_from_diffs
 result = predict_coverage_from_diffs(
     suggested_diff,
     merged_pr_diff,
-    model_dir=Path("/path/to/trusted-percentage-model"),
+    model_dir=Path("models/pr_suggestion_coverage/demo_weak_local/model"),
 )
 
-if result.status == "predicted":
-    print(result.model_predicted_percentage)
-else:
-    print(result.applicability_reasons)
+print(result.status)
+print(result.model_predicted_percentage)
+print(result.change_coverage_evidence.strict_same_file.coverage_percentage)
 ```
 
-The result is a versioned `CoverageResult` containing the raw and rounded estimate, uncertainty status, deterministic evidence, input hashes, artifact hashes, and warnings. Result schema `1.1` embeds evidence schema `1.1` for both predictions and abstentions.
-
-## AI Reviewer Evaluation
-
-Coverage measures whether a suggestion appears in merged code. It cannot say what the AI reviewer got wrong. Review quality is scored separately against atomic findings verified by tests, static analysis, specifications, or human review:
-
-```python
-from pr_suggestion_metrics import ReviewAssessmentUnit, evaluate_ai_review
-
-evaluation = evaluate_ai_review(
-    "review-42",
-    [
-        ReviewAssessmentUnit(
-            unit_id="unsafe-fix",
-            criterion="fix_safety",
-            verdict="partially_correct",
-            weight=2,
-            ai_review_part="Catch every Exception and return None.",
-            expected="Catch ValueError only and preserve unexpected failures.",
-            explanation="The proposed fix hides unrelated defects.",
-            evidence=["tests/test_parser.py::test_unexpected_error_propagates"],
-            evidence_source="test",
-            mistake_code="unsafe_fix",
-        )
-    ],
-)
-
-print(evaluation.score_percentage)
-for deduction in evaluation.deductions:
-    print(deduction.mistake_code, deduction.points_lost, deduction.explanation)
-```
-
-Every point below 100 maps to a concrete deduction such as an incorrect diagnosis, missed issue, wrong location, wrong severity, unsafe fix, weak rationale, or vague guidance. Use `summarize_ai_reviewer` to find recurring reviewer mistakes across many comments.
-
-A local model may draft assessment units, but tests, static analysis, specifications, or humans must verify them. The merged PR is outcome context, not correctness ground truth.
-
-## Capability Matrix
-
-| Edit shape | Deterministic evidence | Learned estimator |
-|---|---:|---:|
-| Single-file addition | Yes | Yes |
-| Multiple hunks | Yes | Abstains |
-| Multiple files | Yes | Abstains |
-| Deletion or replacement | Yes | Abstains |
-| Rename or cross-file move | Yes | Abstains |
-| Final-state semantic equivalence | No | No |
-
-## Metric Vocabulary
-
-- `suggestion_coverage_percentage`: primary learned estimate.
-- `change_coverage_evidence.strict_same_file`: same operation, normalized content, and repository-relative path.
-- `change_coverage_evidence.relaxed_cross_file`: same operation and normalized content on a different path.
-- `final_diff_recall`: PR-scope diagnostic.
-
-Both evidence buckets use `total_suggested_units` as their denominator. In evidence schema `1.1`, top-level `coverage_percentage`, `matched_units`, `matched_by_kind`, and `matches` remain for one compatibility cycle; they combine strict and relaxed matches and must not be interpreted as strict evidence.
-
-Token, file, and line precision/recall are diagnostics. Token overlap is operation-aware, so additions cannot match removals. The explicitly named `relaxed_content_token` diagnostic ignores operation polarity. The project does not combine these diagnostics into an aggregate coverage score.
-
-## Benchmark Pipeline
-
-Build label-free benchmark candidates while preparing the normal dataset:
+### Run the stable analysis service from the CLI
 
 ```bash
-uv run --locked pr-suggestion-build-dataset INPUT.jsonl --output-dir OUTPUT_DIR
+uv run --locked pr-suggestion-analyze \
+  --suggested-diff /path/to/suggested.diff \
+  --merged-pr-diff /path/to/merged.diff
 ```
 
-Create deterministic leakage-resistant split assignments:
+This returns a JSON result that includes percentage output, deterministic evidence, explanation output, warnings, and artifact hashes.
+
+### Collect paired examples from GitHub pull requests
 
 ```bash
-uv run --locked pr-suggestion-plan-splits \
-  --examples OUTPUT_DIR/benchmark_candidates.jsonl \
-  --output /secure/splits.csv \
-  --report /secure/split-report.json \
-  --policy repository_disjoint
+uv run --locked --extra collection pr-suggestion-collect \
+  --github-pr-url https://github.com/ORG/REPO/pull/123 \
+  --output /tmp/pairs.jsonl
 ```
 
-After annotation and adjudication, freeze the benchmark:
+Use `--github-token` when needed. The GitHub collector is public; the HDLF collector path remains private-runtime-only.
+
+## Common Workflows
+
+### Validate the active codebase
 
 ```bash
-uv run --locked pr-suggestion-freeze-benchmark \
-  --examples OUTPUT_DIR/benchmark_candidates.jsonl \
-  --annotations /secure/annotations.jsonl \
-  --adjudications /secure/adjudications.jsonl \
-  --splits /secure/splits.csv \
-  --output-dir /secure/frozen-benchmark
-```
-
-Generate canonical model-ready features from non-test splits:
-
-```bash
-uv run --locked pr-suggestion-build-features \
-  --benchmark-dir /secure/frozen-benchmark \
-  --output-dir /secure/frozen-features
-```
-
-Select and train one supported model without reading test rows:
-
-```bash
-uv run --locked pr-suggestion-train \
-  --features /secure/frozen-features/features.csv \
-  --model-dir /secure/model
-```
-
-Abstained examples are preserved in dedicated artifacts. Calibration uses raw predictions and independent-group residuals.
-
-## Repository Layout
-
-```text
-data/          research datasets and small fixtures
-docs/          method, model, data, and reproducibility notes
-notebooks/     historical and exploratory analyses
-reports/       generated evaluation outputs
-research/      archived, unsupported research artifacts
-src/           reusable Python package
-tests/         regression, benchmark, metric, and model tests
-```
-
-Key documents:
-
-- [`docs/README.md`](docs/README.md) — documentation map and source-of-truth rules.
-- [`docs/architecture.md`](docs/architecture.md) — current boundaries and target dual-model architecture.
-- `ROADMAP.md`
-- `IMPLEMENTATION_PLAN.md`
-- `docs/senior-code-review.md`
-- `docs/implementation-progress.md`
-- `docs/data-card.md`
-- `docs/model-card.md`
-- `docs/annotation-guide.md`
-- `docs/reproducibility.md`
-- `docs/pr-suggestion-diff-metrics.md`
-- `research/archive/bucket-era/README.md`
-
-## Development
-
-```bash
+uv run --locked --all-extras python -m pytest -q
 uv run --locked --extra dev ruff check src tests
 uv run --locked --extra dev mypy src/pr_suggestion_metrics
+python3 scripts/check_documentation.py
 uv build
 ```
 
-`uv.lock` is the dependency source of truth. Model files are intentionally not bundled in the wheel; callers must provide an explicit trusted `model_dir`.
+### Reproduce the checked-in research pipeline
+
+Read [`docs/reproducibility.md`](docs/reproducibility.md). That document is the source of truth for:
+
+- environment setup;
+- validation commands;
+- benchmark freezing;
+- model selection and training;
+- calibration and protected evaluation.
+
+### Work on the benchmark pipeline
+
+The supported flow is:
+
+```text
+examples -> split planning -> annotation packets -> adjudication -> frozen benchmark -> feature table -> training
+```
+
+The main commands are:
+
+- `pr-suggestion-plan-splits`
+- `pr-suggestion-prepare-annotations`
+- `pr-suggestion-freeze-benchmark`
+- `pr-suggestion-build-features`
+- `pr-suggestion-select-model`
+- `pr-suggestion-train`
+- `pr-suggestion-calibrate-uncertainty`
+- `pr-suggestion-evaluate-frozen`
+
+## Repository Map
+
+Start with these directories:
+
+```text
+src/pr_suggestion_metrics/   supported package code
+tests/                      active regression and contract tests
+docs/                       canonical docs and plans
+models/                     demo artifact metadata and local demo model bundle
+space/                      Hugging Face Space entry point
+scripts/                    small validation helpers
+```
+
+Know these before you edit:
+
+```text
+data/                       active small datasets and fixtures
+research/archive/           unsupported historical work kept for provenance
+notebooks/                  exploratory notebooks, not runtime dependencies
+reports/                    generated outputs
+```
+
+If you are new, do **not** start in `research/archive/`. It is intentionally preserved history, not the supported code path.
+
+## Documentation Map
+
+- [`docs/getting-started.md`](docs/getting-started.md) — best first read for a new contributor.
+- [`docs/project-guide.md`](docs/project-guide.md) — history, structure, workflows, and pitfalls.
+- [`docs/README.md`](docs/README.md) — document index and source-of-truth rules.
+- [`docs/architecture.md`](docs/architecture.md) — package boundaries and data flow.
+- [`docs/reproducibility.md`](docs/reproducibility.md) — exact validation, benchmark, and training commands.
+- [`docs/data-card.md`](docs/data-card.md) — dataset provenance, limitations, and allowed claims.
+- [`docs/model-card.md`](docs/model-card.md) — model contract, failure modes, and validation blockers.
+- [`docs/deployment.md`](docs/deployment.md) — demo deployment guidance.
+- [`docs/implementation-progress.md`](docs/implementation-progress.md) — what has actually shipped.
+- [`docs/implementation-progress.md`](docs/implementation-progress.md) — shipped state and next implementation gate.
+- [`docs/senior-code-review.md`](docs/senior-code-review.md) — findings, risks, and remaining priorities.
+
+## Public API At A Glance
+
+The package exposes these main public entry points from `pr_suggestion_metrics`:
+
+- `predict_coverage_from_diffs`
+- `predict_coverage_percentages`
+- `predict_coverage_with_uncertainty`
+- `analyze_change_coverage`
+- `AnalysisService`
+- `evaluate_ai_review`
+- `summarize_ai_reviewer`
+
+The lazy export contract is covered by [`tests/test_public_api.py`](tests/test_public_api.py).
+
+## Working Agreements
+
+- `uv.lock` is the dependency source of truth.
+- Model files are loaded only from an explicit trusted `model_dir`.
+- Supported code must not import from `research/archive/`.
+- Active behavior changes should update the relevant canonical docs, not just code.
+- Documentation changes should pass `python3 scripts/check_documentation.py`.
+
+## Next Read
+
+The fastest useful next step for a new person is [`docs/getting-started.md`](docs/getting-started.md).

@@ -110,7 +110,9 @@ manifest.
 
 ## Combined Product Contract
 
-The eventual `AnalysisService` composes three independent results:
+The current `AnalysisService` composes deterministic evidence, percentage inference, and deterministic-template
+explanations. The future release version keeps the same separation while replacing the baseline explanation provider with
+a validated CodeBERT evidence provider.
 
 ```text
 deterministic change evidence
@@ -169,5 +171,5 @@ status and limitations.
 3. Build an offline CodeBERT adapter behind `EvidenceProvider`.
 4. Add calibrated verdict thresholds and an abstention band.
 5. Evaluate evidence retrieval and unsupported claims on grouped development data.
-6. Add the combined `AnalysisService` only after both component contracts are stable.
+6. Harden the existing `AnalysisService` against the validated percentage and explanation artifact contracts.
 7. Package the first Docker Space and run latency, memory, privacy, and failure-path checks.

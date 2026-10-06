@@ -1,188 +1,128 @@
 # Deployment
 
-**Status:** current percentage-demo guide; combined explanation deployment is planned
+**Status:** current demo deployment guide; production release deployment is planned
 
 **Audience:** demo operators and release engineers
 
-**Purpose:** deploy the supported percentage inference path without training or historical research code
+**Purpose:** run or deploy the supported demo path without training or historical research code
 
-For the target dual-model architecture and CodeBERT explanation requirements, see
-[`explanation-model-design.md`](explanation-model-design.md). The instructions below describe the currently implemented
-percentage-only demo boundary.
+## Current Deployment Shape
 
-## Recommended Free Option
+The current demo is a Gradio app backed by `AnalysisService`.
 
-Deploy a small Gradio application on [Hugging Face Spaces](https://huggingface.co/spaces).
+It shows:
 
-This is the best fit for the current project because Spaces provides a free CPU tier for ML demos. The repository is currently a Python package and collection of command-line tools, so it needs a small web entry point before it can be hosted.
+- deterministic diff evidence;
+- weak local percentage model output;
+- deterministic-template grounded explanations;
+- model versions, artifact hashes, warnings, and raw JSON.
 
-The free tier is suitable for a demonstration, not a production service:
+The app entry points are:
 
-- The application may sleep while unused and take time to start again.
-- CPU, memory, storage, and request throughput are limited.
-- Availability is not guaranteed by a production service-level agreement.
-- A public Space must not receive confidential source code, private diffs, credentials, or proprietary model artifacts.
+- `src/pr_suggestion_metrics/demo_gradio.py` for the package CLI;
+- `space/app.py` for Hugging Face Spaces.
 
-Check the current Hugging Face pricing and organizational security policy before deployment because hosting plans can change.
+This is a demonstration path, not a validated production service. The checked-in demo model is trained on weak local labels and must not be presented as human ground truth or release-validated science.
 
-## What to Deploy
+For the target CodeBERT explanation path, see [`explanation-model-design.md`](explanation-model-design.md).
 
-Do not upload the complete research workspace. It contains large datasets, notebooks, reports, and training artifacts that the inference application does not need.
+## Run Locally
 
-Create a small deployment repository containing only:
-
-```text
-app.py
-README.md
-requirements.txt
-pyproject.toml
-src/pr_suggestion_metrics/
-models/trusted-percentage-model/
-```
-
-Keep all three verified regression-model files together:
-
-```text
-models/trusted-percentage-model/model.joblib
-models/trusted-percentage-model/feature_schema.json
-models/trusted-percentage-model/artifact_manifest.json
-```
-
-The repository does not bundle an active model. Train and validate one from a frozen percentage benchmark before deployment; archived models are unsupported.
-
-The application should:
-
-1. Accept a suggested diff and the merged pull-request diff.
-2. Call `predict_coverage_from_diffs` with the regression model directory.
-3. Display the predicted semantic coverage percentage and the model limitations.
-4. Explain when the model abstains because a diff shape is not supported.
-
-## Minimal Application
-
-Create `app.py` in the deployment repository:
-
-```python
-from pathlib import Path
-
-import gradio as gr
-
-from pr_suggestion_metrics.model_inference import predict_coverage_from_diffs
-
-
-MODEL_DIR = Path(__file__).parent / "models" / "trusted-percentage-model"
-
-
-def compare_diffs(suggested_diff: str, merged_diff: str) -> str:
-    if not suggested_diff.strip() or not merged_diff.strip():
-        return "Paste both diffs before comparing them."
-
-    result = predict_coverage_from_diffs(
-        suggested_diff,
-        merged_diff,
-        model_dir=MODEL_DIR,
-    )
-    if result["status"] != "predicted":
-        warnings = "; ".join(result["warnings"])
-        return f"The model could not score this input: {warnings}"
-
-    percentage = result["model_predicted_percentage"]
-    return f"Estimated semantic coverage: {percentage}%"
-
-
-demo = gr.Interface(
-    fn=compare_diffs,
-    inputs=[
-        gr.Code(label="Suggested diff", language=None),
-        gr.Code(label="Merged PR diff", language=None),
-    ],
-    outputs=gr.Textbox(label="Result"),
-    title="Semantic PR Suggestion Coverage",
-    description=(
-        "Experimental estimate of semantic overlap. "
-        "The score does not prove that a suggestion caused a code change."
-    ),
-)
-
-
-if __name__ == "__main__":
-    demo.launch()
-```
-
-Add an automated smoke test before publishing.
-
-## Dependencies
-
-Create `requirements.txt` in the deployment repository:
-
-```text
-gradio
--e .[structural]
-```
-
-Also copy the project's `pyproject.toml` so that the editable package installation works. For reproducible deployment, replace the unbounded `gradio` dependency with a tested version range before publishing.
-
-The structural dependency group enables the local AST and Tree-sitter features used while scoring supported languages. It does not install the much larger training or embedding stacks.
-
-## Space Configuration
-
-Create the Space README with this YAML header at the very top:
-
-```yaml
----
-title: Semantic PR Suggestion Coverage
-emoji: 🔎
-colorFrom: blue
-colorTo: indigo
-sdk: gradio
-sdk_version: "<tested-version>"
-app_file: app.py
-pinned: false
-python_version: "3.11"
----
-```
-
-Replace `<tested-version>` with the same Gradio version used in `requirements.txt`.
-
-## Publish
-
-1. Sign in to Hugging Face and create a new Space.
-2. Select **Gradio** as the SDK and **CPU Basic** as the free hardware.
-3. Clone the Space repository shown on its setup page.
-4. Copy the minimal deployment files into that repository.
-5. Commit and push the files to the Space repository.
-6. Open the Space's build log and wait for the application to become ready.
-7. Test empty input, a known example, malformed diffs, and a large input.
-
-Hugging Face rebuilds the application automatically after each push.
-
-## Local Check Before Publishing
-
-From the deployment repository, install and run the application:
+From the repository root:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python app.py
+uv sync --locked --all-extras
+uv run --locked --extra demo pr-suggestion-demo
 ```
 
-Open the local URL printed by Gradio and verify the result against a known repository example.
+Optional explicit host and port:
 
-## Alternative Deployment Targets
+```bash
+uv run --locked --extra demo pr-suggestion-demo --server-name 127.0.0.1 --server-port 7860
+```
 
-- **PyPI:** Publish the package for installation with `pip`; this does not provide a hosted interface or API.
-- **Render, Railway, or similar:** Wrap inference in FastAPI when a JSON API is more important than a demo UI. Free-tier availability and sleep behavior vary.
-- **GitHub Pages:** Suitable only for static documentation. It cannot execute the Python model.
-- **Internal hosting:** Use this instead of a public free service when users will submit confidential source code or pull-request diffs.
+The default model directory is:
 
-## Production Follow-up
+```text
+models/pr_suggestion_coverage/demo_weak_local/model
+```
+
+To use a different trusted model bundle:
+
+```bash
+uv run --locked --extra demo pr-suggestion-demo --model-dir /secure/trusted-percentage-model
+```
+
+## Hugging Face Space
+
+The repository already includes the Space shim:
+
+```text
+space/app.py
+```
+
+For a Space deployment, configure Hugging Face to use that file as the app entry point. The app imports `build_app()` and loads the demo model from the repository-local demo path.
+
+Use `space/README.md` for the short operator notes.
+
+## What To Include
+
+For a small demo deployment repository, include only what runtime needs:
+
+```text
+space/app.py
+README.md
+pyproject.toml
+uv.lock or a generated runtime lock file
+src/pr_suggestion_metrics/
+models/pr_suggestion_coverage/demo_weak_local/model/
+models/pr_suggestion_coverage/demo_weak_local/README.md
+```
+
+Do not upload the complete research workspace unless the deployment is intentionally private and approved. Large datasets, notebooks, reports, archived experiments, and training artifacts are not needed at runtime.
+
+Keep verified model files together:
+
+```text
+model.joblib
+feature_schema.json
+artifact_manifest.json
+```
+
+The manifest provides integrity checks, not publisher authentication. Load `joblib` artifacts only from a trusted source.
+
+## Demo Behavior To Verify
+
+Before sharing the demo, test these cases:
+
+- empty input returns a clean error;
+- the sample addition produces a predicted result;
+- malformed diffs produce abstention or structured errors;
+- unsupported edit shapes abstain instead of inventing a score;
+- raw JSON includes schema versions, input hashes, artifact hashes, warnings, and explanation output.
+
+## Security And Privacy
+
+- Do not send confidential source code, private diffs, credentials, or proprietary model artifacts to a public Space.
+- Do not log raw diffs in hosted environments.
+- Keep secrets in the hosting provider's secret store, never in Git.
+- Add request size limits before exposing the app beyond a controlled demo audience.
+
+## Production Follow-Up
 
 Before treating the demo as a production service:
 
-- Pin every dependency and build from a lock file.
-- Add request-size limits, timeouts, health checks, and structured error handling.
-- Add rate limiting and authentication if the service is not public.
-- Keep secrets in the hosting provider's secret store, never in Git.
-- Monitor latency, errors, memory use, and model-version changes.
-- Display the model-card limitations beside every prediction.
+- replace the weak demo model with a release artifact from a frozen benchmark;
+- authenticate model distribution outside local hashes;
+- pin dependencies and build from a lock file;
+- add health checks, timeouts, structured errors, rate limits, and safe logging;
+- display model-card limitations beside every result;
+- keep training code and archived research out of the hosted process;
+- validate the CodeBERT explanation provider separately from the percentage estimator.
+
+## Alternative Deployment Targets
+
+- **PyPI:** package distribution only; no hosted interface.
+- **Render, Railway, or similar:** useful when a JSON API matters more than a demo UI.
+- **GitHub Pages:** documentation only; it cannot execute Python inference.
+- **Internal hosting:** preferred when users submit confidential source code or pull-request diffs.

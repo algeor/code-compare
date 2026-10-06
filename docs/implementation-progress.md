@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-10-06
 
-This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
+This file is the durable implementation log for shipped phases and the next implementation gate.
 
 ## Current Phase
 
@@ -11,15 +11,15 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - **Phase 2 — Split the monoliths:** complete.
 - **Phase 3 — Lock metric contracts:** complete.
 - **Phase 4 — Harden benchmark production:** complete.
-- **Phase 5 — Build human benchmark v1:** next.
-- **Next gate:** collect independent human labels under the finalized metric and artifact contracts.
+- **Phase 5 — Build LLM-adjudicated benchmark v1:** next.
+- **Next gate:** collect provenance-complete candidates and run independent LLM annotation plus adjudication under the finalized metric and artifact contracts.
 
 ## Completed
 
 - Phase 4: added deterministic row-balanced split assignment, split-balance reporting, staged frozen-benchmark publishing, and versioned external manual-audit override policy.
 - Archived bucket-era code, data, documentation, models, notebooks, reports, and tests under `research/archive/bucket-era/`.
 - Added `research/archive/bucket-era/archive_manifest.json` and `research/archive/bucket-era/scripts/verify_bucket_archive.py`.
-- Added archive verification to CI.
+- Added archive verification tooling; run it manually before relying on archived provenance.
 - Expanded CI type checking to the full active package.
 - Extracted shared path handling to `src/pr_suggestion_metrics/_paths.py`.
 - Extracted shared modeling helpers to `src/pr_suggestion_metrics/modeling/common.py`.
@@ -39,6 +39,8 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - Reduced `collect_pr_code_changes.py` to a compatibility facade and pointed the console script at `cli.collect`.
 
 ## Validation Record
+
+Counts below are historical phase snapshots. For the current validation gate, run the commands in `docs/reproducibility.md`.
 
 - Phase 0 baseline: 88 tests passed; Ruff passed; full-package mypy passed; package build passed.
 - Phase 1 final gate: 128 tests and 21 subtests passed on 2026-10-06.
@@ -62,7 +64,7 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 
 ## Next Implementation Order
 
-1. Build the human benchmark under the locked metric contracts.
+1. Build the LLM-adjudicated benchmark under the locked metric contracts.
 2. Collect independent annotations and adjudications.
 3. Freeze the benchmark with transactional artifacts.
 4. Generate authenticated feature tables.

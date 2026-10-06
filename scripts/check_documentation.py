@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-ROOT_DOCUMENTS = ("README.md", "ROADMAP.md", "IMPLEMENTATION_PLAN.md")
+ROOT_DOCUMENTS = ("README.md",)
 STALE_REFERENCES = (
     "docs/final-polish-review-2026-09-14.md",
     "docs/team-codebase-review.md",
@@ -58,8 +58,6 @@ def validate_document(path: Path) -> list[str]:
         errors.append(f"{name}: missing **Status:** metadata")
     if name == "docs/implementation-progress.md" and "**Last updated:**" not in content:
         errors.append(f"{name}: missing **Last updated:** metadata")
-    if name in {"ROADMAP.md", "IMPLEMENTATION_PLAN.md"} and "**Status:**" not in content:
-        errors.append(f"{name}: missing **Status:** metadata")
     return errors
 
 

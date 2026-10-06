@@ -1,0 +1,33 @@
+flowchart TD
+    user[User / CLI / Demo UI]
+    service[AnalysisService]
+    result[Versioned AnalysisResult]
+
+    user --> service
+    service --> result
+
+    service --> diff[Diff validation and deterministic evidence]
+    service --> features[Feature extraction]
+    service --> model[Percentage model inference]
+    service --> explain[Grounded explanation templates]
+
+    diff --> parser[diff/ parser diagnostics]
+    diff --> semantics[diff_semantics.py]
+    features --> feature_modules[features/ lexical matching structural scoring]
+    model --> artifacts[model_artifacts.py manifest and hash checks]
+    model --> uncertainty[uncertainty.py intervals when calibrated]
+    explain --> explanation_modules[explanations/ provider contracts and templates]
+
+    collection[collection/ source gateways] --> benchmark[benchmark/ split and provenance tools]
+    benchmark --> frozen[Frozen benchmark]
+    frozen --> training[modeling/ train select evaluate]
+    training --> release[Trusted model artifact]
+    release --> model
+
+    docs[Documentation and governance]
+    docs --> progress[implementation-progress.md]
+    docs --> review[senior-code-review.md]
+    docs --> cards[data-card.md and model-card.md]
+
+    archive[research/archive/ historical only]
+    archive -. no supported imports .-> service

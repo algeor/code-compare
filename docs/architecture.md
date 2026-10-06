@@ -12,7 +12,8 @@ The project compares a code-review suggestion with a merged pull-request diff. I
 
 1. **Deterministic evidence** — inspectable matching of normalized change units.
 2. **Experimental percentage inference** — a learned estimate for a deliberately narrow raw-diff input shape.
-3. **Grounded explanation foundation** — contracts and templates for a future CodeBERT evidence provider.
+3. **Grounded explanation foundation** — deterministic-template explanations behind a future CodeBERT evidence provider.
+4. **AnalysisService composition** — one local service shape used by CLI, API, and demo surfaces.
 
 The percentage result does not prove causal adoption. The explanation layer must not convert similarity into an unsupported
 claim of semantic equivalence.
@@ -144,7 +145,7 @@ abstention reasons, and limitations.
 | Exact change evidence | Implemented | Version normalization and strict/relaxed evidence policies |
 | Percentage inference | Implemented, experimental and narrow | Human benchmark, calibration, and protected evaluation |
 | Grounded explanation contracts | Implemented | CodeBERT provider and grouped evidence evaluation |
-| Combined analysis service | Planned | Stable component contracts and compatible release bundle |
+| Combined analysis service | Implemented with deterministic-template explanations | Validated release bundle and future CodeBERT provider |
 | Hugging Face showcase | Documented | Validated artifacts, Docker runtime, limits, and smoke tests |
 
 ## Architecture Change Checklist

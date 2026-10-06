@@ -45,7 +45,7 @@ uv run --locked python - <<'PY'
 from pathlib import Path
 from pr_suggestion_metrics.model_artifacts import verify_model_manifest
 
-for model_dir in sorted(Path("models").iterdir()):
+for model_dir in sorted(Path("models").rglob("model")):
     if (model_dir / "model.joblib").is_file():
         manifest = verify_model_manifest(model_dir)
         print(model_dir, manifest["model_name"])
@@ -59,10 +59,8 @@ The hash manifest provides integrity, not publisher authenticity. Only deseriali
 ```bash
 uv run --locked --all-extras python -m pytest -q
 uv run --locked --extra dev ruff check src tests
-uv run --locked --extra dev mypy \
-  src/pr_suggestion_metrics/model_artifacts.py \
-  src/pr_suggestion_metrics/model_inference.py \
-  src/pr_suggestion_metrics/feature_preprocessing.py
+uv run --locked --extra dev mypy src/pr_suggestion_metrics
+python3 scripts/check_documentation.py
 git diff --check
 ```
 

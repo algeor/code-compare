@@ -19,6 +19,14 @@ The active package uses continuous percentages from `0` through `100`. Nothing u
 - `code/`: generators tied exclusively to archived reports.
 - `data/`: generated labeling batches and duplicated feature/report artifacts.
 
+### Markdown note
+
+This archive contains many Markdown files that are intentionally retained but not part of the active documentation set.
+
+- `docs/` contains superseded plans, prompts, and paper materials.
+- `data/internal-generated/review_examples/*.md` contains generated example inspection files preserved for provenance.
+- These Markdown files are useful for historical reconstruction, not for onboarding or current product claims.
+
 These files are retained for research provenance only. Do not copy their bucket schemas back into active code or datasets.
 
 ## Integrity

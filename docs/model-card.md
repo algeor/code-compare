@@ -101,10 +101,10 @@ The repository intentionally does not bundle a model until a bucket-free frozen 
 The model must not be called scientifically validated until all of the following exist:
 
 1. verified suggestion-time and final-state provenance;
-2. a frozen unit-level double-human benchmark;
+2. a frozen unit-level independently annotated benchmark, with label source reported accurately;
 3. removal of label-feature leakage;
 4. support or explicit abstention across required edit semantics;
-5. a new held-out human-labeled calibration set and a generated uncertainty artifact;
+5. a new held-out calibration set and a generated uncertainty artifact;
 6. repository/time/duplicate-aware frozen splits;
 7. one untouched confirmatory evaluation;
 8. subgroup and error analysis on the real target population.

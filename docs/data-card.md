@@ -85,7 +85,7 @@ review suggestion + PR diff
   -> exploratory grouped model evaluation
 ```
 
-The desired confirmatory flow is:
+The desired human-ground-truth flow is:
 
 ```text
 verified pre-merge suggestion event
@@ -120,7 +120,7 @@ Do not use these corpora to:
 
 ## 8. Required Replacement Benchmark
 
-Before a validated production claim, create a new benchmark with:
+Before a validated human-ground-truth production claim, create a new benchmark with:
 
 1. a written semantic-unit definition fixed before labeling;
 2. verified suggestion timestamps and immutable before/after revisions;
@@ -135,4 +135,4 @@ Before a validated production claim, create a new benchmark with:
 
 Any refreshed corpus must receive a new immutable version and content hashes. Never overwrite a published benchmark in place. Record source revision, collection date, filtering rules, deduplication method, annotation-guide version, split manifest, and code revision.
 
-The repository now supplies enforcement tools for the replacement release: `pr-suggestion-prepare-annotations`, `pr-suggestion-freeze-benchmark`, `pr-suggestion-calibrate-uncertainty`, and `pr-suggestion-evaluate-frozen`. These tools do not make the current corpora valid; they reject missing provenance and require new independent human evidence.
+The repository now supplies enforcement tools for a replacement release: `pr-suggestion-prepare-annotations`, `pr-suggestion-freeze-benchmark`, `pr-suggestion-calibrate-uncertainty`, and `pr-suggestion-evaluate-frozen`. These tools do not make the current corpora valid; they reject missing provenance and require new independent annotation evidence. The immediate benchmark plan uses LLM-adjudicated labels and must report them as LLM-adjudicated, not human ground truth.

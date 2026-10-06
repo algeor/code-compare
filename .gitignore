@@ -28,3 +28,9 @@ dist/
 data/embeddings/cache/
 **/test_labels.private.jsonl
 **/assignment_manifest.private.json
+
+deliverables
+
+.codex-build
+.codex-finalizer
+.claude
