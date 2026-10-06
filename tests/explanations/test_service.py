@@ -53,8 +53,10 @@ def test_service_composes_deterministic_grounded_summary_and_hashes() -> None:
     assert result.partial_units == 1
     assert result.missing_units == 1
     assert result.summary == (
-        "Evidence assessment: 1 landed unit, 1 partially landed unit, 1 missing unit. "
-        "Missing: retry handling. Partial: error propagation. Matched: input validation."
+        "The merged PR appears to cover part of the suggestion, with remaining gaps. "
+        "Evidence breakdown: 1 landed unit, 1 partially landed unit, 1 missing unit. "
+        "Potential gap: retry handling. Partial match: error propagation. Matched evidence: input validation. "
+        "Review the evidence list for paths, excerpts, and confidence."
     )
     assert [item.unit_id for item in result.evidence] == ["missing", "partial", "landed"]
     assert result.explanation_model_version == "revision-123"
@@ -74,7 +76,10 @@ def test_service_abstains_when_provider_returns_only_unsupported_evidence() -> N
     result = ExplanationService(provider).explain(suggested_diff="+binary", merged_diff="+binary")
 
     assert result.status == "abstained"
-    assert result.summary == "No supported explanation evidence was produced."
+    assert result.summary == (
+        "No supported explanation evidence was produced. "
+        "This is an abstention, not evidence that the suggestion is absent."
+    )
     assert result.unsupported_units == 1
     assert "1 evidence units were unsupported" in result.warnings[0]
 

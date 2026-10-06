@@ -115,15 +115,15 @@ def _explanation_evidence_from_coverage(coverage: ChangeCoverageEvidence) -> lis
     rows: list[ExplanationEvidence] = []
     for match in coverage.matches:
         verdict: Literal["landed", "partial"] = "partial" if match.moved_across_files else "landed"
-        scope = "across files" if match.moved_across_files else "in the same file"
+        scope = "in another file" if match.moved_across_files else "in the same file"
         rows.append(
             ExplanationEvidence(
                 unit_id=match.suggested_unit_id,
-                description=f"{match.kind} matched {scope}",
+                description=f"Suggested {match.kind} is present {scope}",
                 verdict=verdict,
                 confidence=0.85 if match.moved_across_files else 1.0,
                 source="deterministic",
-                evidence=[f"Matched {match.suggested_path} to {match.landed_path}."],
+                evidence=[f"Suggested path {match.suggested_path}; merged path {match.landed_path}."],
                 path=match.suggested_path,
             )
         )
@@ -131,7 +131,7 @@ def _explanation_evidence_from_coverage(coverage: ChangeCoverageEvidence) -> lis
         rows.append(
             ExplanationEvidence(
                 unit_id=unit.unit_id,
-                description=f"{unit.kind} not found in merged diff",
+                description=f"Suggested {unit.kind} was not found in the merged diff",
                 verdict="missing",
                 confidence=0.9,
                 source="deterministic",
