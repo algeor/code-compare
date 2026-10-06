@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from pr_suggestion_metrics._paths import REPOSITORY_ROOT
 from pr_suggestion_metrics.artifact_io import read_jsonl_objects, staged_output_directory, write_jsonl_objects
-from pr_suggestion_metrics.diff.parser import assess_unified_diff
+from pr_suggestion_metrics.diff.parser import DiffDialect, assess_unified_diff
 from pr_suggestion_metrics.scientific_contracts import BenchmarkCandidate, SuggestionProvenance
 
 
@@ -138,7 +138,7 @@ def _path_from_suggested_diff(diff_text: str | None) -> str | None:
     return None
 
 
-def _diff_has_context(diff_text: str | None, *, dialect: str) -> bool:
+def _diff_has_context(diff_text: str | None, *, dialect: DiffDialect) -> bool:
     if not diff_text:
         return False
     try:
@@ -308,7 +308,8 @@ def _normalize_internal_dataset(row: dict[str, Any]) -> ExplorationCandidateReco
     landed_diff = _string(row.get("landed_diff"))
     provenance, provenance_errors = _validated_provenance(row)
     original_file_path = _path_from_suggested_diff(suggested_diff)
-    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    metadata_value = row.get("metadata")
+    metadata = metadata_value if isinstance(metadata_value, dict) else {}
     return _build_record(
         source="internal_processed_dataset",
         source_row_key=_string(row.get("example_id")) or "unknown",
@@ -336,7 +337,8 @@ def _normalize_external_dataset(row: dict[str, Any]) -> ExplorationCandidateReco
     pr_url = _string(row.get("pr_url"))
     suggested_diff = _string(row.get("suggested_diff"))
     landed_diff = _string(row.get("landed_diff"))
-    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    metadata_value = row.get("metadata")
+    metadata = metadata_value if isinstance(metadata_value, dict) else {}
     original_file_path = _string(row.get("file_path")) or _string(metadata.get("file_path")) or _path_from_suggested_diff(suggested_diff)
     return _build_record(
         source="external_github_codereview",
@@ -445,6 +447,11 @@ def inventory_exploration_datasets(
     quarantined = [row.model_dump(mode="json") for row in deduped_rows if row.status == "quarantined"]
     benchmark_candidate_rows = _benchmark_ready_rows(deduped_rows)
 
+    source_rows: tuple[tuple[SourceName, list[ExplorationCandidateRecord], Path], ...] = (
+        ("internal_raw_pairs", rows_by_source["internal_raw_pairs"], internal_raw_pairs_path),
+        ("internal_processed_dataset", rows_by_source["internal_processed_dataset"], internal_dataset_path),
+        ("external_github_codereview", rows_by_source["external_github_codereview"], external_dataset_path),
+    )
     source_counts = {
         source: {
             "field_names": field_names_by_source[source],
@@ -452,11 +459,7 @@ def inventory_exploration_datasets(
             "rows": len(rows),
             "status_counts": dict(Counter(row.status for row in rows)),
         }
-        for source, rows, path in (
-            ("internal_raw_pairs", rows_by_source["internal_raw_pairs"], internal_raw_pairs_path),
-            ("internal_processed_dataset", rows_by_source["internal_processed_dataset"], internal_dataset_path),
-            ("external_github_codereview", rows_by_source["external_github_codereview"], external_dataset_path),
-        )
+        for source, rows, path in source_rows
     }
     summary = {
         "schema_version": "1.0",
