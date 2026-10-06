@@ -8,16 +8,19 @@ import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from sklearn.metrics import cohen_kappa_score
 
-from pr_suggestion_metrics.artifact_io import read_jsonl_objects, write_jsonl_objects
+from pr_suggestion_metrics.artifact_io import read_jsonl_objects, staged_output_directory, write_jsonl_objects
 from pr_suggestion_metrics.benchmark.contracts import (
     Split,
+    SplitPolicy,
     validate_splits as _validate_splits,
 )
+from pr_suggestion_metrics.benchmark.plan_splits import summarize_split_assignments
+from pr_suggestion_metrics.features.policy import NORMALIZATION_POLICY_VERSION
 from pr_suggestion_metrics.model_artifacts import sha256_file
 from pr_suggestion_metrics.percentages import round_bounded_percentage, validate_continuous_percentage
 from pr_suggestion_metrics.scientific_contracts import (
@@ -214,7 +217,6 @@ def freeze_benchmark(
     assignments = _read_splits(splits_path)
     _validate_splits(examples, assignments, split_policy=split_policy)
 
-    output_dir.mkdir(parents=True, exist_ok=False)
     split_rows: dict[Split, list[dict[str, Any]]] = {
         "train": [],
         "development": [],
@@ -262,54 +264,80 @@ def freeze_benchmark(
                 }
             )
 
-    paths = {
-        "train": output_dir / "train.jsonl",
-        "development": output_dir / "development.jsonl",
-        "calibration": output_dir / "calibration.jsonl",
-        "test": output_dir / "test_inputs.jsonl",
-        "private_test_labels": output_dir / "test_labels.private.jsonl",
-        "abstained": output_dir / "abstained.jsonl",
+    split_targets: dict[Split, float] = {
+        "train": 0.60,
+        "development": 0.15,
+        "calibration": 0.10,
+        "test": 0.15,
     }
-    for split, path in (
-        ("train", paths["train"]),
-        ("development", paths["development"]),
-        ("calibration", paths["calibration"]),
-        ("test", paths["test"]),
-    ):
-        write_jsonl_objects(path, split_rows[split], sort_keys=True)
-    write_jsonl_objects(paths["private_test_labels"], private_test_labels, sort_keys=True)
-    write_jsonl_objects(paths["abstained"], abstained_rows, sort_keys=True)
+    retained_example_ids = {
+        example.example_id for example in examples if example.example_id not in abstained_by_example
+    }
+    coverage_by_example = {
+        example_id: float(round_bounded_percentage(value.computed_percentage() or 0))
+        for example_id, value in adjudicated_by_example.items()
+    }
+    target_split_ratios = split_targets
 
-    manifest = {
-        "schema_version": "1.0",
-        "created_at_utc": datetime.now(UTC).isoformat(),
-        "split_policy": split_policy,
-        "counts": {split: len(rows) for split, rows in split_rows.items()},
-        "abstained_count": len(abstained_rows),
-        "repositories": len({example.repo for example in examples}),
-        "pull_requests": len({(example.repo, example.pr_number) for example in examples}),
-        "annotation_agreement": agreement,
-        "input_sha256": {
-            "examples": sha256_file(examples_path),
-            "annotations": sha256_file(annotations_path),
-            "adjudications": sha256_file(adjudications_path),
-            "splits": sha256_file(splits_path),
-        },
-        "artifact_sha256": {name: sha256_file(path) for name, path in paths.items()},
-        "label_counts": dict(
-            sorted(
-                Counter(
-                    round_bounded_percentage(value.computed_percentage() or 0)
-                    for value in adjudicated_by_example.values()
-                ).items()
-            )
-        ),
-        "confirmatory_test_labels_are_private": True,
-    }
-    (output_dir / "benchmark_manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with staged_output_directory(output_dir) as staging_dir:
+        paths = {
+            "train": staging_dir / "train.jsonl",
+            "development": staging_dir / "development.jsonl",
+            "calibration": staging_dir / "calibration.jsonl",
+            "test": staging_dir / "test_inputs.jsonl",
+            "private_test_labels": staging_dir / "test_labels.private.jsonl",
+            "abstained": staging_dir / "abstained.jsonl",
+        }
+        for split, path in (
+            ("train", paths["train"]),
+            ("development", paths["development"]),
+            ("calibration", paths["calibration"]),
+            ("test", paths["test"]),
+        ):
+            write_jsonl_objects(path, split_rows[split], sort_keys=True)
+        write_jsonl_objects(paths["private_test_labels"], private_test_labels, sort_keys=True)
+        write_jsonl_objects(paths["abstained"], abstained_rows, sort_keys=True)
+
+        manifest = {
+            "schema_version": "1.0",
+            "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
+            "created_at_utc": datetime.now(UTC).isoformat(),
+            "split_policy": split_policy,
+            "counts": {split: len(rows) for split, rows in split_rows.items()},
+            "abstained_count": len(abstained_rows),
+            "repositories": len({example.repo for example in examples}),
+            "pull_requests": len({(example.repo, example.pr_number) for example in examples}),
+            "annotation_agreement": agreement,
+            "input_sha256": {
+                "examples": sha256_file(examples_path),
+                "annotations": sha256_file(annotations_path),
+                "adjudications": sha256_file(adjudications_path),
+                "splits": sha256_file(splits_path),
+            },
+            "artifact_sha256": {name: sha256_file(path) for name, path in paths.items()},
+            "label_counts": dict(
+                sorted(
+                    Counter(
+                        round_bounded_percentage(value.computed_percentage() or 0)
+                        for value in adjudicated_by_example.values()
+                    ).items()
+                )
+            ),
+            "split_summary": summarize_split_assignments(
+                examples=examples,
+                assignments=assignments,
+                policy=cast(SplitPolicy, split_policy),
+                included_example_ids=retained_example_ids,
+                coverage_by_example=coverage_by_example,
+                target_split_ratios=target_split_ratios,
+            ),
+            "confirmatory_test_labels_are_private": True,
+        }
+        (staging_dir / "benchmark_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     return manifest
 
 

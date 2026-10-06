@@ -1,8 +1,14 @@
 # Senior Code Review Notes
 
-**Started:** 2026-10-05  
-**Scope:** logic, architecture, code quality, data integrity, model safety, and maintainability  
 **Status:** completed
+
+**Audience:** maintainers and technical reviewers
+
+**Purpose:** preserve review evidence, severity, remediation status, and unresolved risks
+
+**Started:** 2026-10-05
+
+**Scope:** logic, architecture, code quality, data integrity, model safety, and maintainability
 
 This is the live source of truth for review findings. Findings are recorded here as they are discovered rather than held in conversation memory.
 
@@ -26,7 +32,7 @@ This is the live source of truth for review findings. Findings are recorded here
 - `pytest`: **77 passed**.
 - `ruff check src tests`: **passed**.
 - Focused `mypy` validation over supported runtime and benchmark modules: **passed**.
-- Existing unrelated untracked files were present before this review: `docs/deployment.md` and `docs/final-polish-review-2026-09-14.md`.
+- Existing unrelated documentation drafts were present before this review and were assessed separately from code findings.
 
 ## Final Validation
 
@@ -162,28 +168,28 @@ This is the live source of truth for review findings. Findings are recorded here
 
 - **Severity:** Medium
 - **Area:** metric semantics
-- **Status:** open; contract decision required
+- **Status:** fixed at the contract boundary; existing model feature behavior intentionally retained
 - **Evidence:** whitespace normalization collapses indentation and internal whitespace, and whitespace-only changed lines are excluded.
 - **Risk:** indentation-sensitive code can be counted as exact after a semantic change, while formatting-only obligations cannot be represented.
-- **Action:** define language-aware normalization policies and preserve the raw unit beside every normalized unit before changing scoring behavior.
+- **Action:** added normalization policy `1.0`, preserved raw text beside normalized units, recorded policy versions in results and manifests, and added language/indentation characterization tests. Any model-feature change now requires a feature-schema bump and retraining.
 
 ### F-015 — Malformed diffs can produce plausible metrics without diagnostics
 
 - **Severity:** Medium
 - **Area:** input validation
-- **Status:** open
+- **Status:** fixed
 - **Evidence:** malformed hunk headers can fall back to line number zero; declared hunk counts are not currently surfaced as validity errors when the body is incomplete.
 - **Risk:** truncated or invalid diffs may return partial-looking evidence rather than an abstention.
-- **Action:** add parser diagnostics and make supported inference abstain on structural parse errors.
+- **Action:** added typed diagnostics and explicit `valid`, `invalid`, and `valid_but_unsupported` states for strict Git diffs and suggestion fragments. Public inference and feature generation now abstain on invalid input before loading or scoring a model.
 
 ### F-016 — Some fallback similarity metrics ignore edit context
 
 - **Severity:** Medium
 - **Area:** metric validity
-- **Status:** open
+- **Status:** fixed
 - **Evidence:** token overlap ignores operation polarity and file identity; cross-file exact fallback can match common normalized lines anywhere.
 - **Risk:** additions can match removals or unrelated common code, inflating apparent coverage.
-- **Action:** make operation/path policy explicit and report strict same-file evidence separately from relaxed move evidence.
+- **Action:** versioned evidence schema `1.1`, separated strict same-file evidence from relaxed cross-file evidence, and made token and relaxed matching operation-aware so additions cannot match removals.
 
 ### F-017 — Benchmark freeze accepted inconsistent annotation sets
 
@@ -234,10 +240,10 @@ This is the live source of truth for review findings. Findings are recorded here
 
 - **Severity:** Medium
 - **Area:** benchmark quality
-- **Status:** open
+- **Status:** fixed
 - **Evidence:** assignment ratios are based on independent component count; component sizes may differ substantially.
 - **Risk:** train, development, calibration, or test row counts can be severely imbalanced even when the nominal ratios look correct.
-- **Action:** use a deterministic constrained assignment that balances example counts while preserving repository, time, PR, and duplicate grouping.
+- **Action:** split assignment now targets example-row ratios while preserving repository, PR, near-duplicate, and temporal grouping constraints; reports include row/group/repository target-versus-actual summaries.
 
 ### F-023 — Legacy training silently changed the training population
 
@@ -279,19 +285,19 @@ This is the live source of truth for review findings. Findings are recorded here
 
 - **Severity:** Medium
 - **Area:** artifact consistency
-- **Status:** open
+- **Status:** fixed for benchmark freezing; legacy semantic audit mutation still documented separately
 - **Evidence:** semantic apply/audit commands replace related dataset, label, batch, and audit files independently.
 - **Risk:** interruption can leave artifacts from different logical versions mixed together.
-- **Action:** stage a complete output generation in a temporary directory, validate it, then atomically promote a versioned directory or manifest pointer.
+- **Action:** benchmark freezing now writes all frozen artifacts into a sibling staging directory and promotes the complete directory only after all artifacts and the manifest are written.
 
 ### F-028 — Dataset-specific audit policy is hard-coded in reusable code
 
 - **Severity:** Medium
 - **Area:** separation of concerns
-- **Status:** open
+- **Status:** fixed
 - **Evidence:** manual semantic-label overrides live inside the Python audit module.
 - **Risk:** changing one dataset's curation policy changes package code and obscures provenance.
-- **Action:** move overrides into a versioned, hash-bound input artifact and keep the audit engine dataset-agnostic.
+- **Action:** manual overrides now live in a versioned JSON policy artifact with reviewer, guide, rationale, duplicate, unknown-ID, and hash binding checks in the audit summary.
 
 ### F-029 — Official training allowed groups to cross data splits
 

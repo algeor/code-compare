@@ -28,6 +28,8 @@ _SPLIT_RATIOS: dict[Split, float] = {
     "test": 0.15,
 }
 
+_SPLIT_ORDER: tuple[Split, ...] = ("train", "development", "calibration", "test")
+
 
 class _UnionFind:
     def __init__(self, values: list[str]) -> None:
@@ -46,11 +48,14 @@ class _UnionFind:
             self.parent[right_root] = left_root
 
 
-def _component_counts(component_count: int) -> dict[Split, int]:
-    split_names = list(_SPLIT_RATIOS)
+def _active_splits(component_count: int) -> list[Split]:
     if component_count < 3:
         raise ValueError("At least three independent groups are required to create train/development/test splits")
-    active_splits: list[Split] = split_names if component_count >= 4 else ["train", "development", "test"]
+    return list(_SPLIT_ORDER) if component_count >= 4 else ["train", "development", "test"]
+
+
+def _component_counts(component_count: int) -> dict[Split, int]:
+    active_splits = _active_splits(component_count)
     counts: dict[Split, int] = {split: 1 for split in active_splits}
     remaining = component_count - len(active_splits)
     while remaining:
@@ -58,6 +63,62 @@ def _component_counts(component_count: int) -> dict[Split, int]:
         counts[split] += 1
         remaining -= 1
     return counts
+
+
+def _assign_components(
+    components: list[list[BenchmarkCandidate]],
+    *,
+    policy: SplitPolicy,
+    seed: int,
+) -> tuple[dict[str, Split], dict[Split, float]]:
+    active_splits = _active_splits(len(components))
+    target_ratios = _target_split_ratios(active_splits)
+    total_rows = sum(len(component) for component in components)
+    assignments: dict[str, Split] = {}
+
+    if policy == "temporal":
+        ordered = sorted(components, key=lambda component: _component_sort_key(component, policy, seed))
+        offset = 0
+        assigned_rows = 0
+        for split_index, split in enumerate(active_splits):
+            remaining_splits = len(active_splits) - split_index - 1
+            if remaining_splits == 0:
+                selected = ordered[offset:]
+            else:
+                target_rows = round(total_rows * sum(target_ratios[name] for name in active_splits[: split_index + 1]))
+                selected = []
+                while offset < len(ordered) - remaining_splits and (not selected or assigned_rows < target_rows):
+                    selected.append(ordered[offset])
+                    assigned_rows += len(ordered[offset])
+                    offset += 1
+            for component in selected:
+                for example in component:
+                    assignments[example.example_id] = split
+        return assignments, target_ratios
+
+    ordered = sorted(
+        components,
+        key=lambda component: (-len(component), str(_component_sort_key(component, policy, seed))),
+    )
+    rows_by_split = {split: 0 for split in active_splits}
+    for split, component in zip(active_splits, ordered[: len(active_splits)], strict=True):
+        rows_by_split[split] += len(component)
+        for example in component:
+            assignments[example.example_id] = split
+    for component in ordered[len(active_splits) :]:
+        split = max(
+            active_splits,
+            key=lambda name: (target_ratios[name] * total_rows - rows_by_split[name], -_SPLIT_ORDER.index(name)),
+        )
+        rows_by_split[split] += len(component)
+        for example in component:
+            assignments[example.example_id] = split
+    return assignments, target_ratios
+
+
+def _target_split_ratios(active_splits: list[Split]) -> dict[Split, float]:
+    total = sum(_SPLIT_RATIOS[split] for split in active_splits)
+    return {split: (_SPLIT_RATIOS[split] / total) for split in active_splits}
 
 
 def _build_components(examples: list[BenchmarkCandidate], policy: SplitPolicy) -> list[list[BenchmarkCandidate]]:
@@ -81,6 +142,76 @@ def _build_components(examples: list[BenchmarkCandidate], policy: SplitPolicy) -
     for example in examples:
         components[union_find.find(example.example_id)].append(example)
     return list(components.values())
+
+
+def summarize_split_assignments(
+    *,
+    examples: list[BenchmarkCandidate],
+    assignments: dict[str, Split],
+    policy: SplitPolicy,
+    included_example_ids: set[str] | None = None,
+    coverage_by_example: dict[str, float] | None = None,
+    target_split_ratios: dict[Split, float] | None = None,
+) -> dict[str, Any]:
+    """Return a deterministic per-split summary for reports and manifests."""
+    included_ids = included_example_ids or {example.example_id for example in examples}
+    selected_examples = [example for example in examples if example.example_id in included_ids]
+    total_rows = len(selected_examples)
+    selected_by_split: dict[Split, list[BenchmarkCandidate]] = {
+        split: sorted(
+            [example for example in selected_examples if assignments[example.example_id] == split],
+            key=lambda example: example.example_id,
+        )
+        for split in _SPLIT_ORDER
+    }
+
+    group_counts: dict[Split, int] = {split: 0 for split in _SPLIT_ORDER}
+    for component in _build_components(examples, policy):
+        component_example_ids = [example.example_id for example in component if example.example_id in included_ids]
+        if not component_example_ids:
+            continue
+        component_splits = {assignments[example_id] for example_id in component_example_ids}
+        if len(component_splits) != 1:
+            raise ValueError("Independent groups must not cross dataset splits")
+        group_counts[next(iter(component_splits))] += 1
+
+    def _coverage_summary(split: Split) -> dict[str, float | None]:
+        if coverage_by_example is None:
+            return {"max": None, "mean": None, "min": None}
+        values = [
+            coverage_by_example[example.example_id]
+            for example in selected_by_split[split]
+            if example.example_id in coverage_by_example
+        ]
+        if not values:
+            return {"max": None, "mean": None, "min": None}
+        return {
+            "max": max(values),
+            "mean": sum(values) / len(values),
+            "min": min(values),
+        }
+
+    splits = {
+        split: {
+            "actual_percentage": (100.0 * len(selected_by_split[split]) / total_rows) if total_rows else 0.0,
+            "coverage_percentage": _coverage_summary(split),
+            "group_count": group_counts[split],
+            "repo_count": len({example.repo for example in selected_by_split[split]}),
+            "row_count": len(selected_by_split[split]),
+            "target_percentage": (
+                100.0 * target_split_ratios[split] if target_split_ratios is not None and split in target_split_ratios else None
+            ),
+        }
+        for split in _SPLIT_ORDER
+    }
+    return {
+        "splits": splits,
+        "target_percentages": {
+            split: 100.0 * target_split_ratios[split]
+            for split in _SPLIT_ORDER
+            if target_split_ratios is not None and split in target_split_ratios
+        },
+    }
 
 
 def _component_identity(component: list[BenchmarkCandidate]) -> str:
@@ -119,16 +250,8 @@ def plan_splits(
     if len({example.example_id for example in examples}) != len(examples):
         raise ValueError("Example IDs must be unique")
     components = _build_components(examples, policy)
-    counts = _component_counts(len(components))
-    ordered = sorted(components, key=lambda component: _component_sort_key(component, policy, seed))
-
-    assignments: dict[str, Split] = {}
-    offset = 0
-    for split, count in counts.items():
-        for component in ordered[offset : offset + count]:
-            for example in component:
-                assignments[example.example_id] = split
-        offset += count
+    target_splits = _component_counts(len(components))
+    assignments, target_split_ratios = _assign_components(components, policy=policy, seed=seed)
 
     validate_splits(examples, assignments, split_policy=policy)
 
@@ -148,9 +271,15 @@ def plan_splits(
         "split_example_counts": dict(sorted(Counter(assignments.values()).items())),
         "split_repository_counts": {
             split: len({example.repo for example in examples if assignments[example.example_id] == split})
-            for split in counts
+            for split in target_splits
         },
         "split_language_counts": {},
+        "split_summary": summarize_split_assignments(
+            examples=examples,
+            assignments=assignments,
+            policy=policy,
+            target_split_ratios=target_split_ratios,
+        ),
         "created_from": str(examples_path),
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)

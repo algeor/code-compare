@@ -1,7 +1,13 @@
 # Implementation Plan
 
-**Updated:** 2026-10-06  
-**Source:** `docs/senior-code-review.md`  
+**Status:** active technical execution plan
+
+**Audience:** maintainers and implementation reviewers
+
+**Updated:** 2026-10-06
+
+**Source:** `docs/senior-code-review.md`
+
 **Purpose:** order the remaining work by dependency and risk
 
 ## Decision
@@ -33,8 +39,9 @@ Repository cleanup is already in progress:
 - full-package mypy passes for all 28 active source files;
 - the active suite contains 88 passing tests after legacy tests moved into the archive.
 
-Phase 0 is complete. Phase 1 dependency extraction is now in progress; detailed checkpoints are recorded in
-`docs/implementation-progress.md`.
+Phases 0–3 are complete. The active package now has extracted foundations, decomposed orchestration, typed diff
+diagnostics, explicit input states, and versioned normalization and evidence contracts. Detailed checkpoints are
+recorded in `docs/implementation-progress.md`.
 
 ## Order Summary
 
@@ -56,7 +63,7 @@ Phase 0 is complete. Phase 1 dependency extraction is now in progress; detailed 
 ### Implementation order
 
 1. Keep bucket-era research isolated under `research/archive/bucket-era/`; do not expose it through package imports or CLI entry points.
-2. Verify the archive inventory with `python3 scripts/verify_bucket_archive.py`.
+2. Verify the archive inventory with `python3 research/archive/bucket-era/scripts/verify_bucket_archive.py`.
 3. Check every active README, script, test, and document for references to removed models, reports, notebooks, prompts, and paper assets.
 4. Confirm which archived `data/` files may legally remain in Git and which require external storage.
 5. Keep history rewriting out of this phase; it requires a separate explicit decision and coordinated migration.
@@ -148,6 +155,8 @@ cli/collect.py
 
 **Goal:** make parsing and matching semantics explicit before new benchmark features are generated.
 
+**Status:** complete.
+
 ### Change set 6: parser diagnostics
 
 - Return typed diagnostics for malformed headers, incomplete hunk counts, unsupported paths, and truncated diffs.
@@ -178,6 +187,8 @@ cli/collect.py
 ## Phase 4 — Harden Benchmark Production
 
 **Goal:** make benchmark creation transactional, balanced, and policy-driven.
+
+**Status:** complete.
 
 ### Change set 9: deterministic balanced splitting
 
@@ -380,6 +391,4 @@ These tasks may start early without changing the implementation order:
 
 ## Immediate Next Action
 
-Start **Phase 3** without changing score formulas: add typed parser diagnostics and explicit strict-versus-fragment
-dialects, then gate public inference on invalid versus valid-but-unsupported inputs before versioning normalization and
-evidence policies.
+Start **Phase 5** by building the human benchmark under the locked metric, split, artifact, and audit-policy contracts.

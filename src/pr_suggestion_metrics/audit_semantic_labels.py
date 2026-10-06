@@ -9,7 +9,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from pr_suggestion_metrics._paths import REPOSITORY_ROOT
 from pr_suggestion_metrics.artifact_io import read_jsonl_objects, write_jsonl_objects
+from pr_suggestion_metrics.model_artifacts import sha256_file
 from pr_suggestion_metrics.percentages import (
     OBSOLETE_DERIVED_LABEL_FIELDS,
     parse_integer_percentage,
@@ -17,32 +19,49 @@ from pr_suggestion_metrics.percentages import (
 )
 
 
-MANUAL_OVERRIDES: dict[str, tuple[int, str]] = {
-    "e8d9a574d827f4d3": (35, "Only the display-label capitalization changed; the surrounding option structure was pre-existing context."),
-    "f4b13b9adb24873b": (35, "The LOCAL_STORAGE_KEYS container landed, but the requested CONVERSATION_SELECTED_TAB key was replaced by a different consolidated state key."),
-    "caf4ed920acd6855": (95, "The reusable scrollToNext callback and both onCtaClick assignments landed; only the placeholder body was replaced by the concrete scrolling implementation."),
-    "8abbc680b3adae7f": (95, "Pending, finished, and currently blocked durations all landed with equivalent reordered control flow; the unreachable error branch became the blocked fallback."),
-    "fdfa3d8a0d5b16de": (95, "The cached CreateValueCallback and GetValue usage landed; initialization moved from lazy subscription setup into both constructors."),
-    "4e14496d5c9dfd5f": (25, "Only the generic if/else shape is visible; the landed API renames and formatting do not establish the omitted suggested behavior."),
-    "1f9e18baaaaf249a": (95, "The nil early return and type-assertion guard landed exactly in flattened control flow."),
-    "407860575f31504a": (65, "The voice-path bounds guards landed, but the requested invalid-structure alert was omitted."),
-    "33cea56ba8be5055": (45, "A renamed plural URL input and placeholder landed, while the requested maxCrawlPages field did not."),
-    "3b49d360f39592b7": (0, "Only generic pytest markers overlap; the requested pendulum-links test did not land."),
-    "389f75d5e99249e8": (88, "The visibility warning landed and was expanded to cover both scene and events editors."),
-    "d56150cfb6715ec2": (95, "The try/catch success gating landed equivalently through catch-to-null followed by an explicit newKey guard."),
-    "3e8fe05f8b5d83a7": (55, "Property lookup landed through findProperty, but the required fail-fast error for a missing property did not."),
-    "5667db04ba8c46e6": (95, "The content-size-category guard and updateSize call landed with an equivalent positive if condition."),
-    "e51ed1b7afc675c8": (95, "The property metadata map, attribute paths, types, and cycle flags landed; ellipses represented omitted supporting entries."),
-    "8abdc533a573218e": (100, "The Combine listener chain landed exactly with only line wrapping and indentation changes."),
-    "ccf28a898be800b2": (50, "The current_tag extraction landed, but the requested safe non_standard_tag initialization remained absent."),
-    "1a66f505207cb24d": (100, "The complete Gradle configuration example landed verbatim inside the warning text."),
-    "1c9430c52b59d9c4": (95, "The NamedTuple return-type assertion landed directly on the end expression instead of a separate opts binding."),
-    "8f00eb4614b8b994": (95, "The LocalCPUBackend branch landed with an equivalent inverted condition that wraps every other backend."),
-}
+DEFAULT_MANUAL_OVERRIDES_PATH = REPOSITORY_ROOT / "research" / "audit" / "manual_semantic_overrides.json"
 
 
-def apply_manual_override(row: dict[str, Any]) -> dict[str, Any]:
-    override = MANUAL_OVERRIDES.get(row["example_id"])
+def load_manual_overrides(path: Path) -> tuple[dict[str, tuple[int, str]], str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != "1.0":
+        raise ValueError("Manual override policy must be a JSON object with schema_version='1.0'")
+    rows = payload.get("overrides")
+    if not isinstance(rows, list):
+        raise ValueError("Manual override policy must contain an overrides list")
+    overrides: dict[str, tuple[int, str]] = {}
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"Manual override {index} must be a JSON object")
+        example_id = row.get("example_id")
+        rationale = row.get("rationale")
+        reviewer = row.get("reviewer")
+        guide_version = row.get("guide_version")
+        if (
+            not isinstance(example_id, str)
+            or not example_id.strip()
+            or not isinstance(rationale, str)
+            or not rationale.strip()
+            or not isinstance(reviewer, str)
+            or not reviewer.strip()
+            or not isinstance(guide_version, str)
+            or not guide_version.strip()
+        ):
+            raise ValueError(f"Manual override {index} must include example_id, rationale, reviewer, and guide_version")
+        if example_id in overrides:
+            raise ValueError(f"Duplicate manual override for {example_id}")
+        percentage = parse_integer_percentage(
+            row.get("expected_landed_percentage"),
+            name=f"Manual override percentage for {example_id}",
+        )
+        overrides[example_id] = (percentage, rationale)
+    return overrides, str(payload["schema_version"])
+
+
+def apply_manual_override(row: dict[str, Any], overrides: dict[str, tuple[int, str]] | None = None) -> dict[str, Any]:
+    if overrides is None:
+        overrides, _ = load_manual_overrides(DEFAULT_MANUAL_OVERRIDES_PATH)
+    override = overrides.get(row["example_id"])
     updated = dict(row)
     for field in OBSOLETE_DERIVED_LABEL_FIELDS:
         updated.pop(field, None)
@@ -101,10 +120,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--semantic-output-dir", type=Path, required=True)
     parser.add_argument("--metric-scores", type=Path, required=True)
+    parser.add_argument("--manual-overrides", type=Path, default=DEFAULT_MANUAL_OVERRIDES_PATH)
     args = parser.parse_args()
 
     aggregate_path = args.semantic_output_dir / "all_labels.jsonl"
-    rows = [apply_manual_override(row) for row in read_jsonl_objects(aggregate_path)]
+    original_rows = read_jsonl_objects(aggregate_path)
+    manual_overrides, override_schema_version = load_manual_overrides(args.manual_overrides)
+    unknown_override_ids = sorted(set(manual_overrides) - {row["example_id"] for row in original_rows})
+    if unknown_override_ids:
+        raise ValueError(f"Manual overrides reference unknown examples: {unknown_override_ids}")
+    rows = [apply_manual_override(row, manual_overrides) for row in original_rows]
     score_rows = {row["example_id"]: row for row in csv.DictReader(args.metric_scores.open(newline=""))}
     audit_rows = []
     for row in rows:
@@ -124,7 +149,7 @@ def main() -> None:
                 "expected_landed_percentage": expected_percentage,
                 "metric_percentage": metric_percentage,
                 "metric_disagreement": abs(expected_percentage - metric_percentage),
-                "manually_verified": row["example_id"] in MANUAL_OVERRIDES,
+                "manually_verified": row["example_id"] in manual_overrides,
             }
         )
 
@@ -158,6 +183,11 @@ def main() -> None:
         "curated_mixed_coverage_rows": len(curated),
         "audit_statuses": dict(Counter(row["audit_status"] for row in audit_rows)),
         "confidence": dict(Counter(row["confidence"] for row in rows)),
+        "manual_override_policy": {
+            "path": str(args.manual_overrides),
+            "schema_version": override_schema_version,
+            "sha256": sha256_file(args.manual_overrides),
+        },
     }
     (args.semantic_output_dir / "audit_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))

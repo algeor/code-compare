@@ -68,10 +68,46 @@ def test_planner_is_deterministic_and_creates_calibration_split(tmp_path: Path) 
     )
 
     assert first_output.read_text() == second_output.read_text()
+    assert (tmp_path / "first.json").read_text() == (tmp_path / "second.json").read_text()
     with first_output.open(newline="") as stream:
         splits = {row["split"] for row in csv.DictReader(stream)}
     assert splits == {"train", "development", "calibration", "test"}
     assert first["independent_components"] == 8
+    assert first["split_summary"]["target_percentages"] == {
+        "train": 60.0,
+        "development": 15.0,
+        "calibration": 10.0,
+        "test": 15.0,
+    }
+    assert first["split_summary"]["splits"]["train"]["row_count"] == 5
+    assert first["split_summary"]["splits"]["train"]["group_count"] == 5
+    assert first["split_summary"]["splits"]["train"]["repo_count"] == 5
+    assert first["split_summary"]["splits"]["train"]["actual_percentage"] == 62.5
+    assert first["split_summary"]["splits"]["train"]["target_percentage"] == 60.0
+    assert first["split_summary"]["splits"]["train"]["coverage_percentage"] == {
+        "min": None,
+        "max": None,
+        "mean": None,
+    }
+
+
+def test_planner_assigns_largest_repository_group_to_largest_split(tmp_path: Path) -> None:
+    rows = [_example(index) for index in range(1, 11)]
+    for row in rows[:4]:
+        row["repo"] = "host/owner/large-repo"
+    examples_path = tmp_path / "examples.jsonl"
+    examples_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    report = plan_splits(
+        examples_path=examples_path,
+        output_path=tmp_path / "splits.csv",
+        report_path=tmp_path / "report.json",
+        policy="repository_disjoint",
+        seed=42,
+    )
+
+    assert report["split_summary"]["splits"]["train"]["row_count"] >= 4
+    assert report["split_summary"]["splits"]["train"]["actual_percentage"] >= 40.0
 
 
 def test_temporal_planner_is_stable_for_equal_timestamps(tmp_path: Path) -> None:

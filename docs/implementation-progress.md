@@ -9,13 +9,16 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - **Phase 0 — Stabilize the active migration:** complete.
 - **Phase 1 — Extract stable foundations:** complete.
 - **Phase 2 — Split the monoliths:** complete.
-- **Phase 3 — Lock metric contracts:** next.
-- **Next gate:** malformed diffs cannot produce plausible scores, and normalization/evidence policies are explicit and versioned.
+- **Phase 3 — Lock metric contracts:** complete.
+- **Phase 4 — Harden benchmark production:** complete.
+- **Phase 5 — Build human benchmark v1:** next.
+- **Next gate:** collect independent human labels under the finalized metric and artifact contracts.
 
 ## Completed
 
+- Phase 4: added deterministic row-balanced split assignment, split-balance reporting, staged frozen-benchmark publishing, and versioned external manual-audit override policy.
 - Archived bucket-era code, data, documentation, models, notebooks, reports, and tests under `research/archive/bucket-era/`.
-- Added `research/archive/bucket-era/archive_manifest.json` and `scripts/verify_bucket_archive.py`.
+- Added `research/archive/bucket-era/archive_manifest.json` and `research/archive/bucket-era/scripts/verify_bucket_archive.py`.
 - Added archive verification to CI.
 - Expanded CI type checking to the full active package.
 - Extracted shared path handling to `src/pr_suggestion_metrics/_paths.py`.
@@ -44,14 +47,26 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - Source distribution and wheel builds passed.
 - Archive verifier: 586 payload files across 7 sections.
 - Phase 2 final gate: 139 tests and 21 subtests passed; Ruff, mypy over 46 source files, package build, and archive verification passed.
+- Added typed diff diagnostics for strict Git unified diffs and internal suggestion fragments.
+- Added explicit `valid`, `invalid`, and `valid_but_unsupported` assessment states and fail-closed inference/feature gates.
+- Versioned normalization policy `1.0`, evidence schema `1.1`, and result schema `1.1` in generated artifacts.
+- Separated strict same-file evidence from relaxed cross-file evidence and preserved operation polarity in token diagnostics.
+- Added malformed-input, language, indentation, rename, evidence, manifest, and inference regressions.
+- Phase 3 final gate: 195 tests and 21 subtests passed; Ruff, mypy over 51 source files, package build, archive verification, documentation verification, and whitespace validation passed.
+- Phase 4 final gate: 199 tests and 21 subtests passed; Ruff, mypy over 51 source files, package build, archive verification, documentation verification, and whitespace validation passed.
+
+## Checkpoint Commits
+
+- `6a7c7d0` — archive bucket-era research and extract stable foundations.
+- `44a9f5a` — split feature and collection monoliths.
 
 ## Next Implementation Order
 
-1. Add typed diff diagnostics and explicit parser dialects.
-2. Gate inference on invalid versus unsupported inputs.
-3. Characterize language and indentation normalization.
-4. Separate strict and relaxed evidence contracts.
-5. Apply transactional staging to multi-artifact workflows.
+1. Build the human benchmark under the locked metric contracts.
+2. Collect independent annotations and adjudications.
+3. Freeze the benchmark with transactional artifacts.
+4. Generate authenticated feature tables.
+5. Train percentage and explanation models independently.
 
 ## Phase 1 Audit Notes
 
@@ -80,14 +95,24 @@ This file is the durable implementation log for `IMPLEMENTATION_PLAN.md`.
 - Highest atomicity risks are in-place semantic-label application and audit mutation, followed by stale batch files and partially published output directories.
 - The sealed-evaluation claim is intentionally fail-closed and must remain outside normal rollback semantics.
 
-## Phase 3 Prepared Findings
+## Phase 3 Completion Notes
 
-- The parser currently accepts malformed hunk headers, incomplete/overflowing hunk counts, invalid body lines, missing marker pairs, partial renames, and non-diff text without typed validity diagnostics.
-- Current shape checks can classify malformed input as model-supported, and landed diffs are not structurally validated before feature scoring.
-- Add a non-breaking `DiffAssessment` contract with `valid`, `invalid`, and `valid_but_unsupported` states before changing any scoring formulas.
-- Distinguish strict `git_unified` input from the internal `suggestion_fragment` dialect because collection intentionally emits bare `@@` pseudo-hunks.
-- Preserve `parse_unified_diff()` as a compatibility wrapper while diagnostics are threaded through exact evidence, feature generation, and inference.
-- Add characterization tests for malformed structure plus Python indentation, YAML, shell, config, Markdown, and rename/move cases before changing normalization behavior.
+- `DiffAssessment` reports stable diagnostic codes across `git_unified` and `suggestion_fragment` dialects.
+- `parse_unified_diff()` remains a compatibility wrapper while assessment drives exact evidence, feature generation, and inference.
+- Invalid exact evidence returns `coverage_percentage=None`; invalid inputs cannot produce plausible partial scores.
+- Cross-file matching is exposed separately from strict same-file evidence under evidence schema `1.1`.
+- Token diagnostics and relaxed matching preserve addition/removal polarity.
+- Normalization policy `1.0` and language/indentation characterization tests freeze current behavior without silently changing model features.
+- Frozen benchmark and feature manifests record the normalization policy used to generate them.
+- Future lexical or structural feature changes require a feature-schema bump and model retraining.
+
+## Phase 3 Independent Review — 2026-10-06
+
+- **P1, fixed:** strict Git headers now accept real paths containing spaces, including ambiguous ` b/` segments resolved by file markers and Git C-quoted paths with escaped UTF-8 octal bytes.
+- **P1, fixed:** marker-only file sections now emit `missing_hunk`, so truncated inputs abstain before model loading.
+- **P2, fixed:** conflicting `diff --git` and `---`/`+++` paths now emit `conflicting_file_path` diagnostics.
+- **P2, fixed:** normalization-policy compatibility is now required in feature rows, feature schemas, model manifests, and inference loading; model schema version is `1.1` and artifact manifest version is `2`.
+- **P2, fixed:** normalization policy now names the actual identifier token behavior, `replace_with_IDENT`.
 
 ## Deferred By Design
 

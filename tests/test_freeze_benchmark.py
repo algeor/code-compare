@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pr_suggestion_metrics.freeze_benchmark import freeze_benchmark
 
@@ -118,6 +119,7 @@ class FreezeBenchmarkTest(unittest.TestCase):
                 output_dir=output_dir,
                 split_policy="repository_disjoint",
             )
+            self.assertEqual(manifest["normalization_policy_version"], "1.0")
 
             test_input = json.loads((output_dir / "test_inputs.jsonl").read_text())
             private_label = json.loads((output_dir / "test_labels.private.jsonl").read_text())
@@ -242,6 +244,101 @@ class FreezeBenchmarkTest(unittest.TestCase):
             abstained = [json.loads(line) for line in (root / "frozen" / "abstained.jsonl").read_text().splitlines()]
             self.assertEqual(manifest["abstained_count"], 1)
             self.assertEqual(abstained[0]["example_id"], "example-1")
+
+    def test_freeze_manifest_reports_deterministic_split_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+
+            example_rows = [json.loads(line) for line in paths["examples"].read_text().splitlines()]
+            extra_example = {
+                "example_id": "example-4",
+                "repo": "host/owner/repo-4",
+                "pr_url": "https://host/owner/repo-4/pull/4",
+                "pr_number": 4,
+                "suggested_diff": "--- a/a.py\n+++ b/a.py\n@@\n+return left + right",
+                "landed_diff": "--- a/a.py\n+++ b/a.py\n@@\n+return left + right",
+                "suggestion_provenance": _provenance(4),
+            }
+            example_rows.append(extra_example)
+            paths["examples"].write_text(
+                "".join(json.dumps(row) + "\n" for row in example_rows),
+                encoding="utf-8",
+            )
+
+            annotation_rows = [json.loads(line) for line in paths["annotations"].read_text().splitlines()]
+            annotation_rows.extend(
+                [
+                    _annotation("example-4", "annotator-a", 0.5),
+                    _annotation("example-4", "annotator-b", 0.5),
+                ]
+            )
+            paths["annotations"].write_text(
+                "".join(json.dumps(row) + "\n" for row in annotation_rows),
+                encoding="utf-8",
+            )
+
+            adjudication_rows = [json.loads(line) for line in paths["adjudications"].read_text().splitlines()]
+            extra_adjudication = _annotation("example-4", "adjudicator", 0.5)
+            extra_adjudication["source_annotator_ids"] = ["annotator-a", "annotator-b"]
+            extra_adjudication["resolution_notes"] = "Reviewed both independent records."
+            adjudication_rows.append(extra_adjudication)
+            paths["adjudications"].write_text(
+                "".join(json.dumps(row) + "\n" for row in adjudication_rows),
+                encoding="utf-8",
+            )
+
+            with paths["splits"].open("a", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=["example_id", "split"])
+                writer.writerow({"example_id": "example-4", "split": "train"})
+
+            manifest = freeze_benchmark(
+                examples_path=paths["examples"],
+                annotations_path=paths["annotations"],
+                adjudications_path=paths["adjudications"],
+                splits_path=paths["splits"],
+                output_dir=root / "frozen",
+                split_policy="repository_disjoint",
+            )
+
+            self.assertEqual(
+                manifest["split_summary"]["target_percentages"],
+                {"train": 60.0, "development": 15.0, "calibration": 10.0, "test": 15.0},
+            )
+            self.assertEqual(
+                manifest["split_summary"]["splits"]["train"],
+                {
+                    "actual_percentage": 50.0,
+                    "coverage_percentage": {"min": 50.0, "max": 100.0, "mean": 75.0},
+                    "group_count": 2,
+                    "repo_count": 2,
+                    "row_count": 2,
+                    "target_percentage": 60.0,
+                },
+            )
+            self.assertEqual(
+                list(manifest["split_summary"]["splits"]),
+                ["train", "development", "calibration", "test"],
+            )
+
+    def test_freeze_does_not_publish_partial_output_when_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = self._write_fixture(root)
+            output_dir = root / "frozen"
+
+            with patch("pr_suggestion_metrics.freeze_benchmark.write_jsonl_objects", side_effect=RuntimeError("boom")):
+                with self.assertRaisesRegex(RuntimeError, "boom"):
+                    freeze_benchmark(
+                        examples_path=paths["examples"],
+                        annotations_path=paths["annotations"],
+                        adjudications_path=paths["adjudications"],
+                        splits_path=paths["splits"],
+                        output_dir=output_dir,
+                        split_policy="repository_disjoint",
+                    )
+
+            self.assertFalse(output_dir.exists())
 
 
 if __name__ == "__main__":
